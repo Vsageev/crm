@@ -1,0 +1,203 @@
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-10) var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+}
+
+.calendar {
+  margin-top: var(--space-2);
+}
+
+.calendarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.monthTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.monthTitle h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.navBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.navBtn:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.todayBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-card);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.todayBtn:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.dayHeader {
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+  text-align: center;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dayCell {
+  min-height: 100px;
+  padding: var(--space-2);
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-card);
+}
+
+.dayCell:nth-child(7n) {
+  border-right: none;
+}
+
+.dayCellActive:hover {
+  background: var(--color-surface);
+}
+
+.today {
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.today:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.dayNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.today .dayNumber {
+  background: var(--color-link);
+  color: white;
+  border-radius: 50%;
+  font-weight: 600;
+}
+
+.dayTasks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.calendarTask {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: background var(--transition-fast);
+}
+
+.calendarTask:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.calendarTaskDone {
+  opacity: 0.5;
+}
+
+.calendarTaskDone .calendarTaskTitle {
+  text-decoration: line-through;
+}
+
+.calendarTaskOverdue .calendarTaskTitle {
+  color: var(--color-error);
+}
+
+.calendarTaskTitle {
+  font-size: 12px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.priorityDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.moreCount {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 0 6px;
+}
+
+@media (max-width: 640px) {
+  .dayCell {
+    min-height: 60px;
+    padding: var(--space-1);
+  }
+
+  .dayHeader {
+    padding: var(--space-1) var(--space-2);
+    font-size: 11px;
+  }
+
+  .calendarTaskTitle {
+    font-size: 11px;
+  }
+
+  .calendarTask {
+    padding: 1px 4px;
+  }
+}

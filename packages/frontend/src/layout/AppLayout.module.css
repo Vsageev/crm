@@ -1,0 +1,133 @@
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.main {
+  flex: 1;
+  margin-left: var(--sidebar-width);
+  padding: var(--space-6);
+  min-height: 100vh;
+}
+
+/* Mobile header - hidden on desktop */
+.mobileHeader {
+  display: none;
+}
+
+.menuBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.menuBtn:hover {
+  background: var(--color-surface);
+}
+
+.mobileTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+
+/* Sidebar wrapper */
+.sidebarWrap {
+  display: contents;
+}
+
+/* Close button - hidden on desktop */
+.closeSidebarBtn {
+  display: none;
+}
+
+/* Overlay - only on mobile */
+.overlay {
+  display: none;
+}
+
+/* ── Tablet & mobile: collapsible sidebar ── */
+@media (max-width: 1024px) {
+  .mobileHeader {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-card);
+    border-bottom: 1px solid var(--color-border);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--mobile-header-height);
+    z-index: 90;
+  }
+
+  .main {
+    margin-left: 0;
+    padding: var(--space-4);
+    padding-top: calc(var(--mobile-header-height) + var(--space-4));
+  }
+
+  .sidebarWrap {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .closeSidebarBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    z-index: 10;
+  }
+
+  .closeSidebarBtn:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 150;
+  }
+}
+
+/* ── Mobile: tighter spacing ── */
+@media (max-width: 640px) {
+  .main {
+    padding: var(--space-3);
+    padding-top: calc(var(--mobile-header-height) + var(--space-3));
+  }
+}

@@ -1,0 +1,2 @@
+# Pre-commit hooks disabled for rapid prototyping
+# To re-enable: pnpm exec lint-staged

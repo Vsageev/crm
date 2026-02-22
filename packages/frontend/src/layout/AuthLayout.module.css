@@ -1,0 +1,22 @@
+.layout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--color-surface);
+  padding: var(--space-6);
+}
+
+.container {
+  width: 100%;
+  max-width: 400px;
+}
+
+.logo {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  text-align: center;
+  margin-bottom: var(--space-8);
+}
