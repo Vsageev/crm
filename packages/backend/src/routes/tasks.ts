@@ -55,6 +55,7 @@ const tasksQuerySchema = z.object({
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  countOnly: z.coerce.boolean().optional(),
 });
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -79,7 +80,12 @@ export async function taskRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({
         total,

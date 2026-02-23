@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission, isAgent } from '../middleware/rbac.js';
+import { ApiError } from '../utils/api-errors.js';
 import {
   listContacts,
   getContactById,
@@ -75,6 +76,7 @@ const contactsQuerySchema = z.object({
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  countOnly: z.coerce.boolean().optional(),
 });
 
 const contactsExportQuerySchema = z.object({
@@ -111,7 +113,12 @@ export async function contactRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({
         total,
@@ -181,15 +188,15 @@ export async function contactRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`, 'Verify the contact ID exists via GET /api/contacts');
       }
       if (isAgent(request) && contact.ownerId !== request.user.sub) {
-        return reply.forbidden('Access denied');
+        throw ApiError.forbidden('access_denied', 'You do not own this contact');
       }
 
       const data = await exportContactGdprData(request.params.id);
       if (!data) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`);
       }
 
       const { createAuditLog } = await import('../services/audit-log.js');
@@ -220,14 +227,14 @@ export async function contactRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const file = await request.file();
       if (!file) {
-        return reply.badRequest('No file uploaded. Send a CSV file as multipart form data.');
+        throw ApiError.badRequest('missing_file', 'No file uploaded', 'Send a CSV file as multipart/form-data with field name "file"');
       }
 
       const buffer = await file.toBuffer();
       const csvContent = buffer.toString('utf-8');
 
       if (csvContent.trim().length === 0) {
-        return reply.badRequest('Uploaded file is empty');
+        throw ApiError.badRequest('empty_file', 'Uploaded file is empty', 'Provide a CSV file with at least a header row and one data row');
       }
 
       const result = await importContactsCsv(csvContent, {
@@ -247,10 +254,10 @@ export async function contactRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`, 'Verify the contact ID exists via GET /api/contacts');
       }
       if (isAgent(request) && contact.ownerId !== request.user.sub) {
-        return reply.forbidden('Access denied');
+        throw ApiError.forbidden('access_denied', 'You do not own this contact');
       }
 
       const result = await listContactActivities({
@@ -270,10 +277,10 @@ export async function contactRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`, 'Verify the contact ID exists via GET /api/contacts');
       }
       if (isAgent(request) && contact.ownerId !== request.user.sub) {
-        return reply.forbidden('Access denied');
+        throw ApiError.forbidden('access_denied', 'You do not own this contact');
       }
       return reply.send(contact);
     },
@@ -289,8 +296,12 @@ export async function contactRoutes(app: FastifyInstance) {
         const duplicateResult = await findContactDuplicates(request.body);
         if (duplicateResult.hasDuplicates) {
           return reply.status(409).send({
-            error: 'Potential duplicates found',
-            duplicates: duplicateResult.duplicates,
+            statusCode: 409,
+            code: 'duplicate_contact',
+            error: 'Conflict',
+            message: 'Potential duplicate contacts found',
+            details: duplicateResult.duplicates,
+            hint: 'To skip duplicate checking, set query parameter skipDuplicateCheck=true',
           });
         }
       }
@@ -365,14 +376,14 @@ export async function contactRoutes(app: FastifyInstance) {
       if (isAgent(request)) {
         const contact = await getContactById(request.params.id) as any;
         if (!contact) {
-          return reply.notFound('Contact not found');
+          throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`, 'Verify the contact ID exists via GET /api/contacts');
         }
         if (contact.ownerId !== request.user.sub) {
-          return reply.forbidden('Access denied');
+          throw ApiError.forbidden('access_denied', 'You do not own this contact');
         }
         // Prevent agents from reassigning ownership
         if (request.body.ownerId !== undefined && request.body.ownerId !== request.user.sub) {
-          return reply.forbidden('Agents cannot reassign contact ownership');
+          throw ApiError.forbidden('ownership_reassign_denied', 'Agents cannot reassign contact ownership', 'Only managers and admins can change contact ownership');
         }
       }
 
@@ -388,7 +399,7 @@ export async function contactRoutes(app: FastifyInstance) {
       }) as any;
 
       if (!updated) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`);
       }
 
       // Emit tag_added if tags were updated
@@ -435,10 +446,10 @@ export async function contactRoutes(app: FastifyInstance) {
       if (isAgent(request)) {
         const contact = await getContactById(request.params.id) as any;
         if (!contact) {
-          return reply.notFound('Contact not found');
+          throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`);
         }
         if (contact.ownerId !== request.user.sub) {
-          return reply.forbidden('Access denied');
+          throw ApiError.forbidden('access_denied', 'You do not own this contact');
         }
       }
 
@@ -449,7 +460,7 @@ export async function contactRoutes(app: FastifyInstance) {
       });
 
       if (!deleted) {
-        return reply.notFound('Contact not found');
+        throw ApiError.notFound('contact_not_found', `Contact ${request.params.id} not found`);
       }
 
       return reply.status(204).send();

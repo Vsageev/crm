@@ -218,6 +218,13 @@
   flex-shrink: 0;
 }
 
+.draftBadge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #d97706;
+  flex-shrink: 0;
+}
+
 /* ── Right panel: Thread view + Reply ── */
 .threadPanel {
   flex: 1;
@@ -400,9 +407,9 @@
 
 .replyInput {
   width: 100%;
-  min-height: 40px;
-  max-height: 120px;
-  padding: 8px 12px;
+  min-height: 44px;
+  max-height: 200px;
+  padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   font-size: 14px;
@@ -411,7 +418,8 @@
   outline: none;
   resize: none;
   line-height: 1.5;
-  transition: border-color var(--transition-fast);
+  transition: border-color var(--transition-fast), height 0.1s ease;
+  overflow-y: auto;
 }
 
 .replyInput::placeholder {

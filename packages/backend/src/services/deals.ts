@@ -11,6 +11,7 @@ export interface DealListQuery {
   search?: string;
   limit?: number;
   offset?: number;
+  countOnly?: boolean;
 }
 
 export interface CreateDealData {
@@ -74,8 +75,13 @@ export async function listDeals(query: DealListQuery) {
     return true;
   };
 
-  const all = store.find('deals', predicate)
-    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const all = store.find('deals', predicate);
+
+  if (query.countOnly) {
+    return { entries: [], total: all.length };
+  }
+
+  all.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const entries = all.slice(offset, offset + limit);
   const total = all.length;
@@ -188,6 +194,8 @@ export interface MoveDealData {
   pipelineStageId: string;
   stageOrder?: number;
   lostReason?: string;
+  autoClose?: boolean;
+  closeIfValue?: number;
 }
 
 export async function moveDeal(
@@ -230,6 +238,23 @@ export async function moveDeal(
       ? Math.max(...dealsInStage.map((r: any) => r.stageOrder ?? -1))
       : -1;
     setData.stageOrder = maxOrder + 1;
+  }
+
+  // Conditional auto-close: if autoClose=true and deal value >= closeIfValue, move to won
+  if (data.autoClose && !targetStage.isWinStage && !targetStage.isLossStage) {
+    const dealValue = parseFloat(deal.value ?? '0');
+    const threshold = data.closeIfValue ?? 0;
+    if (dealValue >= threshold) {
+      // Find the win stage in this pipeline
+      const winStage = store.findOne('pipelineStages', (r: any) =>
+        r.pipelineId === targetStage.pipelineId && r.isWinStage === true,
+      ) as any;
+      if (winStage) {
+        setData.pipelineStageId = winStage.id;
+        setData.stage = 'won';
+        setData.closedAt = new Date();
+      }
+    }
   }
 
   // Map win/loss stage to deal stage enum

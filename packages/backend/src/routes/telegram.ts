@@ -178,7 +178,8 @@ export async function telegramRoutes(app: FastifyInstance) {
       schema: {
         tags: ['Telegram'],
         summary: 'Telegram webhook endpoint',
-        params: z.object({ botId: z.uuid() }),
+        // Telegram posts to webhook URLs that include its numeric bot ID.
+        params: z.object({ botId: z.string().regex(/^\d+$/, 'Invalid Telegram bot ID') }),
       },
     },
     async (request, reply) => {

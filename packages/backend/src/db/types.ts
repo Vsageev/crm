@@ -434,14 +434,6 @@ export interface KnowledgeBaseEntry {
   updatedAt: string;
 }
 
-export interface AISettings {
-  id: string;
-  provider: 'openai' | 'openrouter';
-  model: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface WebhookDelivery {
   id: string;
   webhookId: string;
@@ -585,6 +577,16 @@ export interface VoximplantAccount {
   status: 'active' | 'inactive' | 'error';
   statusMessage: string | null;
   createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageDraft {
+  id: string;
+  conversationId: string;
+  content: string;
+  attachments: unknown;
+  metadata: string | null;
   createdAt: string;
   updatedAt: string;
 }

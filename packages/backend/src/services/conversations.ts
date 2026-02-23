@@ -180,3 +180,28 @@ export async function markConversationRead(id: string) {
   const updated = store.update('conversations', id, { isUnread: false });
   return updated ?? null;
 }
+
+export async function deleteConversation(
+  id: string,
+  audit?: { userId: string; ipAddress?: string; userAgent?: string },
+) {
+  // Delete all messages and drafts belonging to this conversation
+  store.deleteWhere('messages', (r: any) => r.conversationId === id);
+  store.deleteWhere('messageDrafts', (r: any) => r.conversationId === id);
+
+  const deleted = store.delete('conversations', id);
+  if (!deleted) return false;
+
+  if (audit) {
+    await createAuditLog({
+      userId: audit.userId,
+      action: 'delete',
+      entityType: 'conversation',
+      entityId: id,
+      ipAddress: audit.ipAddress,
+      userAgent: audit.userAgent,
+    });
+  }
+
+  return true;
+}

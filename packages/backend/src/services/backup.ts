@@ -1,6 +1,7 @@
-import { mkdir, readdir, stat, unlink, copyFile } from 'node:fs/promises';
+import { mkdir, readdir, stat, unlink, copyFile, rmdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { env } from '../config/env.js';
+import { store } from '../db/index.js';
 
 export interface BackupResult {
   filename: string;
@@ -15,7 +16,7 @@ export interface BackupInfo {
   createdAt: Date;
 }
 
-const DATA_DIR = resolve('./data');
+const DATA_DIR = resolve(env.DATA_DIR);
 
 function getBackupDir(): string {
   return resolve(env.BACKUP_DIR);
@@ -39,6 +40,25 @@ export async function ensureBackupDir(): Promise<void> {
   await mkdir(getBackupDir(), { recursive: true });
 }
 
+/**
+ * Validates a backup name and returns its full path, or null if not found.
+ */
+export async function getBackupPath(name: string): Promise<string | null> {
+  // Prevent directory traversal
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+    return null;
+  }
+  const dir = getBackupDir();
+  const backupPath = join(dir, name);
+  try {
+    const info = await stat(backupPath);
+    if (!info.isDirectory()) return null;
+    return backupPath;
+  } catch {
+    return null;
+  }
+}
+
 export async function createBackup(): Promise<BackupResult> {
   const dir = getBackupDir();
   await ensureBackupDir();
@@ -46,6 +66,9 @@ export async function createBackup(): Promise<BackupResult> {
   const subdirName = buildSubdirName();
   const subdirPath = join(dir, subdirName);
   await mkdir(subdirPath, { recursive: true });
+
+  // Flush pending writes before copying
+  await store.flush();
 
   // Copy all JSON files from data directory
   let totalSize = 0;
@@ -110,6 +133,118 @@ export async function listBackups(): Promise<BackupInfo[]> {
   return results.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
+/**
+ * Reads all JSON files from a backup directory and returns them as a bundle.
+ */
+export async function getBackupBundle(name: string): Promise<Record<string, unknown[]>> {
+  const backupPath = await getBackupPath(name);
+  if (!backupPath) throw new Error(`Backup not found: ${name}`);
+
+  const files = await readdir(backupPath);
+  const jsonFiles = files.filter((f) => f.endsWith('.json'));
+
+  const collections: Record<string, unknown[]> = {};
+  for (const file of jsonFiles) {
+    const col = file.replace('.json', '');
+    const raw = await readFile(join(backupPath, file), 'utf-8');
+    collections[col] = JSON.parse(raw);
+  }
+
+  return collections;
+}
+
+/**
+ * Restores data from a backup: copies JSON files back into DATA_DIR
+ * and reloads the in-memory store.
+ */
+export async function restoreBackup(name: string): Promise<void> {
+  const backupPath = await getBackupPath(name);
+  if (!backupPath) throw new Error(`Backup not found: ${name}`);
+
+  const files = await readdir(backupPath);
+  const jsonFiles = files.filter((f) => f.endsWith('.json'));
+
+  if (jsonFiles.length === 0) {
+    throw new Error('Backup is empty — no JSON files found');
+  }
+
+  // Copy all JSON files from backup into data directory
+  await mkdir(DATA_DIR, { recursive: true });
+  for (const file of jsonFiles) {
+    const src = join(backupPath, file);
+    const dest = join(DATA_DIR, file);
+    await copyFile(src, dest);
+  }
+
+  // Reload in-memory store
+  await store.reload();
+}
+
+/**
+ * Imports a backup from a JSON bundle (the format produced by download).
+ * Creates a new backup subdirectory, writes each collection as a JSON file,
+ * and returns the backup info.
+ */
+export async function importBackup(collections: Record<string, unknown[]>, filename?: string): Promise<BackupResult> {
+  const dir = getBackupDir();
+  await ensureBackupDir();
+
+  // Use the original backup name if provided (strip .json extension), otherwise generate a new one
+  let subdirName: string;
+  if (filename) {
+    subdirName = filename.replace(/\.json$/, '');
+    // If it already exists, append a suffix
+    const existing = await getBackupPath(subdirName);
+    if (existing) {
+      subdirName = `${subdirName}-${Date.now()}`;
+    }
+  } else {
+    subdirName = buildSubdirName();
+  }
+  const subdirPath = join(dir, subdirName);
+  await mkdir(subdirPath, { recursive: true });
+
+  let totalSize = 0;
+  for (const [col, data] of Object.entries(collections)) {
+    // Sanitize collection name — alphanumeric, hyphens, underscores only
+    if (!/^[\w-]+$/.test(col)) continue;
+    if (!Array.isArray(data)) continue;
+
+    const filePath = join(subdirPath, `${col}.json`);
+    const content = JSON.stringify(data, null, 2);
+    await writeFile(filePath, content, 'utf-8');
+    const fileInfo = await stat(filePath);
+    totalSize += fileInfo.size;
+  }
+
+  if (totalSize === 0) {
+    // Clean up empty import
+    await rmdir(subdirPath);
+    throw new Error('Import failed — no valid collections found in the uploaded file');
+  }
+
+  return {
+    filename: subdirName,
+    path: subdirPath,
+    sizeBytes: totalSize,
+    createdAt: new Date(),
+  };
+}
+
+/**
+ * Deletes a single backup directory.
+ */
+export async function deleteBackup(name: string): Promise<void> {
+  const backupPath = await getBackupPath(name);
+  if (!backupPath) throw new Error(`Backup not found: ${name}`);
+
+  const files = await readdir(backupPath);
+  for (const file of files) {
+    await unlink(join(backupPath, file));
+  }
+  await rmdir(backupPath);
+}
+
 export async function pruneOldBackups(): Promise<string[]> {
   const dir = getBackupDir();
   const backups = await listBackups();
@@ -118,15 +253,8 @@ export async function pruneOldBackups(): Promise<string[]> {
 
   for (const backup of backups) {
     if (backup.createdAt.getTime() < cutoff) {
-      const backupPath = join(dir, backup.filename);
-      // Remove all files in the backup subdirectory, then remove the directory
       try {
-        const files = await readdir(backupPath);
-        for (const file of files) {
-          await unlink(join(backupPath, file));
-        }
-        const { rmdir } = await import('node:fs/promises');
-        await rmdir(backupPath);
+        await deleteBackup(backup.filename);
       } catch {
         // best-effort removal
       }

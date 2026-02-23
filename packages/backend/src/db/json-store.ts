@@ -173,6 +173,16 @@ export class JsonStore {
     return deleted;
   }
 
+  async reload(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.dirty.clear();
+    this.collections.clear();
+    await this.init();
+  }
+
   async flush(): Promise<void> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);

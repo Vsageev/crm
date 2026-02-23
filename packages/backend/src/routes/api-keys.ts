@@ -10,16 +10,29 @@ import {
   deleteApiKey,
 } from '../services/api-keys.js';
 
+const API_RESOURCES = [
+  'contacts', 'deals', 'tasks', 'pipelines',
+  'messages', 'activities', 'templates', 'webhooks',
+] as const;
+
+const permissionSchema = z.string().refine(
+  (val) => {
+    const [resource, action] = val.split(':');
+    return API_RESOURCES.includes(resource as any) && (action === 'read' || action === 'write');
+  },
+  { message: 'Permission must be in format resource:(read|write)' },
+);
+
 const createApiKeyBody = z.object({
   name: z.string().min(1).max(255),
-  permissions: z.array(z.string().min(1)).min(1),
+  permissions: z.array(permissionSchema).min(1),
   description: z.string().max(1000).optional(),
   expiresAt: z.iso.datetime().optional(),
 });
 
 const updateApiKeyBody = z.object({
   name: z.string().min(1).max(255).optional(),
-  permissions: z.array(z.string().min(1)).min(1).optional(),
+  permissions: z.array(permissionSchema).min(1).optional(),
   description: z.string().max(1000).nullable().optional(),
   isActive: z.boolean().optional(),
   expiresAt: z.iso.datetime().nullable().optional(),

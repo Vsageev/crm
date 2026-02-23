@@ -22,6 +22,7 @@ import {
 import { createAuditLog } from '../services/audit-log.js';
 import { authRateLimitConfig } from '../plugins/rate-limit.js';
 import { validatePasswordStrength } from '../utils/password-policy.js';
+import { ApiError } from '../utils/api-errors.js';
 
 const registerBody = z.object({
   email: z.email(),
@@ -62,13 +63,13 @@ export async function authRoutes(app: FastifyInstance) {
     // Enforce password complexity policy (OWASP A07:2021)
     const passwordCheck = validatePasswordStrength(password);
     if (!passwordCheck.valid) {
-      return reply.badRequest(passwordCheck.errors.join('. '));
+      throw ApiError.badRequest('weak_password', passwordCheck.errors.join('. '), 'Password must be at least 8 characters with uppercase, lowercase, number, and special character');
     }
 
     const existing = store.findOne('users', (u) => u.email === email.toLowerCase());
 
     if (existing) {
-      return reply.conflict('User with this email already exists');
+      throw ApiError.conflict('duplicate_email', 'User with this email already exists', 'Use POST /api/auth/login to sign in instead');
     }
 
     const passwordHash = await hashPassword(password);
@@ -105,11 +106,11 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.findOne('users', (u) => u.email === email.toLowerCase());
 
     if (!user) {
-      return reply.unauthorized('Invalid email or password');
+      throw ApiError.unauthorized('invalid_credentials', 'Invalid email or password');
     }
 
     if (!user.isActive) {
-      return reply.forbidden('Account is deactivated');
+      throw ApiError.forbidden('account_deactivated', 'Account is deactivated', 'Contact an administrator to reactivate your account');
     }
 
     const valid = await verifyPassword(password, user.passwordHash as string);
@@ -124,7 +125,7 @@ export async function authRoutes(app: FastifyInstance) {
         userAgent: request.headers['user-agent'],
       }).catch(() => {});
 
-      return reply.unauthorized('Invalid email or password');
+      throw ApiError.unauthorized('invalid_credentials', 'Invalid email or password');
     }
 
     // If 2FA is enabled, return a temporary token for 2FA verification
@@ -173,17 +174,17 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       payload = app.jwt.verify(twoFactorToken);
     } catch {
-      return reply.unauthorized('Invalid or expired two-factor token');
+      throw ApiError.unauthorized('invalid_2fa_token', 'Invalid or expired two-factor token', 'Re-authenticate via POST /api/auth/login to obtain a new twoFactorToken');
     }
 
     if (!payload.twoFactor) {
-      return reply.unauthorized('Invalid two-factor token');
+      throw ApiError.unauthorized('invalid_2fa_token', 'Invalid two-factor token');
     }
 
     const user = store.getById('users', payload.sub);
 
     if (!user || !user.isActive || !user.totpEnabled || !user.totpSecret) {
-      return reply.unauthorized('Two-factor authentication not configured');
+      throw ApiError.unauthorized('2fa_not_configured', 'Two-factor authentication not configured', 'Enable 2FA first via POST /api/auth/2fa/setup');
     }
 
     // Try TOTP code first (6 digits), then try recovery code
@@ -208,7 +209,7 @@ export async function authRoutes(app: FastifyInstance) {
         userAgent: request.headers['user-agent'],
       }).catch(() => {});
 
-      return reply.unauthorized('Invalid two-factor code');
+      throw ApiError.unauthorized('invalid_2fa_code', 'Invalid two-factor code', 'Provide a valid 6-digit TOTP code from your authenticator app, or a recovery code');
     }
 
     const tokens = await generateTokens(app, user.id as string, user.role as string);
@@ -241,7 +242,7 @@ export async function authRoutes(app: FastifyInstance) {
   typedApp.post('/api/auth/refresh', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Refresh access token', body: refreshBody } }, async (request, reply) => {
     const tokens = await refreshAccessToken(app, request.body.refreshToken);
     if (!tokens) {
-      return reply.unauthorized('Invalid or expired refresh token');
+      throw ApiError.unauthorized('invalid_refresh_token', 'Invalid or expired refresh token', 'Re-authenticate via POST /api/auth/login');
     }
 
     return reply.send(tokens);
@@ -254,7 +255,7 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.getById('users', sub);
 
     if (!user) {
-      return reply.unauthorized('User not found');
+      throw ApiError.unauthorized('user_not_found', 'User not found', 'The JWT subject references a user that no longer exists');
     }
 
     return reply.send({
@@ -287,11 +288,11 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.getById('users', sub);
 
     if (!user) {
-      return reply.unauthorized('User not found');
+      throw ApiError.unauthorized('user_not_found', 'User not found');
     }
 
     if (user.totpEnabled) {
-      return reply.conflict('Two-factor authentication is already enabled');
+      throw ApiError.conflict('2fa_already_enabled', 'Two-factor authentication is already enabled');
     }
 
     const secret = generateTotpSecret();
@@ -313,16 +314,16 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.getById('users', sub);
 
     if (!user || !user.totpSecret) {
-      return reply.badRequest('TOTP setup has not been initiated');
+      throw ApiError.badRequest('2fa_setup_not_initiated', 'TOTP setup has not been initiated', 'Call POST /api/auth/2fa/setup first to generate a secret');
     }
 
     if (user.totpEnabled) {
-      return reply.conflict('Two-factor authentication is already enabled');
+      throw ApiError.conflict('2fa_already_enabled', 'Two-factor authentication is already enabled');
     }
 
     const valid = verifyTotpToken(user.totpSecret as string, request.body.token, user.email as string);
     if (!valid) {
-      return reply.unauthorized('Invalid TOTP code');
+      throw ApiError.unauthorized('invalid_totp_code', 'Invalid TOTP code', 'Enter the 6-digit code from your authenticator app');
     }
 
     const recoveryCodes = generateRecoveryCodes();
@@ -350,16 +351,16 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.getById('users', sub);
 
     if (!user) {
-      return reply.unauthorized('User not found');
+      throw ApiError.unauthorized('user_not_found', 'User not found');
     }
 
     if (!user.totpEnabled) {
-      return reply.badRequest('Two-factor authentication is not enabled');
+      throw ApiError.badRequest('2fa_not_enabled', 'Two-factor authentication is not enabled');
     }
 
     const valid = await verifyPassword(request.body.password, user.passwordHash as string);
     if (!valid) {
-      return reply.unauthorized('Invalid password');
+      throw ApiError.unauthorized('invalid_password', 'Invalid password');
     }
 
     await disableTotp(sub);
@@ -383,7 +384,7 @@ export async function authRoutes(app: FastifyInstance) {
     const user = store.getById('users', sub);
 
     if (!user || !user.totpEnabled) {
-      return reply.badRequest('Two-factor authentication is not enabled');
+      throw ApiError.badRequest('2fa_not_enabled', 'Two-factor authentication is not enabled', 'Enable 2FA first via POST /api/auth/2fa/setup and POST /api/auth/2fa/confirm');
     }
 
     const codes = await regenerateRecoveryCodes(sub);

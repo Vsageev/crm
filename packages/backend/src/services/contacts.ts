@@ -8,6 +8,7 @@ export interface ContactListQuery {
   search?: string;
   limit?: number;
   offset?: number;
+  countOnly?: boolean;
 }
 
 export interface CreateContactData {
@@ -69,8 +70,13 @@ export async function listContacts(query: ContactListQuery) {
     return true;
   };
 
-  const all = store.find('contacts', predicate)
-    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const all = store.find('contacts', predicate);
+
+  if (query.countOnly) {
+    return { entries: [], total: all.length };
+  }
+
+  all.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const entries = all.slice(offset, offset + limit);
   const total = all.length;

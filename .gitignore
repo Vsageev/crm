@@ -11,3 +11,4 @@ coverage/
 backups/
 certs/
 **/data/
+.claude-api-key

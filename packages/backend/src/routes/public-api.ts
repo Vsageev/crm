@@ -191,6 +191,7 @@ const sendMessageBody = z.object({
 const paginationQuery = z.object({
   limit: z.coerce.number().optional(),
   offset: z.coerce.number().optional(),
+  countOnly: z.coerce.boolean().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -235,7 +236,12 @@ export async function publicApiRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit,
         offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({ total, limit, offset, entries });
     },
@@ -405,7 +411,12 @@ export async function publicApiRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit,
         offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({ total, limit, offset, entries });
     },
@@ -561,7 +572,12 @@ export async function publicApiRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit,
         offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({ total, limit, offset, entries });
     },

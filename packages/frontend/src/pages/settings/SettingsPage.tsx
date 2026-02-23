@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bot, MessageSquareText, Bell, Send, Workflow, FileText, Mail, MessageCircle, Phone, Instagram, Brain } from 'lucide-react';
+import { Bot, MessageSquareText, Bell, Send, Workflow, FileText, Mail, MessageCircle, Phone, Instagram, Brain, Key, HardDrive } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { TelegramBotsTab } from './TelegramBotsTab';
 import { TemplatesTab } from './TemplatesTab';
@@ -14,9 +14,11 @@ import { InstagramAccountsTab } from './InstagramAccountsTab';
 import { NovofonTab } from './NovofonTab';
 import { VoximplantTab } from './VoximplantTab';
 import { AIKnowledgeBaseTab } from './AIKnowledgeBaseTab';
+import { ApiKeysTab } from './ApiKeysTab';
+import { BackupsTab } from './BackupsTab';
 import styles from './SettingsPage.module.css';
 
-type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai';
+type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
 
 const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
   { key: 'bots', label: 'Telegram Bots', icon: Bot },
@@ -31,7 +33,9 @@ const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
   { key: 'chatbot-flows', label: 'Chatbot Flows', icon: Workflow },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'web-forms', label: 'Web Forms', icon: FileText },
-  { key: 'ai', label: 'AI Knowledge Base', icon: Brain },
+  { key: 'ai', label: 'Knowledge Base', icon: Brain },
+  { key: 'api-keys', label: 'API Keys', icon: Key },
+  { key: 'backups', label: 'Backups', icon: HardDrive },
 ];
 
 export function SettingsPage() {
@@ -69,6 +73,8 @@ export function SettingsPage() {
       {activeTab === 'notifications' && <NotificationsTab />}
       {activeTab === 'web-forms' && <WebFormsTab />}
       {activeTab === 'ai' && <AIKnowledgeBaseTab />}
+      {activeTab === 'api-keys' && <ApiKeysTab />}
+      {activeTab === 'backups' && <BackupsTab />}
     </div>
   );
 }

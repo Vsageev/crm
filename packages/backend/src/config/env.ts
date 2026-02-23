@@ -74,13 +74,6 @@ const envSchema = z.object({
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().default('mailto:admin@crm.local'),
 
-  // OpenAI — for AI reply suggestions
-  AI_PROVIDER: z.enum(['openai', 'openrouter']).default('openai'),
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
-  OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_MODEL: z.string().default('openai/gpt-4o-mini'),
-
   // Dev auth bypass — skip JWT verification and inject a mock admin user
   DEV_SKIP_AUTH: z.string().default('false').transform((v) => v === 'true'),
 });

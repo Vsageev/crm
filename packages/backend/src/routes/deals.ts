@@ -68,6 +68,7 @@ const dealsQuerySchema = z.object({
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  countOnly: z.coerce.boolean().optional(),
 });
 
 export async function dealRoutes(app: FastifyInstance) {
@@ -91,7 +92,12 @@ export async function dealRoutes(app: FastifyInstance) {
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
+        countOnly: request.query.countOnly,
       });
+
+      if (request.query.countOnly) {
+        return reply.send({ total });
+      }
 
       return reply.send({
         total,
@@ -213,6 +219,8 @@ export async function dealRoutes(app: FastifyInstance) {
     pipelineStageId: z.uuid(),
     stageOrder: z.number().int().min(0).optional(),
     lostReason: z.string().max(500).optional(),
+    autoClose: z.boolean().optional(),
+    closeIfValue: z.number().min(0).optional(),
   });
 
   typedApp.post(

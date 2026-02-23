@@ -36,15 +36,13 @@ export function AppLayout() {
         )}
 
         <div className={`${styles.sidebarWrap} ${sidebarOpen ? styles.sidebarOpen : ''}`}>
-          <Tooltip label="Close menu" position="right">
-            <button
-              className={styles.closeSidebarBtn}
-              onClick={() => setSidebarOpen(false)}
-              aria-label="Close menu"
-            >
-              <X size={20} />
-            </button>
-          </Tooltip>
+          <button
+            className={styles.closeSidebarBtn}
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
           <Sidebar onNavigate={() => setSidebarOpen(false)} />
         </div>
 

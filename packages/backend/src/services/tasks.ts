@@ -12,6 +12,7 @@ export interface TaskListQuery {
   search?: string;
   limit?: number;
   offset?: number;
+  countOnly?: boolean;
 }
 
 export interface CreateTaskData {
@@ -60,8 +61,13 @@ export async function listTasks(query: TaskListQuery) {
     return true;
   };
 
-  const all = store.find('tasks', predicate)
-    .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const all = store.find('tasks', predicate);
+
+  if (query.countOnly) {
+    return { entries: [], total: all.length };
+  }
+
+  all.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const entries = all.slice(offset, offset + limit);
   const total = all.length;

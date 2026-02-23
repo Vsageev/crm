@@ -21,8 +21,14 @@ const ContactDetailPage = lazy(() =>
 const ContactFormPage = lazy(() =>
   import('../pages/contacts/ContactFormPage').then((m) => ({ default: m.ContactFormPage })),
 );
-const CompaniesPage = lazy(() =>
-  import('../pages/CompaniesPage').then((m) => ({ default: m.CompaniesPage })),
+const CompaniesListPage = lazy(() =>
+  import('../pages/companies/CompaniesListPage').then((m) => ({ default: m.CompaniesListPage })),
+);
+const CompanyDetailPage = lazy(() =>
+  import('../pages/companies/CompanyDetailPage').then((m) => ({ default: m.CompanyDetailPage })),
+);
+const CompanyFormPage = lazy(() =>
+  import('../pages/companies/CompanyFormPage').then((m) => ({ default: m.CompanyFormPage })),
 );
 const DealsPage = lazy(() =>
   import('../pages/DealsPage').then((m) => ({ default: m.DealsPage })),
@@ -110,7 +116,10 @@ export const router = createBrowserRouter([
               { path: 'contacts/new', element: <SuspenseWrapper><ContactFormPage /></SuspenseWrapper> },
               { path: 'contacts/:id', element: <SuspenseWrapper><ContactDetailPage /></SuspenseWrapper> },
               { path: 'contacts/:id/edit', element: <SuspenseWrapper><ContactFormPage /></SuspenseWrapper> },
-              { path: 'companies', element: <SuspenseWrapper><CompaniesPage /></SuspenseWrapper> },
+              { path: 'companies', element: <SuspenseWrapper><CompaniesListPage /></SuspenseWrapper> },
+              { path: 'companies/new', element: <SuspenseWrapper><CompanyFormPage /></SuspenseWrapper> },
+              { path: 'companies/:id', element: <SuspenseWrapper><CompanyDetailPage /></SuspenseWrapper> },
+              { path: 'companies/:id/edit', element: <SuspenseWrapper><CompanyFormPage /></SuspenseWrapper> },
               { path: 'deals', element: <SuspenseWrapper><DealsPage /></SuspenseWrapper> },
               { path: 'deals/:id', element: <SuspenseWrapper><DealDetailPage /></SuspenseWrapper> },
               { path: 'tasks', element: <SuspenseWrapper><TasksListPage /></SuspenseWrapper> },

@@ -8,7 +8,9 @@ import {
   createConversation,
   updateConversation,
   markConversationRead,
+  deleteConversation,
 } from '../services/conversations.js';
+import { ApiError } from '../utils/api-errors.js';
 import { eventBus } from '../services/event-bus.js';
 
 const createConversationBody = z.object({
@@ -144,6 +146,32 @@ export async function conversationRoutes(app: FastifyInstance) {
       }
 
       return reply.send(updated);
+    },
+  );
+
+  // Delete conversation
+  typedApp.delete(
+    '/api/conversations/:id',
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'Delete a conversation and its messages',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const deleted = await deleteConversation(request.params.id, {
+        userId: request.user.sub,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      if (!deleted) {
+        throw ApiError.notFound('conversation_not_found', `Conversation ${request.params.id} not found`);
+      }
+
+      return reply.status(204).send();
     },
   );
 

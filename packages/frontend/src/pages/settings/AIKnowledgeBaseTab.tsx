@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, Search, Pencil, Trash2, X } from 'lucide-react';
-import { Button, Card, Input, Textarea, Badge, Select } from '../../ui';
+import { Button, Card, Input, Textarea } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import styles from './SettingsPage.module.css';
 
@@ -20,19 +20,6 @@ interface KBResponse {
   entries: KBEntry[];
 }
 
-interface AIStatus {
-  configured: boolean;
-  provider: AIProvider;
-  model: string;
-}
-
-type AIProvider = 'openai' | 'openrouter';
-
-interface AISettings {
-  provider: AIProvider;
-  model: string;
-}
-
 interface KBFormData {
   title: string;
   content: string;
@@ -43,52 +30,12 @@ const EMPTY_FORM: KBFormData = {
   content: '',
 };
 
-const CUSTOM_MODEL_VALUE = '__custom_model__';
-
-const MODEL_OPTIONS: Record<AIProvider, { value: string; label: string }[]> = {
-  openai: [
-    { value: 'gpt-5', label: 'gpt-5' },
-    { value: 'gpt-5-mini', label: 'gpt-5-mini' },
-    { value: 'gpt-5-nano', label: 'gpt-5-nano' },
-    { value: 'gpt-5-pro', label: 'gpt-5-pro' },
-  ],
-  openrouter: [
-    { value: 'openai/gpt-5.2', label: 'openai/gpt-5.2' },
-    { value: 'openai/gpt-5.2-chat', label: 'openai/gpt-5.2-chat' },
-    { value: 'openai/gpt-5.2-pro', label: 'openai/gpt-5.2-pro' },
-    { value: 'anthropic/claude-sonnet-4.6', label: 'anthropic/claude-sonnet-4.6' },
-    { value: 'anthropic/claude-opus-4.6', label: 'anthropic/claude-opus-4.6' },
-    { value: 'google/gemini-3.1-pro-preview', label: 'google/gemini-3.1-pro-preview' },
-    { value: 'google/gemini-3-flash-preview', label: 'google/gemini-3-flash-preview' },
-    { value: 'minimax/minimax-m2.5', label: 'minimax/minimax-m2.5' },
-    { value: 'moonshotai/kimi-k2.5', label: 'moonshotai/kimi-k2.5' },
-    { value: 'z-ai/glm-5', label: 'z-ai/glm-5' },
-  ],
-};
-
-function providerLabel(provider: AIProvider): string {
-  return provider === 'openrouter' ? 'OpenRouter' : 'OpenAI';
-}
-
 export function AIKnowledgeBaseTab() {
   const [entries, setEntries] = useState<KBEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  // AI status
-  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
-  const [aiSettings, setAiSettings] = useState<AISettings>({
-    provider: 'openai',
-    model: 'gpt-4o-mini',
-  });
-  const [configLoading, setConfigLoading] = useState(true);
-  const [configSaving, setConfigSaving] = useState(false);
-  const [configError, setConfigError] = useState('');
-  const [configSuccess, setConfigSuccess] = useState('');
-  const [useCustomModel, setUseCustomModel] = useState(false);
-  const [customModel, setCustomModel] = useState('');
 
   // Filters
   const [search, setSearch] = useState('');
@@ -131,37 +78,6 @@ export function AIKnowledgeBaseTab() {
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
-
-  const fetchAIConfig = useCallback(async () => {
-    setConfigLoading(true);
-    setConfigError('');
-
-    try {
-      const [status, settings] = await Promise.all([
-        api<AIStatus>('/ai/status'),
-        api<AISettings>('/ai/settings'),
-      ]);
-
-      setAiStatus(status);
-      setAiSettings(settings);
-      const modelInPreset = MODEL_OPTIONS[settings.provider].some((m) => m.value === settings.model);
-      setUseCustomModel(!modelInPreset);
-      setCustomModel(modelInPreset ? '' : settings.model);
-    } catch (err) {
-      setAiStatus(null);
-      if (err instanceof ApiError) {
-        setConfigError(err.message);
-      } else {
-        setConfigError('Failed to load AI configuration');
-      }
-    } finally {
-      setConfigLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchAIConfig();
-  }, [fetchAIConfig]);
 
   function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -264,152 +180,24 @@ export function AIKnowledgeBaseTab() {
     }
   }
 
-  async function handleSaveAISettings(e: FormEvent) {
-    e.preventDefault();
-    const model = aiSettings.model.trim();
-    if (!model) {
-      setConfigError('Model is required');
-      return;
-    }
-
-    setConfigSaving(true);
-    setConfigError('');
-    setConfigSuccess('');
-    try {
-      await api<AISettings>('/ai/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          provider: aiSettings.provider,
-          model,
-        }),
-      });
-      await fetchAIConfig();
-      setConfigSuccess('AI configuration updated');
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setConfigError(err.message);
-      } else {
-        setConfigError('Failed to update AI configuration');
-      }
-    } finally {
-      setConfigSaving(false);
-    }
-  }
-
   return (
     <div>
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>AI Knowledge Base</h2>
+            <h2 className={styles.sectionTitle}>Knowledge Base</h2>
             <p className={styles.sectionDescription}>
-              Add company-specific information for AI-powered reply suggestions.
+              Add company-specific information such as FAQs, product info, or company policies.
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-            {aiStatus && (
-              <Badge color={aiStatus.configured ? 'success' : 'warning'}>
-                {aiStatus.configured
-                  ? `AI Active (${providerLabel(aiStatus.provider)} · ${aiStatus.model})`
-                  : `${providerLabel(aiStatus.provider)} API Key Not Set`}
-              </Badge>
-            )}
-            <Button size="sm" onClick={openCreate}>
-              <Plus size={14} />
-              New Entry
-            </Button>
-          </div>
+          <Button size="sm" onClick={openCreate}>
+            <Plus size={14} />
+            New Entry
+          </Button>
         </div>
 
         {success && <div className={styles.success}>{success}</div>}
         {error && <div className={styles.alert}>{error}</div>}
-
-        <Card style={{ marginBottom: 'var(--space-4)' }}>
-          {configLoading ? (
-            <div className={styles.loadingState}>Loading AI configuration...</div>
-          ) : (
-            <form onSubmit={handleSaveAISettings} className={styles.connectForm} style={{ maxWidth: '860px' }}>
-              <Select
-                label="AI Provider"
-                value={aiSettings.provider}
-                onChange={(e) => {
-                  const provider = e.target.value as AIProvider;
-                  const nextModels = MODEL_OPTIONS[provider];
-                  const hasCurrentModel = nextModels.some((m) => m.value === aiSettings.model);
-                  setAiSettings((prev) => ({
-                    provider,
-                    model:
-                      useCustomModel || hasCurrentModel
-                        ? prev.model
-                        : (nextModels[0]?.value ?? prev.model),
-                  }));
-                }}
-              >
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-              </Select>
-
-              <Select
-                label="Model"
-                value={useCustomModel ? CUSTOM_MODEL_VALUE : aiSettings.model}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === CUSTOM_MODEL_VALUE) {
-                    setUseCustomModel(true);
-                    const seed =
-                      customModel.trim() || aiSettings.model || MODEL_OPTIONS[aiSettings.provider][0]?.value || '';
-                    setCustomModel(seed);
-                    setAiSettings((prev) => ({ ...prev, model: seed }));
-                    return;
-                  }
-                  setUseCustomModel(false);
-                  setAiSettings((prev) => ({ ...prev, model: value }));
-                }}
-              >
-                {!MODEL_OPTIONS[aiSettings.provider].some((m) => m.value === aiSettings.model) && (
-                  <option value={aiSettings.model}>{aiSettings.model} (current)</option>
-                )}
-                {MODEL_OPTIONS[aiSettings.provider].map((model) => (
-                  <option key={model.value} value={model.value}>
-                    {model.label}
-                  </option>
-                ))}
-                <option value={CUSTOM_MODEL_VALUE}>Custom model...</option>
-              </Select>
-
-              {useCustomModel && (
-                <Input
-                  label="Custom Model ID"
-                  placeholder={
-                    aiSettings.provider === 'openrouter'
-                      ? 'e.g. google/gemini-2.0-flash-001'
-                      : 'e.g. gpt-4.1-nano'
-                  }
-                  value={customModel}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setCustomModel(value);
-                    setAiSettings((prev) => ({ ...prev, model: value }));
-                  }}
-                />
-              )}
-
-              <Button type="submit" size="md" disabled={configSaving || !aiSettings.model.trim()}>
-                {configSaving ? 'Saving...' : 'Save AI Settings'}
-              </Button>
-            </form>
-          )}
-          {!configLoading && (
-            <p className={styles.sectionDescription} style={{ marginTop: 'var(--space-3)' }}>
-              {aiSettings.provider === 'openrouter'
-                ? 'OpenRouter requires OPENROUTER_API_KEY in backend environment variables.'
-                : 'OpenAI requires OPENAI_API_KEY in backend environment variables.'}
-            </p>
-          )}
-        </Card>
-
-        {configSuccess && <div className={styles.success}>{configSuccess}</div>}
-        {configError && <div className={styles.alert}>{configError}</div>}
 
         <Card>
           <div className={styles.toolbar}>
@@ -452,9 +240,6 @@ export function AIKnowledgeBaseTab() {
               ) : (
                 <>
                   <p>No knowledge base entries yet.</p>
-                  <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
-                    Add entries like FAQs, product info, or company policies to improve AI suggestions.
-                  </p>
                   <Button size="sm" onClick={openCreate}>
                     <Plus size={14} />
                     Create your first entry
@@ -539,7 +324,7 @@ export function AIKnowledgeBaseTab() {
                 />
                 <Textarea
                   label="Content"
-                  placeholder="Enter the knowledge base content. This will be used by the AI to generate contextual replies."
+                  placeholder="Enter the knowledge base content."
                   value={form.content}
                   onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
                   error={formErrors.content}

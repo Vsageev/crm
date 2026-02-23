@@ -22,8 +22,6 @@ import {
   Download,
   Play,
   MapPin,
-  Sparkles,
-  Loader2,
   Phone,
 } from 'lucide-react';
 import { api, apiUpload, ApiError } from '../../lib/api';
@@ -384,9 +382,10 @@ export function InboxPage() {
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
 
-  // AI suggest state
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState('');
+  // Draft state
+  const [draftConversationIds, setDraftConversationIds] = useState<Set<string>>(new Set());
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedDraftRef = useRef<{ conversationId: string; content: string } | null>(null);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -426,6 +425,15 @@ export function InboxPage() {
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
+
+  /* ── Fetch drafts on mount ── */
+  useEffect(() => {
+    api<PaginatedResponse<{ id: string; conversationId: string }>>('/message-drafts?limit=200')
+      .then((data) => {
+        setDraftConversationIds(new Set(data.entries.map((d) => d.conversationId)));
+      })
+      .catch(() => {});
+  }, []);
 
   /* ── Fetch messages for selected conversation ── */
   const fetchMessages = useCallback(async (conversationId: string, options?: { silent?: boolean }) => {
@@ -503,6 +511,64 @@ export function InboxPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  /* ── Auto-save draft (debounced) ── */
+  useEffect(() => {
+    if (!selectedId) return;
+
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+
+    draftTimerRef.current = setTimeout(() => {
+      const trimmed = replyText.trim();
+      const lastSaved = lastSavedDraftRef.current;
+
+      // Skip if nothing changed
+      if (lastSaved && lastSaved.conversationId === selectedId && lastSaved.content === trimmed) return;
+      if (!lastSaved && !trimmed) return;
+
+      if (trimmed) {
+        api('/message-drafts', {
+          method: 'PUT',
+          body: JSON.stringify({ conversationId: selectedId, content: trimmed }),
+        })
+          .then(() => {
+            lastSavedDraftRef.current = { conversationId: selectedId, content: trimmed };
+            setDraftConversationIds((prev) => {
+              if (prev.has(selectedId)) return prev;
+              const next = new Set(prev);
+              next.add(selectedId);
+              return next;
+            });
+          })
+          .catch(() => {});
+      } else {
+        // Delete draft if text is empty
+        api<PaginatedResponse<{ id: string; conversationId: string }>>(
+          `/message-drafts?conversationId=${selectedId}&limit=1`,
+        )
+          .then((data) => {
+            const draft = data.entries[0];
+            if (draft) {
+              return api(`/message-drafts/${draft.id}`, { method: 'DELETE' });
+            }
+          })
+          .then(() => {
+            lastSavedDraftRef.current = null;
+            setDraftConversationIds((prev) => {
+              if (!prev.has(selectedId)) return prev;
+              const next = new Set(prev);
+              next.delete(selectedId);
+              return next;
+            });
+          })
+          .catch(() => {});
+      }
+    }, 1000);
+
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, [replyText, selectedId]);
+
   /* ── Close templates popover on outside click ── */
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -535,11 +601,26 @@ export function InboxPage() {
   /* ── Select conversation ── */
   function selectConversation(id: string) {
     setSearchParams({ id });
-    setReplyText('');
     setAttachedFile(null);
     setTemplatesOpen(false);
     setKeyboardOpen(false);
     setKeyboardRows([]);
+
+    // Load draft for the selected conversation
+    api<PaginatedResponse<{ id: string; conversationId: string; content: string }>>(
+      `/message-drafts?conversationId=${id}&limit=1`,
+    )
+      .then((data) => {
+        const draft = data.entries[0];
+        setReplyText(draft ? draft.content : '');
+        lastSavedDraftRef.current = draft
+          ? { conversationId: id, content: draft.content }
+          : null;
+      })
+      .catch(() => {
+        setReplyText('');
+        lastSavedDraftRef.current = null;
+      });
   }
 
   /* ── Formatting helpers ── */
@@ -711,6 +792,25 @@ export function InboxPage() {
       if (fileInputRef.current) fileInputRef.current.value = '';
       replyInputRef.current?.focus();
 
+      // Clear draft for this conversation
+      lastSavedDraftRef.current = null;
+      if (selectedId) {
+        api<PaginatedResponse<{ id: string; conversationId: string }>>(
+          `/message-drafts?conversationId=${selectedId}&limit=1`,
+        )
+          .then((data) => {
+            const draft = data.entries[0];
+            if (draft) api(`/message-drafts/${draft.id}`, { method: 'DELETE' }).catch(() => {});
+          })
+          .catch(() => {});
+        setDraftConversationIds((prev) => {
+          if (!prev.has(selectedId)) return prev;
+          const next = new Set(prev);
+          next.delete(selectedId);
+          return next;
+        });
+      }
+
       // Update conversation in list
       setConversations((prev) =>
         prev.map((c) =>
@@ -723,27 +823,6 @@ export function InboxPage() {
       setMsgsError(err instanceof ApiError ? err.message : 'Failed to send message');
     } finally {
       setSending(false);
-    }
-  }
-
-  /* ── AI suggest reply ── */
-  async function handleAiSuggest() {
-    if (!selectedId || aiLoading) return;
-    setAiLoading(true);
-    setAiError('');
-    try {
-      const data = await api<{ suggestion: string }>('/ai/suggest-reply', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId: selectedId }),
-      });
-      setReplyText(data.suggestion);
-      replyInputRef.current?.focus();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Failed to generate AI suggestion';
-      setAiError(msg);
-      setTimeout(() => setAiError(''), 5000);
-    } finally {
-      setAiLoading(false);
     }
   }
 
@@ -894,6 +973,7 @@ export function InboxPage() {
                           {CHANNEL_LABELS[conv.channelType]}
                         </span>
                         {conv.isUnread && <span className={styles.unreadDot} />}
+                        {draftConversationIds.has(conv.id) && <span className={styles.draftBadge}>Draft</span>}
                       </div>
                     </div>
                   </div>
@@ -1449,20 +1529,6 @@ export function InboxPage() {
                     <Paperclip size={16} />
                   </button>
                 </Tooltip>
-                <Tooltip label="AI suggest reply">
-                  <button
-                    className={styles.iconBtn}
-                    onClick={handleAiSuggest}
-                    disabled={aiLoading}
-                    type="button"
-                  >
-                    {aiLoading ? (
-                      <Loader2 size={16} className={styles.aiSpinner} />
-                    ) : (
-                      <Sparkles size={16} />
-                    )}
-                  </button>
-                </Tooltip>
                 <div className={styles.replyInputWrap}>
                   {attachedFile && (
                     <div className={styles.attachedFileBar}>
@@ -1488,7 +1554,13 @@ export function InboxPage() {
                     className={styles.replyInput}
                     placeholder={attachedFile ? 'Add a caption... (optional)' : 'Type a message... (Enter to send, Shift+Enter for new line)'}
                     value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
+                    onChange={(e) => {
+                      setReplyText(e.target.value);
+                      // Auto-resize
+                      const ta = e.target;
+                      ta.style.height = 'auto';
+                      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+                    }}
                     onKeyDown={handleReplyKeyDown}
                     rows={1}
                   />
@@ -1502,9 +1574,6 @@ export function InboxPage() {
                   <Send size={16} />
                 </button>
               </div>
-              {aiError && (
-                <div className={styles.aiError}>{aiError}</div>
-              )}
             </div>
           </div>
         ) : (

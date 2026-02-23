@@ -189,6 +189,13 @@ pnpm docker:full
 
 See `packages/backend/.env.example` for all backend config including database, Redis, Telegram, and backup settings.
 
+## Guidelines
+
+All project guidelines live in [`docs/`](./docs/):
+
+- [`docs/backend-api-design-guidelines.md`](./docs/backend-api-design-guidelines.md) — API patterns for AI agents (idempotency, batching, countOnly, conditional actions, error format)
+- [`docs/design-system.md`](./docs/design-system.md) — colors, typography, components, layout, animations
+
 ## License
 
 Private.

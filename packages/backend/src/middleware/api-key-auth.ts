@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastif
 import type { Permission, UserRole } from 'shared';
 import { validateApiKey } from '../services/api-keys.js';
 import { store } from '../db/index.js';
+import { env } from '../config/env.js';
 
 /**
  * Middleware that accepts either a JWT token or an API key in the
@@ -18,6 +19,15 @@ export async function authenticateApiKeyOrJwt(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
+  if (env.DEV_SKIP_AUTH) {
+    const adminUser = store.findOne('users', (r) => r.role === 'admin' && r.isActive === true);
+    request.user = adminUser
+      ? { sub: adminUser.id as string, role: adminUser.role as string }
+      : { sub: 'dev-user', role: 'admin' };
+    request.apiKeyPermissions = undefined;
+    return;
+  }
+
   const authHeader = request.headers.authorization;
   if (!authHeader) {
     return reply.unauthorized('Missing Authorization header');
@@ -81,9 +91,14 @@ export function requireApiPermission(permission: Permission): preHandlerHookHand
       return reply.forbidden('Insufficient permissions');
     }
 
-    // If authenticated via API key, also check key-scoped permissions
+    // If authenticated via API key, also check key-scoped permissions.
+    // Permission model: `resource:read` allows read, `resource:write` allows all actions.
     if (request.apiKeyPermissions) {
-      if (!request.apiKeyPermissions.includes(permission)) {
+      const resource = permission.split(':')[0];
+      const hasWrite = request.apiKeyPermissions.includes(`${resource}:write`);
+      const hasRead = request.apiKeyPermissions.includes(`${resource}:read`);
+
+      if (!hasWrite && !(hasRead && permission === `${resource}:read`)) {
         return reply.forbidden('API key does not have this permission');
       }
     }

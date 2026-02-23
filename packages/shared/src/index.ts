@@ -81,8 +81,7 @@ export type Permission =
   | 'knowledge-base:read'
   | 'knowledge-base:create'
   | 'knowledge-base:update'
-  | 'knowledge-base:delete'
-  | 'ai:suggest-reply';
+  | 'knowledge-base:delete';
 
 /**
  * Permissions granted to each role.
@@ -146,7 +145,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'knowledge-base:create',
     'knowledge-base:update',
     'knowledge-base:delete',
-    'ai:suggest-reply',
   ],
   manager: [
     'users:read',
@@ -193,7 +191,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'knowledge-base:create',
     'knowledge-base:update',
     'knowledge-base:delete',
-    'ai:suggest-reply',
   ],
   agent: [
     'contacts:read',
@@ -218,7 +215,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'notifications:read',
     'forms:read',
     'knowledge-base:read',
-    'ai:suggest-reply',
   ],
 } as const;
 

@@ -55,8 +55,10 @@ import { novofonRoutes } from './routes/novofon.js';
 import { voximplantRoutes } from './routes/voximplant.js';
 import { telephonyRoutes } from './routes/telephony.js';
 import { knowledgeBaseRoutes } from './routes/knowledge-base.js';
-import { aiRoutes } from './routes/ai.js';
 import { quizRoutes } from './routes/quizzes.js';
+import { batchRoutes } from './routes/batch.js';
+import { messageDraftRoutes } from './routes/message-drafts.js';
+import { registerIdempotency } from './middleware/idempotency.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
   if (!env.TLS_CERT_PATH || !env.TLS_KEY_PATH) return undefined;
@@ -89,6 +91,7 @@ export async function buildApp() {
   registerSanitization(app);
   registerSecurityMiddleware(app);
   registerErrorHandler(app);
+  registerIdempotency(app);
 
   // Plugins
   await registerSwagger(app);
@@ -109,6 +112,7 @@ export async function buildApp() {
   await app.register(tagRoutes);
   await app.register(conversationRoutes);
   await app.register(messageRoutes);
+  await app.register(messageDraftRoutes);
   await app.register(telegramRoutes);
   await app.register(pipelineRoutes);
   await app.register(dealRoutes);
@@ -136,8 +140,8 @@ export async function buildApp() {
   await app.register(voximplantRoutes);
   await app.register(telephonyRoutes);
   await app.register(knowledgeBaseRoutes);
-  await app.register(aiRoutes);
   await app.register(quizRoutes);
+  await app.register(batchRoutes);
 
   return app;
 }
