@@ -7,3 +7,4 @@ export { Textarea } from './Textarea';
 export { PageLoader } from './PageLoader';
 export { ToastContainer } from './Toast';
 export { ErrorBoundary } from './ErrorBoundary';
+export { Tooltip } from './Tooltip';

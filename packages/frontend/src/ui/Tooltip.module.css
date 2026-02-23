@@ -1,0 +1,28 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.tip {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  max-width: min(280px, calc(100vw - 16px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: #fff;
+  background: var(--color-text);
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease;
+}
+
+.visible {
+  opacity: 1;
+  visibility: visible;
+}

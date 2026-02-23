@@ -123,7 +123,9 @@ Usage example:
 
 | Command                  | Description                                  |
 | ------------------------ | -------------------------------------------- |
-| `pnpm dev`               | Start all dev servers in parallel            |
+| `pnpm dev`               | Start all dev servers in parallel (+ ngrok)  |
+| `pnpm dev:backend:ngrok` | Start backend + reserved ngrok tunnel        |
+| `pnpm dev:ngrok`         | Start ngrok tunnel to local backend (3000)   |
 | `pnpm build`             | Build all packages                           |
 | `pnpm test`              | Run all tests                                |
 | `pnpm lint`              | Lint all packages                            |

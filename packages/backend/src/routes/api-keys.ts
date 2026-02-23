@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requireRole } from '../middleware/rbac.js';
 import {
@@ -33,15 +34,25 @@ function auditMeta(request: { user: { sub: string }; ip: string; headers: Record
 }
 
 export async function apiKeyRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List API keys — admins see all, managers see their own
-  app.get<{
-    Querystring: { limit?: string; offset?: string };
-  }>(
+  typedApp.get(
     '/api/api-keys',
-    { onRequest: [app.authenticate, requireRole('admin', 'manager')] },
+    {
+      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      schema: {
+        tags: ['API Keys'],
+        summary: 'List API keys',
+        querystring: z.object({
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
-      const limit = request.query.limit ? Math.min(Math.max(parseInt(request.query.limit, 10) || 50, 1), 100) : 50;
-      const offset = request.query.offset ? Math.max(parseInt(request.query.offset, 10) || 0, 0) : 0;
+      const limit = request.query.limit !== undefined ? Math.min(Math.max(request.query.limit || 50, 1), 100) : 50;
+      const offset = request.query.offset !== undefined ? Math.max(request.query.offset || 0, 0) : 0;
 
       const user = request.user as { sub: string; role: string };
       const createdById = user.role === 'admin' ? undefined : user.sub;
@@ -52,9 +63,16 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   );
 
   // Get single API key
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/api-keys/:id',
-    { onRequest: [app.authenticate, requireRole('admin', 'manager')] },
+    {
+      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      schema: {
+        tags: ['API Keys'],
+        summary: 'Get API key by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const key = await getApiKeyById(request.params.id) as any;
       if (!key) return reply.notFound('API key not found');
@@ -69,22 +87,24 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   );
 
   // Create API key — returns the raw key only once
-  app.post(
+  typedApp.post(
     '/api/api-keys',
-    { onRequest: [app.authenticate, requireRole('admin', 'manager')] },
+    {
+      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      schema: {
+        tags: ['API Keys'],
+        summary: 'Create an API key',
+        body: createApiKeyBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createApiKeyBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const result = await createApiKey(
         {
-          name: parsed.data.name,
-          permissions: parsed.data.permissions,
+          name: request.body.name,
+          permissions: request.body.permissions,
           createdById: request.user.sub,
-          description: parsed.data.description,
-          expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : undefined,
+          description: request.body.description,
+          expiresAt: request.body.expiresAt ? new Date(request.body.expiresAt) : undefined,
         },
         auditMeta(request),
       ) as any;
@@ -105,15 +125,18 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   );
 
   // Update API key
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/api-keys/:id',
-    { onRequest: [app.authenticate, requireRole('admin', 'manager')] },
+    {
+      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      schema: {
+        tags: ['API Keys'],
+        summary: 'Update an API key',
+        params: z.object({ id: z.uuid() }),
+        body: updateApiKeyBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateApiKeyBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const existing = await getApiKeyById(request.params.id) as any;
       if (!existing) return reply.notFound('API key not found');
 
@@ -122,9 +145,9 @@ export async function apiKeyRoutes(app: FastifyInstance) {
         return reply.forbidden('Access denied');
       }
 
-      const data: Record<string, unknown> = { ...parsed.data };
-      if (parsed.data.expiresAt !== undefined) {
-        data.expiresAt = parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null;
+      const data: Record<string, unknown> = { ...request.body };
+      if (request.body.expiresAt !== undefined) {
+        data.expiresAt = request.body.expiresAt ? new Date(request.body.expiresAt) : null;
       }
 
       const updated = await updateApiKey(request.params.id, data, auditMeta(request));
@@ -135,9 +158,16 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   );
 
   // Delete (revoke) API key
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/api-keys/:id',
-    { onRequest: [app.authenticate, requireRole('admin', 'manager')] },
+    {
+      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      schema: {
+        tags: ['API Keys'],
+        summary: 'Delete (revoke) an API key',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const existing = await getApiKeyById(request.params.id) as any;
       if (!existing) return reply.notFound('API key not found');

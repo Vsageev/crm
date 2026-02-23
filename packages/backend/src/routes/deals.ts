@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission, isAgent } from '../middleware/rbac.js';
 import {
@@ -57,23 +58,25 @@ const updateDealBody = z.object({
   tagIds: z.array(z.uuid()).optional(),
 });
 
+const dealsQuerySchema = z.object({
+  ownerId: z.uuid().optional(),
+  contactId: z.uuid().optional(),
+  companyId: z.uuid().optional(),
+  pipelineId: z.uuid().optional(),
+  pipelineStageId: z.uuid().optional(),
+  stage: z.string().optional(),
+  search: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 export async function dealRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List deals
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      contactId?: string;
-      companyId?: string;
-      pipelineId?: string;
-      pipelineStageId?: string;
-      stage?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/deals',
-    { onRequest: [app.authenticate, requirePermission('deals:read')] },
+    { onRequest: [app.authenticate, requirePermission('deals:read')], schema: { tags: ['Deals'], summary: 'List deals', querystring: dealsQuerySchema } },
     async (request, reply) => {
       // Agents can only see their own deals
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -86,23 +89,23 @@ export async function dealRoutes(app: FastifyInstance) {
         pipelineStageId: request.query.pipelineStageId,
         stage: request.query.stage,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single deal
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/deals/:id',
-    { onRequest: [app.authenticate, requirePermission('deals:read')] },
+    { onRequest: [app.authenticate, requirePermission('deals:read')], schema: { tags: ['Deals'], summary: 'Get single deal', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const deal = await getDealById(request.params.id) as any;
       if (!deal) {
@@ -116,19 +119,14 @@ export async function dealRoutes(app: FastifyInstance) {
   );
 
   // Create deal
-  app.post(
+  typedApp.post(
     '/api/deals',
-    { onRequest: [app.authenticate, requirePermission('deals:create')] },
+    { onRequest: [app.authenticate, requirePermission('deals:create')], schema: { tags: ['Deals'], summary: 'Create deal', body: createDealBody } },
     async (request, reply) => {
-      const parsed = createDealBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only create deals owned by themselves
       const data = isAgent(request)
-        ? { ...parsed.data, ownerId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, ownerId: request.user.sub }
+        : request.body;
 
       const deal = await createDeal(data, {
         userId: request.user.sub,
@@ -147,15 +145,10 @@ export async function dealRoutes(app: FastifyInstance) {
   );
 
   // Update deal
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/deals/:id',
-    { onRequest: [app.authenticate, requirePermission('deals:update')] },
+    { onRequest: [app.authenticate, requirePermission('deals:update')], schema: { tags: ['Deals'], summary: 'Update deal', params: z.object({ id: z.uuid() }), body: updateDealBody } },
     async (request, reply) => {
-      const parsed = updateDealBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only update their own deals
       if (isAgent(request)) {
         const deal = await getDealById(request.params.id) as any;
@@ -166,12 +159,12 @@ export async function dealRoutes(app: FastifyInstance) {
           return reply.forbidden('Access denied');
         }
         // Prevent agents from reassigning ownership
-        if (parsed.data.ownerId !== undefined && parsed.data.ownerId !== request.user.sub) {
+        if (request.body.ownerId !== undefined && request.body.ownerId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign deal ownership');
         }
       }
 
-      const updated = await updateDeal(request.params.id, parsed.data, {
+      const updated = await updateDeal(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -186,9 +179,9 @@ export async function dealRoutes(app: FastifyInstance) {
   );
 
   // Delete deal
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/deals/:id',
-    { onRequest: [app.authenticate, requirePermission('deals:delete')] },
+    { onRequest: [app.authenticate, requirePermission('deals:delete')], schema: { tags: ['Deals'], summary: 'Delete deal', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       // Agents can only delete their own deals
       if (isAgent(request)) {
@@ -222,15 +215,10 @@ export async function dealRoutes(app: FastifyInstance) {
     lostReason: z.string().max(500).optional(),
   });
 
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/deals/:id/move',
-    { onRequest: [app.authenticate, requirePermission('deals:update')] },
+    { onRequest: [app.authenticate, requirePermission('deals:update')], schema: { tags: ['Deals'], summary: 'Move deal to a different pipeline stage', params: z.object({ id: z.uuid() }), body: moveDealBody } },
     async (request, reply) => {
-      const parsed = moveDealBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only move their own deals
       if (isAgent(request)) {
         const deal = await getDealById(request.params.id) as any;
@@ -247,7 +235,7 @@ export async function dealRoutes(app: FastifyInstance) {
         const dealBefore = await getDealById(request.params.id) as any;
         const previousStageId = dealBefore?.pipelineStageId ?? null;
 
-        const updated = await moveDeal(request.params.id, parsed.data, {
+        const updated = await moveDeal(request.params.id, request.body, {
           userId: request.user.sub,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
@@ -257,7 +245,7 @@ export async function dealRoutes(app: FastifyInstance) {
           return reply.notFound('Deal not found');
         }
 
-        const stage = store.getById('pipelineStages', parsed.data.pipelineStageId);
+        const stage = store.getById('pipelineStages', request.body.pipelineStageId);
         const stageName = (stage?.name as string) ?? 'Unknown';
 
         // Emit automation trigger
@@ -265,7 +253,7 @@ export async function dealRoutes(app: FastifyInstance) {
           dealId: updated.id,
           deal: updated as unknown as Record<string, unknown>,
           previousStageId,
-          newStageId: parsed.data.pipelineStageId,
+          newStageId: request.body.pipelineStageId,
           stageName,
         });
 
@@ -310,19 +298,14 @@ export async function dealRoutes(app: FastifyInstance) {
       .min(1),
   });
 
-  app.post(
+  typedApp.post(
     '/api/deals/reorder',
-    { onRequest: [app.authenticate, requirePermission('deals:update')] },
+    { onRequest: [app.authenticate, requirePermission('deals:update')], schema: { tags: ['Deals'], summary: 'Reorder deals within a pipeline stage', body: reorderDealsBody } },
     async (request, reply) => {
-      const parsed = reorderDealsBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       try {
         const updated = await reorderDeals(
-          parsed.data.pipelineStageId,
-          { dealOrders: parsed.data.dealOrders },
+          request.body.pipelineStageId,
+          { dealOrders: request.body.dealOrders },
           {
             userId: request.user.sub,
             ipAddress: request.ip,

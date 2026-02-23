@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyError } from 'fastify';
+import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 import { env } from '../config/env.js';
 
 /**
@@ -10,6 +11,28 @@ import { env } from '../config/env.js';
  */
 export function registerErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error: FastifyError, request, reply) => {
+    // Handle Zod schema validation errors from fastify-type-provider-zod
+    if (hasZodFastifySchemaValidationErrors(error)) {
+      const details = error.validation
+        .map((v) => {
+          const path = v.params?.issue?.path?.join('.') ?? '';
+          const msg = v.params?.issue?.message ?? v.message ?? 'Invalid';
+          return path ? `${path}: ${msg}` : msg;
+        })
+        .join('; ');
+
+      request.log.warn(
+        { err: error, url: request.url, method: request.method },
+        'Validation error',
+      );
+
+      return reply.status(400).send({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: details,
+      });
+    }
+
     const statusCode = error.statusCode ?? 500;
 
     // Log the full error for debugging

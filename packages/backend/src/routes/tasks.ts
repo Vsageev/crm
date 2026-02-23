@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission, isAgent } from '../middleware/rbac.js';
 import {
@@ -43,24 +44,26 @@ const updateTaskBody = z.object({
   assigneeId: z.uuid().nullable().optional(),
 });
 
+const tasksQuerySchema = z.object({
+  assigneeId: z.uuid().optional(),
+  contactId: z.uuid().optional(),
+  dealId: z.uuid().optional(),
+  status: z.string().optional(),
+  priority: z.string().optional(),
+  type: z.string().optional(),
+  overdue: z.string().optional(),
+  search: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 export async function taskRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List tasks
-  app.get<{
-    Querystring: {
-      assigneeId?: string;
-      contactId?: string;
-      dealId?: string;
-      status?: string;
-      priority?: string;
-      type?: string;
-      overdue?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/tasks',
-    { onRequest: [app.authenticate, requirePermission('tasks:read')] },
+    { onRequest: [app.authenticate, requirePermission('tasks:read')], schema: { tags: ['Tasks'], summary: 'List tasks', querystring: tasksQuerySchema } },
     async (request, reply) => {
       // Agents can only see tasks assigned to them
       const assigneeId = isAgent(request) ? request.user.sub : request.query.assigneeId;
@@ -74,23 +77,23 @@ export async function taskRoutes(app: FastifyInstance) {
         type: request.query.type,
         overdue: request.query.overdue === 'true',
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single task
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/tasks/:id',
-    { onRequest: [app.authenticate, requirePermission('tasks:read')] },
+    { onRequest: [app.authenticate, requirePermission('tasks:read')], schema: { tags: ['Tasks'], summary: 'Get single task', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const task = await getTaskById(request.params.id);
       if (!task) {
@@ -104,19 +107,14 @@ export async function taskRoutes(app: FastifyInstance) {
   );
 
   // Create task
-  app.post(
+  typedApp.post(
     '/api/tasks',
-    { onRequest: [app.authenticate, requirePermission('tasks:create')] },
+    { onRequest: [app.authenticate, requirePermission('tasks:create')], schema: { tags: ['Tasks'], summary: 'Create task', body: createTaskBody } },
     async (request, reply) => {
-      const parsed = createTaskBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only create tasks assigned to themselves
       const data = isAgent(request)
-        ? { ...parsed.data, assigneeId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, assigneeId: request.user.sub }
+        : request.body;
 
       const task = await createTask(data, {
         userId: request.user.sub,
@@ -129,15 +127,10 @@ export async function taskRoutes(app: FastifyInstance) {
   );
 
   // Update task
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/tasks/:id',
-    { onRequest: [app.authenticate, requirePermission('tasks:update')] },
+    { onRequest: [app.authenticate, requirePermission('tasks:update')], schema: { tags: ['Tasks'], summary: 'Update task', params: z.object({ id: z.uuid() }), body: updateTaskBody } },
     async (request, reply) => {
-      const parsed = updateTaskBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only update tasks assigned to them
       if (isAgent(request)) {
         const task = await getTaskById(request.params.id);
@@ -148,12 +141,12 @@ export async function taskRoutes(app: FastifyInstance) {
           return reply.forbidden('Access denied');
         }
         // Prevent agents from reassigning tasks
-        if (parsed.data.assigneeId !== undefined && parsed.data.assigneeId !== request.user.sub) {
+        if (request.body.assigneeId !== undefined && request.body.assigneeId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign tasks');
         }
       }
 
-      const updated = await updateTask(request.params.id, parsed.data, {
+      const updated = await updateTask(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -164,7 +157,7 @@ export async function taskRoutes(app: FastifyInstance) {
       }
 
       // Emit automation trigger when task is completed
-      if (parsed.data.status === 'completed') {
+      if (request.body.status === 'completed') {
         eventBus.emit('task_completed', {
           taskId: updated.id,
           task: updated as unknown as Record<string, unknown>,
@@ -176,9 +169,9 @@ export async function taskRoutes(app: FastifyInstance) {
   );
 
   // Delete task
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/tasks/:id',
-    { onRequest: [app.authenticate, requirePermission('tasks:delete')] },
+    { onRequest: [app.authenticate, requirePermission('tasks:delete')], schema: { tags: ['Tasks'], summary: 'Delete task', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       // Agents can only delete tasks assigned to them
       if (isAgent(request)) {

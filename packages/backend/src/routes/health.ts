@@ -1,8 +1,11 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { store } from '../db/index.js';
 
 export async function healthRoutes(app: FastifyInstance) {
-  app.get('/health', async (_req, reply) => {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
+  typedApp.get('/health', { schema: { tags: ['Health'], summary: 'Health check' } }, async (_req, reply) => {
     try {
       // Simple check: try to read from the store
       store.getAll('users');

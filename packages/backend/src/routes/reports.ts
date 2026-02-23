@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod/v4';
 import { requirePermission, isAgent } from '../middleware/rbac.js';
 import {
   getPipelineSummary,
@@ -12,12 +14,21 @@ import {
 import { createAuditLog } from '../services/audit-log.js';
 
 export async function reportRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // Get summary for all pipelines
-  app.get<{
-    Querystring: { ownerId?: string };
-  }>(
+  typedApp.get(
     '/api/reports/pipelines',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Get summary for all pipelines',
+        querystring: z.object({
+          ownerId: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       // Agents only see their own data
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -27,12 +38,19 @@ export async function reportRoutes(app: FastifyInstance) {
   );
 
   // Get detailed summary for a single pipeline
-  app.get<{
-    Params: { id: string };
-    Querystring: { ownerId?: string };
-  }>(
+  typedApp.get(
     '/api/reports/pipelines/:id',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Get detailed summary for a single pipeline',
+        params: z.object({ id: z.uuid() }),
+        querystring: z.object({
+          ownerId: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
       const data = await getPipelineSummary({
@@ -49,11 +67,20 @@ export async function reportRoutes(app: FastifyInstance) {
   );
 
   // Agent performance report
-  app.get<{
-    Querystring: { startDate?: string; endDate?: string; agentId?: string };
-  }>(
+  typedApp.get(
     '/api/reports/agent-performance',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Get agent performance report',
+        querystring: z.object({
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+          agentId: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       // Agents only see their own performance
       const agentId = isAgent(request) ? request.user.sub : request.query.agentId;
@@ -67,11 +94,19 @@ export async function reportRoutes(app: FastifyInstance) {
   );
 
   // Lead source breakdown report
-  app.get<{
-    Querystring: { startDate?: string; endDate?: string };
-  }>(
+  typedApp.get(
     '/api/reports/lead-sources',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Get lead source breakdown report',
+        querystring: z.object({
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const data = await getLeadSourceBreakdown({
         startDate: request.query.startDate,
@@ -84,12 +119,19 @@ export async function reportRoutes(app: FastifyInstance) {
   // ─── CSV Export Endpoints ───────────────────────────────────────────────────
 
   // Export pipeline summary to CSV
-  app.get<{
-    Params: { id: string };
-    Querystring: { ownerId?: string };
-  }>(
+  typedApp.get(
     '/api/reports/pipelines/:id/export/csv',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Export pipeline summary to CSV',
+        params: z.object({ id: z.uuid() }),
+        querystring: z.object({
+          ownerId: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
       const csv = await exportPipelineSummaryCsv({
@@ -118,11 +160,20 @@ export async function reportRoutes(app: FastifyInstance) {
   );
 
   // Export agent performance to CSV
-  app.get<{
-    Querystring: { startDate?: string; endDate?: string; agentId?: string };
-  }>(
+  typedApp.get(
     '/api/reports/agent-performance/export/csv',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Export agent performance to CSV',
+        querystring: z.object({
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+          agentId: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const agentId = isAgent(request) ? request.user.sub : request.query.agentId;
       const csv = await exportAgentPerformanceCsv({
@@ -148,11 +199,19 @@ export async function reportRoutes(app: FastifyInstance) {
   );
 
   // Export lead source breakdown to CSV
-  app.get<{
-    Querystring: { startDate?: string; endDate?: string };
-  }>(
+  typedApp.get(
     '/api/reports/lead-sources/export/csv',
-    { onRequest: [app.authenticate, requirePermission('reports:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('reports:read')],
+      schema: {
+        tags: ['Reports'],
+        summary: 'Export lead source breakdown to CSV',
+        querystring: z.object({
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const csv = await exportLeadSourceCsv({
         startDate: request.query.startDate,

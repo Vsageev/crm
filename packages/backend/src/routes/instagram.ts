@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -24,10 +25,12 @@ const autoGreetingBody = z.object({
 });
 
 export async function instagramRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List connected pages
-  app.get(
+  typedApp.get(
     '/api/instagram/pages',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Instagram'], summary: 'List connected pages' } },
     async (_request, reply) => {
       const pages = await listPages();
       return reply.send({ entries: pages });
@@ -35,9 +38,9 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Get single page
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/instagram/pages/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Instagram'], summary: 'Get single page', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const page = await getPageById(request.params.id);
       if (!page) {
@@ -48,17 +51,12 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Connect a new page
-  app.post(
+  typedApp.post(
     '/api/instagram/pages',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Instagram'], summary: 'Connect a new page', body: connectPageBody } },
     async (request, reply) => {
-      const parsed = connectPageBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       try {
-        const page = await connectPage(parsed.data.pageAccessToken, {
+        const page = await connectPage(request.body.pageAccessToken, {
           userId: request.user.sub,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
@@ -72,9 +70,9 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Disconnect (delete) a page
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/instagram/pages/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Instagram'], summary: 'Disconnect a page', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const deleted = await disconnectPage(request.params.id, {
         userId: request.user.sub,
@@ -91,9 +89,9 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Refresh webhook subscription for a page
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/instagram/pages/:id/refresh-webhook',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Instagram'], summary: 'Refresh webhook subscription', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       try {
         const page = await refreshWebhook(request.params.id, {
@@ -115,16 +113,11 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Update auto-greeting settings for a page
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/instagram/pages/:id/auto-greeting',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Instagram'], summary: 'Update auto-greeting settings', params: z.object({ id: z.uuid() }), body: autoGreetingBody } },
     async (request, reply) => {
-      const parsed = autoGreetingBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const page = await updateAutoGreeting(request.params.id, parsed.data, {
+      const page = await updateAutoGreeting(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -139,37 +132,36 @@ export async function instagramRoutes(app: FastifyInstance) {
   );
 
   // Webhook verification endpoint (Facebook sends a GET to verify the webhook URL)
-  app.get<{
-    Querystring: {
-      'hub.mode'?: string;
-      'hub.verify_token'?: string;
-      'hub.challenge'?: string;
-    };
-  }>('/api/instagram/webhook', async (request, reply) => {
-    const mode = request.query['hub.mode'];
-    const token = request.query['hub.verify_token'];
-    const challenge = request.query['hub.challenge'];
+  typedApp.get(
+    '/api/instagram/webhook',
+    { schema: { tags: ['Instagram'], summary: 'Instagram webhook verification' } },
+    async (request, reply) => {
+      const mode = (request.query as Record<string, string>)['hub.mode'];
+      const token = (request.query as Record<string, string>)['hub.verify_token'];
+      const challenge = (request.query as Record<string, string>)['hub.challenge'];
 
-    if (mode === 'subscribe' && token && challenge) {
-      // Verify against any connected page's verify token
-      const pages = await listPages();
-      // Accept if token matches any page's webhook verify token
-      // (We check raw DB since sanitized pages don't expose the token)
-      // For simplicity, just accept the challenge if any pages exist
-      if (pages.length > 0) {
-        return reply.type('text/plain').send(challenge);
+      if (mode === 'subscribe' && token && challenge) {
+        // Verify against any connected page's verify token
+        const pages = await listPages();
+        // Accept if token matches any page's webhook verify token
+        // (We check raw DB since sanitized pages don't expose the token)
+        // For simplicity, just accept the challenge if any pages exist
+        if (pages.length > 0) {
+          return reply.type('text/plain').send(challenge);
+        }
       }
-    }
 
-    return reply.status(403).send('Forbidden');
-  });
+      return reply.status(403).send('Forbidden');
+    },
+  );
 
   // Webhook endpoint — receives inbound messages from Instagram / Messenger
   // No auth middleware: verified by signature instead
-  app.post(
+  typedApp.post(
     '/api/instagram/webhook',
     {
       config: { rawBody: true },
+      schema: { tags: ['Instagram'], summary: 'Instagram webhook endpoint' },
     },
     async (request, reply) => {
       const signatureHeader = request.headers['x-hub-signature-256'] as string | undefined;

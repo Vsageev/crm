@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -58,19 +59,26 @@ const updateAutomationRuleBody = z.object({
 });
 
 export async function automationRuleRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // GET /api/automation-rules
-  app.get<{
-    Querystring: {
-      trigger?: string;
-      action?: string;
-      isActive?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/automation-rules',
-    { onRequest: [app.authenticate, requirePermission('automation:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('automation:read')],
+      schema: {
+        tags: ['Automation Rules'],
+        summary: 'List automation rules',
+        querystring: z.object({
+          trigger: z.string().optional(),
+          action: z.string().optional(),
+          isActive: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listAutomationRules({
         trigger: request.query.trigger,
@@ -80,23 +88,30 @@ export async function automationRuleRoutes(app: FastifyInstance) {
             ? request.query.isActive === 'true'
             : undefined,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // GET /api/automation-rules/:id
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/automation-rules/:id',
-    { onRequest: [app.authenticate, requirePermission('automation:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('automation:read')],
+      schema: {
+        tags: ['Automation Rules'],
+        summary: 'Get automation rule by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const rule = await getAutomationRuleById(request.params.id);
       if (!rule) {
@@ -107,18 +122,20 @@ export async function automationRuleRoutes(app: FastifyInstance) {
   );
 
   // POST /api/automation-rules
-  app.post(
+  typedApp.post(
     '/api/automation-rules',
-    { onRequest: [app.authenticate, requirePermission('automation:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('automation:create')],
+      schema: {
+        tags: ['Automation Rules'],
+        summary: 'Create an automation rule',
+        body: createAutomationRuleBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createAutomationRuleBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const rule = await createAutomationRule(
         {
-          ...parsed.data,
+          ...request.body,
           createdById: request.user.sub,
         },
         {
@@ -133,16 +150,19 @@ export async function automationRuleRoutes(app: FastifyInstance) {
   );
 
   // PATCH /api/automation-rules/:id
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/automation-rules/:id',
-    { onRequest: [app.authenticate, requirePermission('automation:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('automation:update')],
+      schema: {
+        tags: ['Automation Rules'],
+        summary: 'Update an automation rule',
+        params: z.object({ id: z.uuid() }),
+        body: updateAutomationRuleBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateAutomationRuleBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateAutomationRule(request.params.id, parsed.data, {
+      const updated = await updateAutomationRule(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -157,9 +177,16 @@ export async function automationRuleRoutes(app: FastifyInstance) {
   );
 
   // DELETE /api/automation-rules/:id
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/automation-rules/:id',
-    { onRequest: [app.authenticate, requirePermission('automation:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('automation:delete')],
+      schema: {
+        tags: ['Automation Rules'],
+        summary: 'Delete an automation rule',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteAutomationRule(request.params.id, {
         userId: request.user.sub,

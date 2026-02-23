@@ -3,6 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import { store } from '../db/index.js';
 import { getFileInfo, buildFileUrl } from '../services/telegram.js';
@@ -29,6 +31,8 @@ function mimeToMessageType(mime: string): 'image' | 'video' | 'document' | 'voic
 }
 
 export async function mediaRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   /**
    * GET /api/media/:messageId/:attachmentIndex
    *
@@ -36,11 +40,16 @@ export async function mediaRoutes(app: FastifyInstance) {
    * Fetches the file from Telegram API using the stored fileId, caches locally,
    * and streams the result.
    */
-  app.get<{
-    Params: { messageId: string; attachmentIndex: string };
-  }>(
+  typedApp.get(
     '/api/media/:messageId/:attachmentIndex',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Media'],
+        summary: 'Get media attachment by message ID and index',
+        params: z.object({ messageId: z.uuid(), attachmentIndex: z.string() }),
+      },
+    },
     async (request, reply) => {
       const { messageId, attachmentIndex } = request.params;
       const index = parseInt(attachmentIndex, 10);
@@ -176,9 +185,15 @@ export async function mediaRoutes(app: FastifyInstance) {
    *   - conversationId: target conversation UUID
    *   - caption: optional text caption
    */
-  app.post(
+  typedApp.post(
     '/api/media/upload',
-    { onRequest: [app.authenticate, requirePermission('messages:send')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Media'],
+        summary: 'Upload a file and send as media message',
+      },
+    },
     async (request, reply) => {
       const data = await request.file();
       if (!data) {

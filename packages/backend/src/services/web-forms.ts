@@ -93,7 +93,39 @@ export async function listWebForms(query: WebFormListQuery) {
     .sort((a, b) => new Date(b.createdAt as string).getTime() - new Date(a.createdAt as string).getTime());
 
   const total = all.length;
-  const entries = all.slice(offset, offset + limit);
+  const page = all.slice(offset, offset + limit);
+  const formIds = new Set(
+    page
+      .map((form) => (typeof form.id === 'string' ? form.id : null))
+      .filter((id): id is string => id !== null),
+  );
+
+  const fieldsByFormId = new Map<string, Record<string, unknown>[]>();
+  if (formIds.size > 0) {
+    const fields = store.find(
+      'webFormFields',
+      (r) => typeof r.formId === 'string' && formIds.has(r.formId),
+    );
+
+    for (const field of fields) {
+      const formId = field.formId as string;
+      const existing = fieldsByFormId.get(formId);
+      if (existing) {
+        existing.push(field);
+      } else {
+        fieldsByFormId.set(formId, [field]);
+      }
+    }
+
+    for (const formFields of fieldsByFormId.values()) {
+      formFields.sort((a, b) => ((a.position as number) ?? 0) - ((b.position as number) ?? 0));
+    }
+  }
+
+  const entries = page.map((form) => ({
+    ...form,
+    fields: typeof form.id === 'string' ? (fieldsByFormId.get(form.id) ?? []) : [],
+  }));
 
   return { entries, total };
 }

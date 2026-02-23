@@ -51,6 +51,12 @@ import { webPushRoutes } from './routes/web-push.js';
 import { webChatRoutes } from './routes/web-chat.js';
 import { whatsappRoutes } from './routes/whatsapp.js';
 import { instagramRoutes } from './routes/instagram.js';
+import { novofonRoutes } from './routes/novofon.js';
+import { voximplantRoutes } from './routes/voximplant.js';
+import { telephonyRoutes } from './routes/telephony.js';
+import { knowledgeBaseRoutes } from './routes/knowledge-base.js';
+import { aiRoutes } from './routes/ai.js';
+import { quizRoutes } from './routes/quizzes.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
   if (!env.TLS_CERT_PATH || !env.TLS_KEY_PATH) return undefined;
@@ -126,6 +132,12 @@ export async function buildApp() {
   await app.register(webChatRoutes);
   await app.register(whatsappRoutes);
   await app.register(instagramRoutes);
+  await app.register(novofonRoutes);
+  await app.register(voximplantRoutes);
+  await app.register(telephonyRoutes);
+  await app.register(knowledgeBaseRoutes);
+  await app.register(aiRoutes);
+  await app.register(quizRoutes);
 
   return app;
 }

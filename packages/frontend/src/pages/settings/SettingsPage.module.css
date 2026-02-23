@@ -1,5 +1,12 @@
+.page {
+  width: 100%;
+  max-width: 1200px;
+  min-width: 0;
+}
+
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
   margin-bottom: var(--space-6);
   border-bottom: 1px solid var(--color-border);
@@ -52,6 +59,9 @@
 }
 
 .alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.2);
@@ -59,9 +69,58 @@
   color: var(--color-error);
   font-size: 14px;
   margin-bottom: var(--space-4);
+  animation: alertSlideIn 0.3s ease-out;
+}
+
+.alertText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.alertLink {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.alertIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.fieldError {
+  font-size: 12px;
+  color: var(--color-error);
+  animation: slideDown 0.2s ease-out;
+}
+
+.fieldErrorBorder {
+  border-color: var(--color-error) !important;
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes alertSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
 }
 
 .success {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   background: rgba(16, 185, 129, 0.08);
   border: 1px solid rgba(16, 185, 129, 0.2);
@@ -69,6 +128,7 @@
   color: var(--color-success);
   font-size: 14px;
   margin-bottom: var(--space-4);
+  animation: alertSlideIn 0.3s ease-out;
 }
 
 .emptyState {
@@ -151,6 +211,64 @@
 
 .connectForm > div:first-child {
   flex: 1;
+}
+
+/* Voximplant form needs a wider, responsive layout than the shared connectForm */
+.voximplantConnectForm {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+  width: 100%;
+  max-width: 100%;
+}
+
+.voximplantConnectForm > div {
+  grid-column: span 4;
+  min-width: 0;
+}
+
+.voximplantConnectForm > button {
+  grid-column: span 2;
+  justify-self: start;
+}
+
+.voximplantConnectForm input {
+  width: 100%;
+}
+
+.voximplantConnectForm > .voximplantUploadRow {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.voximplantLoadedBadge {
+  font-size: 13px;
+  color: var(--color-success);
+}
+
+@media (max-width: 1100px) {
+  .voximplantConnectForm > div {
+    grid-column: span 6;
+  }
+
+  .voximplantConnectForm > button {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 720px) {
+  .voximplantConnectForm > div,
+  .voximplantConnectForm > button {
+    grid-column: 1 / -1;
+  }
+
+  .voximplantConnectForm > button {
+    justify-self: stretch;
+  }
 }
 
 /* Template list */

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -63,40 +64,54 @@ const submitFormBody = z.object({
 });
 
 export async function webFormRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // ── Authenticated form management routes ────────────────────────────
 
   // LIST forms
-  app.get<{
-    Querystring: {
-      status?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/web-forms',
-    { onRequest: [app.authenticate, requirePermission('forms:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:read')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'List web forms',
+        querystring: z.object({
+          status: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listWebForms({
         status: request.query.status,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // GET single form (authenticated)
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/web-forms/:id',
-    { onRequest: [app.authenticate, requirePermission('forms:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:read')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Get single web form',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const form = await getWebFormById(request.params.id) as any;
       if (!form) {
@@ -107,17 +122,19 @@ export async function webFormRoutes(app: FastifyInstance) {
   );
 
   // CREATE form
-  app.post(
+  typedApp.post(
     '/api/web-forms',
-    { onRequest: [app.authenticate, requirePermission('forms:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:create')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Create web form',
+        body: createWebFormBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createWebFormBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const form = await createWebForm(
-        { ...parsed.data, createdBy: request.user.sub } as Parameters<typeof createWebForm>[0] & {
+        { ...request.body, createdBy: request.user.sub } as Parameters<typeof createWebForm>[0] & {
           createdBy: string;
         },
         {
@@ -132,16 +149,19 @@ export async function webFormRoutes(app: FastifyInstance) {
   );
 
   // UPDATE form
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/web-forms/:id',
-    { onRequest: [app.authenticate, requirePermission('forms:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:update')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Update web form',
+        params: z.object({ id: z.uuid() }),
+        body: updateWebFormBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateWebFormBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateWebForm(request.params.id, parsed.data, {
+      const updated = await updateWebForm(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -156,9 +176,16 @@ export async function webFormRoutes(app: FastifyInstance) {
   );
 
   // DELETE form
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/web-forms/:id',
-    { onRequest: [app.authenticate, requirePermission('forms:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:delete')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Delete web form',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteWebForm(request.params.id, {
         userId: request.user.sub,
@@ -177,37 +204,49 @@ export async function webFormRoutes(app: FastifyInstance) {
   // ── Submissions (authenticated management) ──────────────────────────
 
   // LIST submissions for a form
-  app.get<{
-    Params: { formId: string };
-    Querystring: {
-      status?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/web-forms/:formId/submissions',
-    { onRequest: [app.authenticate, requirePermission('forms:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:read')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'List submissions for a form',
+        params: z.object({ formId: z.uuid() }),
+        querystring: z.object({
+          status: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listSubmissions({
         formId: request.params.formId,
         status: request.query.status,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // GET single submission
-  app.get<{ Params: { formId: string; submissionId: string } }>(
+  typedApp.get(
     '/api/web-forms/:formId/submissions/:submissionId',
-    { onRequest: [app.authenticate, requirePermission('forms:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('forms:read')],
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Get single form submission',
+        params: z.object({ formId: z.uuid(), submissionId: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const submission = await getSubmissionById(request.params.submissionId) as any;
       if (!submission || submission.formId !== request.params.formId) {
@@ -220,8 +259,15 @@ export async function webFormRoutes(app: FastifyInstance) {
   // ── Public submission endpoint (no auth) ────────────────────────────
 
   // GET public form config (for rendering the embeddable form)
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/public/web-forms/:id',
+    {
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Get public form config',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const form = await getWebFormById(request.params.id) as any;
       if (!form || form.status !== 'active') {
@@ -251,14 +297,17 @@ export async function webFormRoutes(app: FastifyInstance) {
   );
 
   // PUBLIC submit form (no auth — used by embeddable widget)
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/public/web-forms/:id/submit',
+    {
+      schema: {
+        tags: ['Web Forms'],
+        summary: 'Submit a public web form',
+        params: z.object({ id: z.uuid() }),
+        body: submitFormBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = submitFormBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Verify form exists and is active
       const form = await getWebFormById(request.params.id) as any;
       if (!form || form.status !== 'active') {
@@ -268,7 +317,7 @@ export async function webFormRoutes(app: FastifyInstance) {
       // Validate required fields
       for (const field of form.fields) {
         if ((field as any).isRequired) {
-          const value = parsed.data.data[(field as any).id];
+          const value = request.body.data[(field as any).id];
           if (value === undefined || value === null || value === '') {
             return reply.badRequest(`Field "${(field as any).label}" is required`);
           }
@@ -277,15 +326,15 @@ export async function webFormRoutes(app: FastifyInstance) {
 
       const submission = await createSubmission({
         formId: form.id,
-        data: parsed.data.data,
+        data: request.body.data,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
-        referrerUrl: parsed.data.referrerUrl,
-        utmSource: parsed.data.utmSource,
-        utmMedium: parsed.data.utmMedium,
-        utmCampaign: parsed.data.utmCampaign,
-        utmTerm: parsed.data.utmTerm,
-        utmContent: parsed.data.utmContent,
+        referrerUrl: request.body.referrerUrl,
+        utmSource: request.body.utmSource,
+        utmMedium: request.body.utmMedium,
+        utmCampaign: request.body.utmCampaign,
+        utmTerm: request.body.utmTerm,
+        utmContent: request.body.utmContent,
       }) as any;
 
       // Process submission: create contact + deal (Task 7.3)

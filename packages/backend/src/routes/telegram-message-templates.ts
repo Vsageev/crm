@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -36,39 +37,53 @@ const updateTelegramTemplateBody = z.object({
 });
 
 export async function telegramMessageTemplateRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List templates (global + own)
-  app.get<{
-    Querystring: {
-      category?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/telegram-message-templates',
-    { onRequest: [app.authenticate, requirePermission('templates:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:read')],
+      schema: {
+        tags: ['Telegram Message Templates'],
+        summary: 'List Telegram message templates',
+        querystring: z.object({
+          category: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listTelegramTemplates({
         userId: request.user.sub,
         category: request.query.category,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single template
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/telegram-message-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:read')],
+      schema: {
+        tags: ['Telegram Message Templates'],
+        summary: 'Get single Telegram message template',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const template = await getTelegramTemplateById(request.params.id, request.user.sub);
       if (!template) {
@@ -79,22 +94,24 @@ export async function telegramMessageTemplateRoutes(app: FastifyInstance) {
   );
 
   // Create template
-  app.post(
+  typedApp.post(
     '/api/telegram-message-templates',
-    { onRequest: [app.authenticate, requirePermission('templates:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:create')],
+      schema: {
+        tags: ['Telegram Message Templates'],
+        summary: 'Create Telegram message template',
+        body: createTelegramTemplateBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createTelegramTemplateBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      if (parsed.data.isGlobal && request.user.role === 'agent') {
+      if (request.body.isGlobal && request.user.role === 'agent') {
         return reply.forbidden('Only admin or manager can create global templates');
       }
 
       const template = await createTelegramTemplate(
         {
-          ...parsed.data,
+          ...request.body,
           createdBy: request.user.sub,
         },
         {
@@ -109,16 +126,19 @@ export async function telegramMessageTemplateRoutes(app: FastifyInstance) {
   );
 
   // Update template
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/telegram-message-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:update')],
+      schema: {
+        tags: ['Telegram Message Templates'],
+        summary: 'Update Telegram message template',
+        params: z.object({ id: z.uuid() }),
+        body: updateTelegramTemplateBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateTelegramTemplateBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      if (parsed.data.isGlobal && request.user.role === 'agent') {
+      if (request.body.isGlobal && request.user.role === 'agent') {
         return reply.forbidden('Only admin or manager can create global templates');
       }
 
@@ -126,7 +146,7 @@ export async function telegramMessageTemplateRoutes(app: FastifyInstance) {
         request.params.id,
         request.user.sub,
         request.user.role,
-        parsed.data,
+        request.body,
         {
           userId: request.user.sub,
           ipAddress: request.ip,
@@ -147,9 +167,16 @@ export async function telegramMessageTemplateRoutes(app: FastifyInstance) {
   );
 
   // Delete template
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/telegram-message-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:delete')],
+      schema: {
+        tags: ['Telegram Message Templates'],
+        summary: 'Delete Telegram message template',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const result = await deleteTelegramTemplate(
         request.params.id,

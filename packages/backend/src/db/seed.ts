@@ -568,6 +568,95 @@ async function seed() {
 
   console.log(`  Created 2 conversations with 5 messages`);
 
+  // --- Knowledge Base ---
+  store.insert('knowledgeBaseEntries', {
+    title: 'Company Overview',
+    content: `We are a B2B SaaS company providing CRM and business automation solutions. Founded in 2020, headquartered in San Francisco, CA. Our platform helps small and mid-sized businesses manage customer relationships, automate workflows, and grow revenue.
+
+Key facts:
+- 500+ active customers worldwide
+- Available in English, Spanish, and Russian
+- SOC 2 Type II certified
+- 99.9% uptime SLA`,
+    createdBy: adminUser.id,
+  });
+
+  store.insert('knowledgeBaseEntries', {
+    title: 'Pricing Plans',
+    content: `We offer three pricing tiers:
+
+1. Starter Plan — $29/user/month (billed annually) or $39/user/month (monthly)
+   - Up to 5 users, 1,000 contacts, email & web chat channels, basic reports
+
+2. Professional Plan — $59/user/month (billed annually) or $79/user/month (monthly)
+   - Up to 25 users, 10,000 contacts, all channels (Telegram, WhatsApp, Instagram, email, web chat), advanced reports, automation rules, API access
+
+3. Enterprise Plan — custom pricing
+   - Unlimited users & contacts, dedicated account manager, custom integrations, SLA, on-premise option available
+
+All plans include a 14-day free trial. No credit card required for trial.`,
+    createdBy: adminUser.id,
+  });
+
+  store.insert('knowledgeBaseEntries', {
+    title: 'Refund & Cancellation Policy',
+    content: `- Monthly plans can be cancelled anytime, effective at end of billing period.
+- Annual plans: full refund within first 30 days; after 30 days, prorated credit for remaining months (no cash refund).
+- Refund requests should be submitted to billing@company.example.com or through Settings > Billing in the app.
+- Downgrades take effect at the next billing cycle.
+- Data is retained for 90 days after cancellation, then permanently deleted.`,
+    createdBy: adminUser.id,
+  });
+
+  store.insert('knowledgeBaseEntries', {
+    title: 'Supported Integrations',
+    content: `Our platform integrates with:
+- Messaging: Telegram, WhatsApp Business, Instagram DM, Email (IMAP/SMTP)
+- VoIP: Novofon, Voximplant
+- Payments: Stripe (coming soon)
+- Calendar: Google Calendar, Outlook (via API)
+- Storage: Google Drive, Dropbox (file attachments)
+- Automation: Webhooks, REST API, Zapier (beta)
+
+Custom integrations are available on the Enterprise plan. API documentation is at docs.company.example.com.`,
+    createdBy: adminUser.id,
+  });
+
+  store.insert('knowledgeBaseEntries', {
+    title: 'Business Hours & Support',
+    content: `Support hours:
+- Starter & Professional plans: Monday–Friday, 9 AM – 6 PM EST (email & chat)
+- Enterprise plan: 24/7 priority support via dedicated Slack channel + phone
+
+Average response times:
+- Chat: under 5 minutes during business hours
+- Email: under 4 hours during business hours
+- Critical issues (system down): 1 hour for Enterprise, 4 hours for others
+
+For urgent issues outside business hours, email urgent@company.example.com.`,
+    createdBy: adminUser.id,
+  });
+
+  store.insert('knowledgeBaseEntries', {
+    title: 'Common Troubleshooting',
+    content: `Frequently asked questions:
+
+Q: I can't log in / forgot my password
+A: Use the "Forgot Password" link on the login page. If you have 2FA enabled and lost your device, contact support with your recovery codes.
+
+Q: Messages are not being delivered to Telegram/WhatsApp
+A: Check Settings > [Channel] tab to verify the bot token or API credentials are correct and the webhook is registered. Also check the channel status indicator.
+
+Q: How do I import contacts?
+A: Go to Contacts > Import (CSV). Download our template CSV for the correct format. Maximum 10,000 contacts per import.
+
+Q: Can I export my data?
+A: Yes, admins can export contacts, deals, and conversations via Settings > Backups or through the REST API.`,
+    createdBy: adminUser.id,
+  });
+
+  console.log(`  Created 6 knowledge base entries`);
+
   // Flush all data to JSON files
   await store.flush();
 

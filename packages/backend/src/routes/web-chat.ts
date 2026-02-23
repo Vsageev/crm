@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -59,12 +60,14 @@ const visitorMessagesQuery = z.object({
 // ---------------------------------------------------------------------------
 
 export async function webChatRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // ========= Authenticated admin routes =========
 
   // List all widgets
-  app.get(
+  typedApp.get(
     '/api/web-chat/widgets',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Web Chat'], summary: 'List all widgets' } },
     async (_request, reply) => {
       const widgets = await listWebChatWidgets();
       return reply.send({ entries: widgets });
@@ -72,9 +75,9 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Get single widget
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/web-chat/widgets/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Web Chat'], summary: 'Get single widget', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const widget = await getWebChatWidgetById(request.params.id);
       if (!widget) {
@@ -85,16 +88,11 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Create widget
-  app.post(
+  typedApp.post(
     '/api/web-chat/widgets',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Web Chat'], summary: 'Create widget', body: createWidgetBody } },
     async (request, reply) => {
-      const parsed = createWidgetBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const widget = await createWebChatWidget(parsed.data, {
+      const widget = await createWebChatWidget(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -105,16 +103,11 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Update widget
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/web-chat/widgets/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Web Chat'], summary: 'Update widget', params: z.object({ id: z.uuid() }), body: updateWidgetBody } },
     async (request, reply) => {
-      const parsed = updateWidgetBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const widget = await updateWebChatWidget(request.params.id, parsed.data, {
+      const widget = await updateWebChatWidget(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -129,9 +122,9 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Delete widget
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/web-chat/widgets/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Web Chat'], summary: 'Delete widget', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const deleted = await deleteWebChatWidget(request.params.id, {
         userId: request.user.sub,
@@ -150,8 +143,9 @@ export async function webChatRoutes(app: FastifyInstance) {
   // ========= Public widget endpoints (no auth) =========
 
   // Get widget config (public)
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/public/web-chat/:id/config',
+    { schema: { tags: ['Web Chat'], summary: 'Get public widget config', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const config = await getPublicWidgetConfig(request.params.id);
       if (!config) {
@@ -166,21 +160,17 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Send message from visitor (public)
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/public/web-chat/:id/messages',
+    { schema: { tags: ['Web Chat'], summary: 'Send message from visitor', params: z.object({ id: z.uuid() }), body: visitorMessageBody } },
     async (request, reply) => {
-      const parsed = visitorMessageBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const result = await handleVisitorMessage(
         request.params.id,
-        parsed.data.sessionId,
-        parsed.data.content,
+        request.body.sessionId,
+        request.body.content,
         {
-          name: parsed.data.visitorName,
-          email: parsed.data.visitorEmail,
+          name: request.body.visitorName,
+          email: request.body.visitorEmail,
         },
       );
 
@@ -196,15 +186,11 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // Get messages for a visitor session (public, for polling)
-  app.get<{ Params: { id: string }; Querystring: { sessionId: string } }>(
+  typedApp.get(
     '/api/public/web-chat/:id/messages',
+    { schema: { tags: ['Web Chat'], summary: 'Get messages for a visitor session', params: z.object({ id: z.uuid() }), querystring: visitorMessagesQuery } },
     async (request, reply) => {
-      const parsed = visitorMessagesQuery.safeParse(request.query);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const result = await getVisitorMessages(parsed.data.sessionId);
+      const result = await getVisitorMessages(request.query.sessionId);
 
       return reply
         .header('Access-Control-Allow-Origin', '*')
@@ -213,21 +199,29 @@ export async function webChatRoutes(app: FastifyInstance) {
   );
 
   // CORS preflight for public endpoints
-  app.options('/api/public/web-chat/:id/config', async (_request, reply) => {
-    return reply
-      .header('Access-Control-Allow-Origin', '*')
-      .header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-      .header('Access-Control-Allow-Headers', 'Content-Type')
-      .status(204)
-      .send();
-  });
+  typedApp.options(
+    '/api/public/web-chat/:id/config',
+    { schema: { tags: ['Web Chat'], summary: 'CORS preflight for widget config' } },
+    async (_request, reply) => {
+      return reply
+        .header('Access-Control-Allow-Origin', '*')
+        .header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        .header('Access-Control-Allow-Headers', 'Content-Type')
+        .status(204)
+        .send();
+    },
+  );
 
-  app.options('/api/public/web-chat/:id/messages', async (_request, reply) => {
-    return reply
-      .header('Access-Control-Allow-Origin', '*')
-      .header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-      .header('Access-Control-Allow-Headers', 'Content-Type')
-      .status(204)
-      .send();
-  });
+  typedApp.options(
+    '/api/public/web-chat/:id/messages',
+    { schema: { tags: ['Web Chat'], summary: 'CORS preflight for widget messages' } },
+    async (_request, reply) => {
+      return reply
+        .header('Access-Control-Allow-Origin', '*')
+        .header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        .header('Access-Control-Allow-Headers', 'Content-Type')
+        .status(204)
+        .send();
+    },
+  );
 }

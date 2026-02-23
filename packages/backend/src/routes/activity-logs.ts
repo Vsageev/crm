@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -34,20 +35,27 @@ const updateActivityLogBody = z.object({
 });
 
 export async function activityLogRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List activity logs
-  app.get<{
-    Querystring: {
-      contactId?: string;
-      dealId?: string;
-      type?: string;
-      createdById?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/activity-logs',
-    { onRequest: [app.authenticate, requirePermission('activities:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('activities:read')],
+      schema: {
+        tags: ['Activity Logs'],
+        summary: 'List activity logs',
+        querystring: z.object({
+          contactId: z.string().optional(),
+          dealId: z.string().optional(),
+          type: z.string().optional(),
+          createdById: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listActivityLogs({
         contactId: request.query.contactId,
@@ -55,23 +63,30 @@ export async function activityLogRoutes(app: FastifyInstance) {
         type: request.query.type,
         createdById: request.query.createdById,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single activity log
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/activity-logs/:id',
-    { onRequest: [app.authenticate, requirePermission('activities:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('activities:read')],
+      schema: {
+        tags: ['Activity Logs'],
+        summary: 'Get a single activity log by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const entry = await getActivityLogById(request.params.id);
       if (!entry) {
@@ -82,16 +97,18 @@ export async function activityLogRoutes(app: FastifyInstance) {
   );
 
   // Create activity log
-  app.post(
+  typedApp.post(
     '/api/activity-logs',
-    { onRequest: [app.authenticate, requirePermission('activities:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('activities:create')],
+      schema: {
+        tags: ['Activity Logs'],
+        summary: 'Create a new activity log',
+        body: createActivityLogBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createActivityLogBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const entry = await createActivityLog(parsed.data, {
+      const entry = await createActivityLog(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -102,16 +119,19 @@ export async function activityLogRoutes(app: FastifyInstance) {
   );
 
   // Update activity log
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/activity-logs/:id',
-    { onRequest: [app.authenticate, requirePermission('activities:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('activities:update')],
+      schema: {
+        tags: ['Activity Logs'],
+        summary: 'Update an existing activity log',
+        params: z.object({ id: z.uuid() }),
+        body: updateActivityLogBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateActivityLogBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateActivityLog(request.params.id, parsed.data, {
+      const updated = await updateActivityLog(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -126,9 +146,16 @@ export async function activityLogRoutes(app: FastifyInstance) {
   );
 
   // Delete activity log
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/activity-logs/:id',
-    { onRequest: [app.authenticate, requirePermission('activities:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('activities:delete')],
+      schema: {
+        tags: ['Activity Logs'],
+        summary: 'Delete an activity log',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteActivityLog(request.params.id, {
         userId: request.user.sub,

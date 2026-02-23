@@ -6,6 +6,8 @@
     "dev": "pnpm --parallel -r run dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:frontend": "pnpm --filter frontend dev",
+    "dev:ngrok": "ngrok http --url=posticous-unmaturely-theola.ngrok-free.dev 3000 --log stdout --log-format logfmt",
+    "dev:backend:ngrok": "bash scripts/dev-backend-ngrok.sh",
     "build": "pnpm -r run build",
     "build:backend": "pnpm --filter backend build",
     "build:frontend": "pnpm --filter frontend build",

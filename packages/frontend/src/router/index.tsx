@@ -58,6 +58,15 @@ const ReportsPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('../pages/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
+const QuizzesListPage = lazy(() =>
+  import('../pages/quizzes/QuizzesListPage').then((m) => ({ default: m.QuizzesListPage })),
+);
+const QuizBuilderPage = lazy(() =>
+  import('../pages/quizzes/QuizBuilderPage').then((m) => ({ default: m.QuizBuilderPage })),
+);
+const QuizTakerPage = lazy(() =>
+  import('../pages/quizzes/QuizTakerPage').then((m) => ({ default: m.QuizTakerPage })),
+);
 const NotFoundPage = lazy(() =>
   import('../pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
 );
@@ -111,6 +120,9 @@ export const router = createBrowserRouter([
               { path: 'automation', element: <SuspenseWrapper><AutomationRulesListPage /></SuspenseWrapper> },
               { path: 'automation/new', element: <SuspenseWrapper><AutomationRuleFormPage /></SuspenseWrapper> },
               { path: 'automation/:id/edit', element: <SuspenseWrapper><AutomationRuleFormPage /></SuspenseWrapper> },
+              { path: 'quizzes', element: <SuspenseWrapper><QuizzesListPage /></SuspenseWrapper> },
+              { path: 'quizzes/new', element: <SuspenseWrapper><QuizBuilderPage /></SuspenseWrapper> },
+              { path: 'quizzes/:id/edit', element: <SuspenseWrapper><QuizBuilderPage /></SuspenseWrapper> },
               { path: 'inbox', element: <SuspenseWrapper><InboxPage /></SuspenseWrapper> },
               { path: 'reports', element: <SuspenseWrapper><ReportsPage /></SuspenseWrapper> },
               { path: 'settings', element: <SuspenseWrapper><SettingsPage /></SuspenseWrapper> },
@@ -118,6 +130,8 @@ export const router = createBrowserRouter([
           },
         ],
       },
+      // Public quiz route (no auth, no layout)
+      { path: 'quiz/:id', element: <SuspenseWrapper><QuizTakerPage /></SuspenseWrapper> },
       // 404 catch-all
       { path: '*', element: <SuspenseWrapper><NotFoundPage /></SuspenseWrapper> },
     ],

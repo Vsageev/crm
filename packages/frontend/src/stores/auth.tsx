@@ -48,9 +48,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(() => {
     loadTokens();
     const hasToken = !!getAccessToken();
+    const shouldTryDevBootstrapWithoutToken =
+      !hasToken && import.meta.env.DEV && import.meta.env.MODE !== 'test';
     return {
       user: null as AuthUser | null,
-      loading: hasToken,
+      loading: hasToken || shouldTryDevBootstrapWithoutToken,
     };
   });
 
@@ -58,7 +60,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!state.loading) return;
 
     let cancelled = false;
-    withTimeout(api<{ user: AuthUser }>('/auth/me'), 8000)
+    const hasToken = !!getAccessToken();
+    const timeoutMs = hasToken ? 8000 : 2000;
+
+    withTimeout(api<{ user: AuthUser }>('/auth/me'), timeoutMs)
       .then((data) => {
         if (cancelled) return;
         setState({ user: data.user, loading: false });

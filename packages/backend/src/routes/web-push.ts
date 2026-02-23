@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import {
   getVapidPublicKey,
@@ -20,10 +21,12 @@ const unsubscribeBody = z.object({
 });
 
 export async function webPushRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // Get VAPID public key (needed by the browser to subscribe)
-  app.get(
+  typedApp.get(
     '/api/web-push/vapid-key',
-    { onRequest: [app.authenticate] },
+    { onRequest: [app.authenticate], schema: { tags: ['Web Push'], summary: 'Get VAPID public key' } },
     async (_request, reply) => {
       const publicKey = getVapidPublicKey();
       if (!publicKey) {
@@ -34,32 +37,22 @@ export async function webPushRoutes(app: FastifyInstance) {
   );
 
   // Register a push subscription
-  app.post(
+  typedApp.post(
     '/api/web-push/subscribe',
-    { onRequest: [app.authenticate] },
+    { onRequest: [app.authenticate], schema: { tags: ['Web Push'], summary: 'Register a push subscription', body: subscriptionBody } },
     async (request, reply) => {
-      const parsed = subscriptionBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const userAgent = request.headers['user-agent'];
-      const sub = await saveSubscription(request.user.sub, parsed.data, userAgent);
+      const sub = await saveSubscription(request.user.sub, request.body, userAgent);
       return reply.status(201).send(sub);
     },
   );
 
   // Unsubscribe
-  app.post(
+  typedApp.post(
     '/api/web-push/unsubscribe',
-    { onRequest: [app.authenticate] },
+    { onRequest: [app.authenticate], schema: { tags: ['Web Push'], summary: 'Unsubscribe from push notifications', body: unsubscribeBody } },
     async (request, reply) => {
-      const parsed = unsubscribeBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const deleted = await removeSubscription(request.user.sub, parsed.data.endpoint);
+      const deleted = await removeSubscription(request.user.sub, request.body.endpoint);
       if (!deleted) {
         return reply.notFound('Subscription not found');
       }
@@ -68,9 +61,9 @@ export async function webPushRoutes(app: FastifyInstance) {
   );
 
   // Get subscription status for current user
-  app.get(
+  typedApp.get(
     '/api/web-push/subscriptions',
-    { onRequest: [app.authenticate] },
+    { onRequest: [app.authenticate], schema: { tags: ['Web Push'], summary: 'Get subscriptions for current user' } },
     async (request, reply) => {
       const subs = await getSubscriptionsByUserId(request.user.sub);
       return reply.send({ subscriptions: subs.map((s) => ({ id: s.id, endpoint: s.endpoint, createdAt: s.createdAt })) });

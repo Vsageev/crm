@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import { validateWebhookUrl } from '../utils/url-validator.js';
@@ -49,17 +50,24 @@ const updateWebhookBody = z.object({
 });
 
 export async function webhookRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // GET /api/webhooks
-  app.get<{
-    Querystring: {
-      isActive?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/webhooks',
-    { onRequest: [app.authenticate, requirePermission('webhooks:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:read')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'List webhooks',
+        querystring: z.object({
+          isActive: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listWebhooks({
         isActive:
@@ -67,23 +75,29 @@ export async function webhookRoutes(app: FastifyInstance) {
             ? request.query.isActive === 'true'
             : undefined,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // GET /api/webhooks/events — list available event types
-  app.get(
+  typedApp.get(
     '/api/webhooks/events',
-    { onRequest: [app.authenticate, requirePermission('webhooks:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:read')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'List available webhook event types',
+      },
+    },
     async (_request, reply) => {
       const events: { name: CrmEventName | '*'; description: string }[] = [
         { name: 'contact_created', description: 'Fired when a new contact is created' },
@@ -101,9 +115,16 @@ export async function webhookRoutes(app: FastifyInstance) {
   );
 
   // GET /api/webhooks/:id
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/webhooks/:id',
-    { onRequest: [app.authenticate, requirePermission('webhooks:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:read')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Get webhook by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const webhook = await getWebhookById(request.params.id);
       if (!webhook) {
@@ -114,24 +135,26 @@ export async function webhookRoutes(app: FastifyInstance) {
   );
 
   // POST /api/webhooks
-  app.post(
+  typedApp.post(
     '/api/webhooks',
-    { onRequest: [app.authenticate, requirePermission('webhooks:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:create')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Create a webhook',
+        body: createWebhookBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createWebhookBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // SSRF protection: validate webhook URL (OWASP A10:2021)
-      const urlCheck = validateWebhookUrl(parsed.data.url);
+      const urlCheck = validateWebhookUrl(request.body.url);
       if (!urlCheck.valid) {
         return reply.badRequest(urlCheck.error!);
       }
 
       const webhook = await createWebhook(
         {
-          ...parsed.data,
+          ...request.body,
           createdById: request.user.sub,
         },
         {
@@ -146,24 +169,27 @@ export async function webhookRoutes(app: FastifyInstance) {
   );
 
   // PATCH /api/webhooks/:id
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/webhooks/:id',
-    { onRequest: [app.authenticate, requirePermission('webhooks:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:update')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Update a webhook',
+        params: z.object({ id: z.uuid() }),
+        body: updateWebhookBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateWebhookBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // SSRF protection on URL update
-      if (parsed.data.url) {
-        const urlCheck = validateWebhookUrl(parsed.data.url);
+      if (request.body.url) {
+        const urlCheck = validateWebhookUrl(request.body.url);
         if (!urlCheck.valid) {
           return reply.badRequest(urlCheck.error!);
         }
       }
 
-      const updated = await updateWebhook(request.params.id, parsed.data, {
+      const updated = await updateWebhook(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -178,9 +204,16 @@ export async function webhookRoutes(app: FastifyInstance) {
   );
 
   // DELETE /api/webhooks/:id
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/webhooks/:id',
-    { onRequest: [app.authenticate, requirePermission('webhooks:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:delete')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Delete a webhook',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteWebhook(request.params.id, {
         userId: request.user.sub,
@@ -201,17 +234,22 @@ export async function webhookRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
 
   // GET /api/webhooks/:id/deliveries — list deliveries for a specific webhook
-  app.get<{
-    Params: { id: string };
-    Querystring: {
-      event?: string;
-      status?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/webhooks/:id/deliveries',
-    { onRequest: [app.authenticate, requirePermission('webhooks:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:read')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'List deliveries for a webhook',
+        params: z.object({ id: z.uuid() }),
+        querystring: z.object({
+          event: z.string().optional(),
+          status: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const webhook = await getWebhookById(request.params.id);
       if (!webhook) {
@@ -222,23 +260,30 @@ export async function webhookRoutes(app: FastifyInstance) {
         webhookId: request.params.id,
         event: request.query.event,
         status: request.query.status,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // GET /api/webhook-deliveries/:id — get a single delivery by ID
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/webhook-deliveries/:id',
-    { onRequest: [app.authenticate, requirePermission('webhooks:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:read')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Get a single webhook delivery by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const delivery = await getDeliveryById(request.params.id);
       if (!delivery) {
@@ -249,9 +294,16 @@ export async function webhookRoutes(app: FastifyInstance) {
   );
 
   // POST /api/webhook-deliveries/:id/retry — manually retry a failed delivery
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/webhook-deliveries/:id/retry',
-    { onRequest: [app.authenticate, requirePermission('webhooks:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('webhooks:update')],
+      schema: {
+        tags: ['Webhooks'],
+        summary: 'Retry a failed webhook delivery',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const delivery = await retryDelivery(request.params.id);
       if (!delivery) {

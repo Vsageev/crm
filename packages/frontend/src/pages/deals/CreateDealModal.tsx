@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { X } from 'lucide-react';
-import { Button, Input } from '../../ui';
+import { X, AlertCircle } from 'lucide-react';
+import { Button, Input, Tooltip } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import type { Deal } from './DealCard';
 import type { PipelineStage } from './KanbanColumn';
@@ -24,13 +24,29 @@ export function CreateDealModal({
   const [title, setTitle] = useState('');
   const [value, setValue] = useState('');
   const [stageId, setStageId] = useState(initialStageId || stages[0]?.id || '');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  function clearFieldError(field: string) {
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+
+    const errors: Record<string, string> = {};
     if (!title.trim()) {
-      setError('Deal title is required');
+      errors.title = 'Deal title is required';
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
       return;
     }
 
@@ -76,19 +92,30 @@ export function CreateDealModal({
       <div className={styles.modal}>
         <div className={styles.modalHeader}>
           <h2 className={styles.modalTitle}>New Deal</h2>
-          <button className={styles.closeBtn} onClick={onClose}>
-            <X size={18} />
-          </button>
+          <Tooltip label="Close">
+            <button className={styles.closeBtn} onClick={onClose}>
+              <X size={18} />
+            </button>
+          </Tooltip>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className={styles.modalBody}>
-            {error && <div className={styles.alert}>{error}</div>}
+            {error && (
+              <div className={styles.alert}>
+                <AlertCircle size={16} className={styles.alertIcon} />
+                {error}
+              </div>
+            )}
 
             <Input
               label="Deal Title"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                clearFieldError('title');
+              }}
+              error={fieldErrors.title}
               placeholder="e.g. Enterprise license deal"
               autoFocus
               required

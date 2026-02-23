@@ -1,6 +1,6 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertCircle } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { Button, Card, Input, Select, Textarea } from '../../ui';
 import { api } from '../../lib/api';
@@ -71,6 +71,7 @@ export function TaskFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isEdit = Boolean(id);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -133,6 +134,26 @@ export function TaskFormPage() {
     fetchTask();
   }, [id]);
 
+  function clearFieldError(field: string) {
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  }
+
+  function focusFirstError(errors: Record<string, string>) {
+    const firstKey = Object.keys(errors)[0];
+    if (!firstKey || !formRef.current) return;
+    const el = formRef.current.querySelector<HTMLElement>(`#${firstKey}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.focus();
+    }
+  }
+
   function validate(): boolean {
     const errors: Record<string, string> = {};
 
@@ -143,7 +164,11 @@ export function TaskFormPage() {
     }
 
     setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (Object.keys(errors).length > 0) {
+      focusFirstError(errors);
+      return false;
+    }
+    return true;
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -191,6 +216,7 @@ export function TaskFormPage() {
       }
     } catch (err) {
       setError(getErrorMessage(err));
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } finally {
       setLoading(false);
     }
@@ -220,16 +246,25 @@ export function TaskFormPage() {
       </div>
 
       <Card className={styles.formCard}>
-        <form onSubmit={handleSubmit} className={styles.form}>
-          {error && <div className={styles.alert}>{error}</div>}
+        <form ref={formRef} onSubmit={handleSubmit} className={styles.form}>
+          {error && (
+            <div className={styles.alert}>
+              <AlertCircle size={16} className={styles.alertIcon} />
+              {error}
+            </div>
+          )}
 
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>Task Details</h3>
             <Input
               label="Title"
+              id="title"
               placeholder="e.g. Follow up with client"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                clearFieldError('title');
+              }}
               error={fieldErrors.title}
               required
               autoFocus

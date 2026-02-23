@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -29,20 +30,27 @@ const updateConversationBody = z.object({
 });
 
 export async function conversationRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List conversations
-  app.get<{
-    Querystring: {
-      contactId?: string;
-      assigneeId?: string;
-      channelType?: string;
-      status?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/conversations',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'List conversations',
+        querystring: z.object({
+          contactId: z.string().optional(),
+          assigneeId: z.string().optional(),
+          channelType: z.string().optional(),
+          status: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listConversations({
         contactId: request.query.contactId,
@@ -50,23 +58,30 @@ export async function conversationRoutes(app: FastifyInstance) {
         channelType: request.query.channelType,
         status: request.query.status,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single conversation
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/conversations/:id',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'Get a single conversation by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const conversation = await getConversationById(request.params.id);
       if (!conversation) {
@@ -77,16 +92,18 @@ export async function conversationRoutes(app: FastifyInstance) {
   );
 
   // Create conversation
-  app.post(
+  typedApp.post(
     '/api/conversations',
-    { onRequest: [app.authenticate, requirePermission('messages:send')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'Create a new conversation',
+        body: createConversationBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createConversationBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const conversation = await createConversation(parsed.data, {
+      const conversation = await createConversation(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -95,7 +112,7 @@ export async function conversationRoutes(app: FastifyInstance) {
       // Emit automation trigger
       eventBus.emit('conversation_created', {
         conversationId: conversation.id,
-        contactId: parsed.data.contactId,
+        contactId: request.body.contactId,
         conversation: conversation as unknown as Record<string, unknown>,
       });
 
@@ -104,16 +121,19 @@ export async function conversationRoutes(app: FastifyInstance) {
   );
 
   // Update conversation
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/conversations/:id',
-    { onRequest: [app.authenticate, requirePermission('messages:send')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'Update an existing conversation',
+        params: z.object({ id: z.uuid() }),
+        body: updateConversationBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateConversationBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateConversation(request.params.id, parsed.data, {
+      const updated = await updateConversation(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -128,9 +148,16 @@ export async function conversationRoutes(app: FastifyInstance) {
   );
 
   // Mark conversation as read
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/conversations/:id/read',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Conversations'],
+        summary: 'Mark a conversation as read',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const updated = await markConversationRead(request.params.id);
       if (!updated) {

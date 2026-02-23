@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -46,55 +47,71 @@ const duplicateCheckBody = z.object({
 });
 
 export async function companyRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List companies
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      industry?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/companies',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:read')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'List companies',
+        querystring: z.object({
+          ownerId: z.string().optional(),
+          industry: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listCompanies({
         ownerId: request.query.ownerId,
         industry: request.query.industry,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Check for duplicate companies
-  app.post(
+  typedApp.post(
     '/api/companies/check-duplicates',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:read')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'Check for duplicate companies',
+        body: duplicateCheckBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = duplicateCheckBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const result = await findCompanyDuplicates(parsed.data);
+      const result = await findCompanyDuplicates(request.body);
       return reply.send(result);
     },
   );
 
   // Get single company
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/companies/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:read')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'Get a single company by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const company = await getCompanyById(request.params.id);
       if (!company) {
@@ -105,17 +122,22 @@ export async function companyRoutes(app: FastifyInstance) {
   );
 
   // Create company
-  app.post<{ Querystring: { skipDuplicateCheck?: string } }>(
+  typedApp.post(
     '/api/companies',
-    { onRequest: [app.authenticate, requirePermission('contacts:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:create')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'Create a new company',
+        querystring: z.object({
+          skipDuplicateCheck: z.string().optional(),
+        }),
+        body: createCompanyBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createCompanyBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       if (request.query.skipDuplicateCheck !== 'true') {
-        const duplicateResult = await findCompanyDuplicates(parsed.data);
+        const duplicateResult = await findCompanyDuplicates(request.body);
         if (duplicateResult.hasDuplicates) {
           return reply.status(409).send({
             error: 'Potential duplicates found',
@@ -124,7 +146,7 @@ export async function companyRoutes(app: FastifyInstance) {
         }
       }
 
-      const company = await createCompany(parsed.data, {
+      const company = await createCompany(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -135,16 +157,19 @@ export async function companyRoutes(app: FastifyInstance) {
   );
 
   // Update company
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/companies/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:update')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'Update an existing company',
+        params: z.object({ id: z.uuid() }),
+        body: updateCompanyBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateCompanyBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateCompany(request.params.id, parsed.data, {
+      const updated = await updateCompany(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -159,9 +184,16 @@ export async function companyRoutes(app: FastifyInstance) {
   );
 
   // Delete company
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/companies/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('contacts:delete')],
+      schema: {
+        tags: ['Companies'],
+        summary: 'Delete a company',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteCompany(request.params.id, {
         userId: request.user.sub,

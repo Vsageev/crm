@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -26,39 +27,53 @@ const updateTemplateBody = z.object({
 });
 
 export async function quickReplyTemplateRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List templates (global + own)
-  app.get<{
-    Querystring: {
-      category?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/quick-reply-templates',
-    { onRequest: [app.authenticate, requirePermission('templates:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:read')],
+      schema: {
+        tags: ['Quick Reply Templates'],
+        summary: 'List quick reply templates',
+        querystring: z.object({
+          category: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listTemplates({
         userId: request.user.sub,
         category: request.query.category,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single template
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/quick-reply-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:read')],
+      schema: {
+        tags: ['Quick Reply Templates'],
+        summary: 'Get single quick reply template',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const template = await getTemplateById(request.params.id, request.user.sub);
       if (!template) {
@@ -69,23 +84,25 @@ export async function quickReplyTemplateRoutes(app: FastifyInstance) {
   );
 
   // Create template
-  app.post(
+  typedApp.post(
     '/api/quick-reply-templates',
-    { onRequest: [app.authenticate, requirePermission('templates:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:create')],
+      schema: {
+        tags: ['Quick Reply Templates'],
+        summary: 'Create quick reply template',
+        body: createTemplateBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createTemplateBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Only admin/manager can create global templates
-      if (parsed.data.isGlobal && request.user.role === 'agent') {
+      if (request.body.isGlobal && request.user.role === 'agent') {
         return reply.forbidden('Only admin or manager can create global templates');
       }
 
       const template = await createTemplate(
         {
-          ...parsed.data,
+          ...request.body,
           createdBy: request.user.sub,
         },
         {
@@ -100,17 +117,20 @@ export async function quickReplyTemplateRoutes(app: FastifyInstance) {
   );
 
   // Update template
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/quick-reply-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:update')],
+      schema: {
+        tags: ['Quick Reply Templates'],
+        summary: 'Update quick reply template',
+        params: z.object({ id: z.uuid() }),
+        body: updateTemplateBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateTemplateBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Only admin/manager can set global
-      if (parsed.data.isGlobal && request.user.role === 'agent') {
+      if (request.body.isGlobal && request.user.role === 'agent') {
         return reply.forbidden('Only admin or manager can create global templates');
       }
 
@@ -118,7 +138,7 @@ export async function quickReplyTemplateRoutes(app: FastifyInstance) {
         request.params.id,
         request.user.sub,
         request.user.role,
-        parsed.data,
+        request.body,
         {
           userId: request.user.sub,
           ipAddress: request.ip,
@@ -139,9 +159,16 @@ export async function quickReplyTemplateRoutes(app: FastifyInstance) {
   );
 
   // Delete template
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/quick-reply-templates/:id',
-    { onRequest: [app.authenticate, requirePermission('templates:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('templates:delete')],
+      schema: {
+        tags: ['Quick Reply Templates'],
+        summary: 'Delete quick reply template',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const result = await deleteTemplate(request.params.id, request.user.sub, request.user.role, {
         userId: request.user.sub,

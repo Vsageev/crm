@@ -70,7 +70,7 @@ export interface Contact {
   position: string | null;
   companyId: string | null;
   ownerId: string | null;
-  source: 'manual' | 'csv_import' | 'web_form' | 'telegram' | 'email' | 'api' | 'other';
+  source: 'manual' | 'csv_import' | 'web_form' | 'quiz' | 'telegram' | 'email' | 'api' | 'novofon' | 'voximplant' | 'other';
   telegramId: string | null;
   whatsappPhoneId: string | null;
   instagramScopedId: string | null;
@@ -128,7 +128,7 @@ export interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
+  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -425,6 +425,23 @@ export interface Webhook {
   updatedAt: string;
 }
 
+export interface KnowledgeBaseEntry {
+  id: string;
+  title: string;
+  content: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AISettings {
+  id: string;
+  provider: 'openai' | 'openrouter';
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WebhookDelivery {
   id: string;
   webhookId: string;
@@ -537,6 +554,135 @@ export interface InstagramPage {
   status: 'active' | 'inactive' | 'error';
   statusMessage: string | null;
   createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NovofonAccount {
+  id: string;
+  apiKey: string;
+  apiSecret: string;
+  sipLogin: string;
+  accountName: string | null;
+  webhookConfigured: boolean;
+  status: 'active' | 'inactive' | 'error';
+  statusMessage: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VoximplantAccount {
+  id: string;
+  accountId: string;
+  keyId: string;
+  privateKey: string;
+  callbackRuleId: number | null;
+  agentPhoneNumber: string | null;
+  callerId: string | null;
+  accountName: string | null;
+  webhookConfigured: boolean;
+  status: 'active' | 'inactive' | 'error';
+  statusMessage: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Quiz types ──────────────────────────────────────────────────────────
+
+export interface LeadCaptureField {
+  key: string;
+  label: string;
+  isRequired: boolean;
+  contactFieldMapping: string | null;
+}
+
+export interface Quiz {
+  id: string;
+  name: string;
+  description: string | null;
+  status: 'draft' | 'active' | 'inactive' | 'archived';
+  startHeadline: string;
+  startDescription: string | null;
+  startButtonText: string;
+  startImageUrl: string | null;
+  leadCapturePosition: 'before_results' | 'after_results';
+  leadCaptureHeading: string;
+  leadCaptureFields: LeadCaptureField[];
+  pipelineId: string | null;
+  pipelineStageId: string | null;
+  assigneeId: string | null;
+  accentColor: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuizQuestion {
+  id: string;
+  quizId: string;
+  text: string;
+  description: string | null;
+  questionType: 'single_choice' | 'multiple_choice' | 'image_choice' | 'text_input' | 'number_input' | 'rating';
+  position: number;
+  isRequired: boolean;
+  minValue: number | null;
+  maxValue: number | null;
+  ratingScale: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuizAnswerOption {
+  id: string;
+  questionId: string;
+  text: string;
+  imageUrl: string | null;
+  points: number;
+  jumpToQuestionId: string | null;
+  jumpToEnd: boolean;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuizResult {
+  id: string;
+  quizId: string;
+  title: string;
+  description: string | null;
+  imageUrl: string | null;
+  ctaText: string | null;
+  ctaUrl: string | null;
+  minScore: number | null;
+  maxScore: number | null;
+  isDefault: boolean;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuizSession {
+  id: string;
+  quizId: string;
+  status: 'in_progress' | 'completed' | 'abandoned';
+  answers: Record<string, unknown>;
+  totalScore: number;
+  matchedResultId: string | null;
+  leadData: Record<string, string> | null;
+  contactId: string | null;
+  dealId: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  referrerUrl: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+  startedAt: string;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

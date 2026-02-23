@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -41,34 +42,48 @@ const updatePipelineBody = z.object({
 });
 
 export async function pipelineRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List pipelines
-  app.get<{
-    Querystring: {
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/pipelines',
-    { onRequest: [app.authenticate, requirePermission('pipelines:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('pipelines:read')],
+      schema: {
+        tags: ['Pipelines'],
+        summary: 'List pipelines',
+        querystring: z.object({
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listPipelines({
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single pipeline
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/pipelines/:id',
-    { onRequest: [app.authenticate, requirePermission('pipelines:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('pipelines:read')],
+      schema: {
+        tags: ['Pipelines'],
+        summary: 'Get a single pipeline by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const pipeline = await getPipelineById(request.params.id);
       if (!pipeline) {
@@ -79,16 +94,18 @@ export async function pipelineRoutes(app: FastifyInstance) {
   );
 
   // Create pipeline
-  app.post(
+  typedApp.post(
     '/api/pipelines',
-    { onRequest: [app.authenticate, requirePermission('pipelines:create')] },
+    {
+      onRequest: [app.authenticate, requirePermission('pipelines:create')],
+      schema: {
+        tags: ['Pipelines'],
+        summary: 'Create a new pipeline',
+        body: createPipelineBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createPipelineBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const pipeline = await createPipeline(parsed.data, {
+      const pipeline = await createPipeline(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -99,16 +116,19 @@ export async function pipelineRoutes(app: FastifyInstance) {
   );
 
   // Update pipeline
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/pipelines/:id',
-    { onRequest: [app.authenticate, requirePermission('pipelines:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('pipelines:update')],
+      schema: {
+        tags: ['Pipelines'],
+        summary: 'Update an existing pipeline',
+        params: z.object({ id: z.uuid() }),
+        body: updatePipelineBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updatePipelineBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updatePipeline(request.params.id, parsed.data, {
+      const updated = await updatePipeline(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -123,9 +143,16 @@ export async function pipelineRoutes(app: FastifyInstance) {
   );
 
   // Delete pipeline
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/pipelines/:id',
-    { onRequest: [app.authenticate, requirePermission('pipelines:delete')] },
+    {
+      onRequest: [app.authenticate, requirePermission('pipelines:delete')],
+      schema: {
+        tags: ['Pipelines'],
+        summary: 'Delete a pipeline',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deletePipeline(request.params.id, {
         userId: request.user.sub,

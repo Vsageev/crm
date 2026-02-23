@@ -303,6 +303,12 @@
   gap: var(--space-3);
 }
 
+.dateGroupContainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .dateGroup {
   display: flex;
   align-items: center;
@@ -1160,6 +1166,27 @@ a.inlineKeyboardBtn:hover {
 .attachedFileRemove:hover {
   background: rgba(239, 68, 68, 0.1);
   color: var(--color-error);
+}
+
+/* ── AI suggest spinner + error ── */
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.aiSpinner {
+  animation: ai-spin 1s linear infinite;
+}
+
+.aiError {
+  margin-top: var(--space-2);
+  padding: 6px var(--space-3);
+  font-size: 13px;
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
 }
 
 /* ── Responsive: Inbox ── */

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -21,10 +22,18 @@ const autoGreetingBody = z.object({
 });
 
 export async function telegramRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List connected bots
-  app.get(
+  typedApp.get(
     '/api/telegram/bots',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'List connected Telegram bots',
+      },
+    },
     async (_request, reply) => {
       const bots = await listBots();
       return reply.send({ entries: bots });
@@ -32,9 +41,16 @@ export async function telegramRoutes(app: FastifyInstance) {
   );
 
   // Get single bot
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/telegram/bots/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Get single Telegram bot',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const bot = await getBotById(request.params.id);
       if (!bot) {
@@ -45,17 +61,19 @@ export async function telegramRoutes(app: FastifyInstance) {
   );
 
   // Connect a new bot
-  app.post(
+  typedApp.post(
     '/api/telegram/bots',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Connect a new Telegram bot',
+        body: connectBotBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = connectBotBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       try {
-        const bot = await connectBot(parsed.data.token, {
+        const bot = await connectBot(request.body.token, {
           userId: request.user.sub,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
@@ -69,9 +87,16 @@ export async function telegramRoutes(app: FastifyInstance) {
   );
 
   // Disconnect (delete) a bot
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/telegram/bots/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Disconnect a Telegram bot',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await disconnectBot(request.params.id, {
         userId: request.user.sub,
@@ -88,9 +113,16 @@ export async function telegramRoutes(app: FastifyInstance) {
   );
 
   // Refresh webhook for a bot
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/telegram/bots/:id/refresh-webhook',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Refresh webhook for a Telegram bot',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       try {
         const bot = await refreshWebhook(request.params.id, {
@@ -112,16 +144,19 @@ export async function telegramRoutes(app: FastifyInstance) {
   );
 
   // Update auto-greeting settings for a bot
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/telegram/bots/:id/auto-greeting',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Update auto-greeting settings for a bot',
+        params: z.object({ id: z.uuid() }),
+        body: autoGreetingBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = autoGreetingBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const bot = await updateAutoGreeting(request.params.id, parsed.data, {
+      const bot = await updateAutoGreeting(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -137,8 +172,15 @@ export async function telegramRoutes(app: FastifyInstance) {
 
   // Telegram webhook endpoint — receives inbound updates from Telegram
   // No auth middleware: verified by webhook secret header instead
-  app.post<{ Params: { botId: string } }>(
+  typedApp.post(
     '/api/telegram/webhook/:botId',
+    {
+      schema: {
+        tags: ['Telegram'],
+        summary: 'Telegram webhook endpoint',
+        params: z.object({ botId: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const { botId } = request.params;
       const secretHeader = request.headers['x-telegram-bot-api-secret-token'] as string | undefined;

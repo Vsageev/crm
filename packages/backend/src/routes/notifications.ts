@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
   listNotifications,
@@ -10,39 +12,52 @@ import {
 } from '../services/notifications.js';
 
 export async function notificationRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List notifications for current user
-  app.get<{
-    Querystring: {
-      type?: string;
-      isRead?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/notifications',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'List notifications for current user',
+        querystring: z.object({
+          type: z.string().optional(),
+          isRead: z.string().optional(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { entries, total } = await listNotifications({
         userId: request.user.sub,
         type: request.query.type as Parameters<typeof listNotifications>[0]['type'],
         isRead: request.query.isRead === undefined ? undefined : request.query.isRead === 'true',
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get unread count
-  app.get(
+  typedApp.get(
     '/api/notifications/unread-count',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'Get unread notification count',
+      },
+    },
     async (request, reply) => {
       const count = await getUnreadCount(request.user.sub);
       return reply.send({ count });
@@ -50,9 +65,16 @@ export async function notificationRoutes(app: FastifyInstance) {
   );
 
   // Get single notification
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/notifications/:id',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'Get single notification',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const notification = await getNotificationById(request.params.id);
       if (!notification || notification.userId !== request.user.sub) {
@@ -63,9 +85,16 @@ export async function notificationRoutes(app: FastifyInstance) {
   );
 
   // Mark single notification as read
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/notifications/:id/read',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'Mark notification as read',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const updated = await markAsRead(request.params.id, request.user.sub);
       if (!updated) {
@@ -76,9 +105,15 @@ export async function notificationRoutes(app: FastifyInstance) {
   );
 
   // Mark all notifications as read
-  app.post(
+  typedApp.post(
     '/api/notifications/read-all',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'Mark all notifications as read',
+      },
+    },
     async (request, reply) => {
       const updated = await markAllAsRead(request.user.sub);
       return reply.send({ updated: updated.length });
@@ -86,9 +121,16 @@ export async function notificationRoutes(app: FastifyInstance) {
   );
 
   // Delete notification
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/notifications/:id',
-    { onRequest: [app.authenticate, requirePermission('notifications:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('notifications:read')],
+      schema: {
+        tags: ['Notifications'],
+        summary: 'Delete notification',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteNotification(request.params.id, request.user.sub);
       if (!deleted) {

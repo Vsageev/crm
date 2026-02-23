@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { isAgent } from '../middleware/rbac.js';
 import { authenticateApiKeyOrJwt, requireApiPermission } from '../middleware/api-key-auth.js';
@@ -36,9 +37,9 @@ import { apiRateLimitConfig } from '../plugins/rate-limit.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function parsePagination(query: { limit?: string; offset?: string }) {
-  const limit = query.limit ? Math.min(Math.max(parseInt(query.limit, 10) || 50, 1), 100) : 50;
-  const offset = query.offset ? Math.max(parseInt(query.offset, 10) || 0, 0) : 0;
+function parsePagination(query: { limit?: number; offset?: number }) {
+  const limit = query.limit !== undefined ? Math.min(Math.max(query.limit || 50, 1), 100) : 50;
+  const offset = query.offset !== undefined ? Math.max(query.offset || 0, 0) : 0;
   return { limit, offset };
 }
 
@@ -184,10 +185,21 @@ const sendMessageBody = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Pagination querystring schema
+// ---------------------------------------------------------------------------
+
+const paginationQuery = z.object({
+  limit: z.coerce.number().optional(),
+  offset: z.coerce.number().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Public API v1 Routes
 // ---------------------------------------------------------------------------
 
 export async function publicApiRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // Apply API-specific rate limits to all public API v1 routes
   const rl = apiRateLimitConfig();
 
@@ -196,18 +208,22 @@ export async function publicApiRoutes(app: FastifyInstance) {
   // =========================================================================
 
   // List contacts
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      companyId?: string;
-      source?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/v1/contacts',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'List contacts',
+        querystring: paginationQuery.extend({
+          ownerId: z.string().optional(),
+          companyId: z.string().optional(),
+          source: z.string().optional(),
+          search: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { limit, offset } = parsePagination(request.query);
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -226,9 +242,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Get single contact
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/v1/contacts/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Get a single contact',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) return reply.notFound('Contact not found');
@@ -240,18 +264,21 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Create contact
-  app.post(
+  typedApp.post(
     '/api/v1/contacts',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:create')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:create')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Create a contact',
+        body: createContactBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createContactBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const data = isAgent(request)
-        ? { ...parsed.data, ownerId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, ownerId: request.user.sub }
+        : request.body;
 
       const contact = await createContact(data, auditMeta(request)) as any;
 
@@ -273,33 +300,37 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Update contact
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/v1/contacts/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:update')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:update')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Update a contact',
+        params: z.object({ id: z.uuid() }),
+        body: updateContactBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateContactBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       if (isAgent(request)) {
         const contact = await getContactById(request.params.id) as any;
         if (!contact) return reply.notFound('Contact not found');
         if (contact.ownerId !== request.user.sub) {
           return reply.forbidden('Access denied');
         }
-        if (parsed.data.ownerId !== undefined && parsed.data.ownerId !== request.user.sub) {
+        if (request.body.ownerId !== undefined && request.body.ownerId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign contact ownership');
         }
       }
 
-      const updated = await updateContact(request.params.id, parsed.data, auditMeta(request)) as any;
+      const updated = await updateContact(request.params.id, request.body, auditMeta(request)) as any;
       if (!updated) return reply.notFound('Contact not found');
 
-      if (parsed.data.tagIds && parsed.data.tagIds.length > 0) {
+      if (request.body.tagIds && request.body.tagIds.length > 0) {
         eventBus.emit('tag_added', {
           contactId: updated.id,
-          tagIds: parsed.data.tagIds,
+          tagIds: request.body.tagIds,
           contact: updated as unknown as Record<string, unknown>,
         });
       }
@@ -309,9 +340,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Delete contact
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/v1/contacts/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:delete')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('contacts:delete')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Delete a contact',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       if (isAgent(request)) {
         const contact = await getContactById(request.params.id) as any;
@@ -333,21 +372,25 @@ export async function publicApiRoutes(app: FastifyInstance) {
   // =========================================================================
 
   // List deals
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      contactId?: string;
-      companyId?: string;
-      pipelineId?: string;
-      pipelineStageId?: string;
-      stage?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/v1/deals',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'List deals',
+        querystring: paginationQuery.extend({
+          ownerId: z.string().optional(),
+          contactId: z.string().optional(),
+          companyId: z.string().optional(),
+          pipelineId: z.string().optional(),
+          pipelineStageId: z.string().optional(),
+          stage: z.string().optional(),
+          search: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { limit, offset } = parsePagination(request.query);
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -369,9 +412,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Get single deal
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/v1/deals/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Get a single deal',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deal = await getDealById(request.params.id) as any;
       if (!deal) return reply.notFound('Deal not found');
@@ -383,18 +434,21 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Create deal
-  app.post(
+  typedApp.post(
     '/api/v1/deals',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:create')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:create')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Create a deal',
+        body: createDealBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createDealBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const data = isAgent(request)
-        ? { ...parsed.data, ownerId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, ownerId: request.user.sub }
+        : request.body;
 
       const deal = await createDeal(data, auditMeta(request)) as any;
 
@@ -408,27 +462,31 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Update deal
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/v1/deals/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:update')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:update')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Update a deal',
+        params: z.object({ id: z.uuid() }),
+        body: updateDealBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateDealBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       if (isAgent(request)) {
         const deal = await getDealById(request.params.id) as any;
         if (!deal) return reply.notFound('Deal not found');
         if (deal.ownerId !== request.user.sub) {
           return reply.forbidden('Access denied');
         }
-        if (parsed.data.ownerId !== undefined && parsed.data.ownerId !== request.user.sub) {
+        if (request.body.ownerId !== undefined && request.body.ownerId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign deal ownership');
         }
       }
 
-      const updated = await updateDeal(request.params.id, parsed.data, auditMeta(request)) as any;
+      const updated = await updateDeal(request.params.id, request.body, auditMeta(request)) as any;
       if (!updated) return reply.notFound('Deal not found');
 
       return reply.send(updated);
@@ -436,9 +494,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Delete deal
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/v1/deals/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:delete')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('deals:delete')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Delete a deal',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       if (isAgent(request)) {
         const deal = await getDealById(request.params.id) as any;
@@ -460,22 +526,26 @@ export async function publicApiRoutes(app: FastifyInstance) {
   // =========================================================================
 
   // List tasks
-  app.get<{
-    Querystring: {
-      assigneeId?: string;
-      contactId?: string;
-      dealId?: string;
-      status?: string;
-      priority?: string;
-      type?: string;
-      overdue?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/v1/tasks',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'List tasks',
+        querystring: paginationQuery.extend({
+          assigneeId: z.string().optional(),
+          contactId: z.string().optional(),
+          dealId: z.string().optional(),
+          status: z.string().optional(),
+          priority: z.string().optional(),
+          type: z.string().optional(),
+          overdue: z.string().optional(),
+          search: z.string().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const { limit, offset } = parsePagination(request.query);
       const assigneeId = isAgent(request) ? request.user.sub : request.query.assigneeId;
@@ -498,9 +568,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Get single task
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/v1/tasks/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Get a single task',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const task = await getTaskById(request.params.id) as any;
       if (!task) return reply.notFound('Task not found');
@@ -512,18 +590,21 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Create task
-  app.post(
+  typedApp.post(
     '/api/v1/tasks',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:create')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:create')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Create a task',
+        body: createTaskBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createTaskBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const data = isAgent(request)
-        ? { ...parsed.data, assigneeId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, assigneeId: request.user.sub }
+        : request.body;
 
       const task = await createTask(data, auditMeta(request)) as any;
 
@@ -532,30 +613,34 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Update task
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/v1/tasks/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:update')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:update')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Update a task',
+        params: z.object({ id: z.uuid() }),
+        body: updateTaskBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateTaskBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       if (isAgent(request)) {
         const task = await getTaskById(request.params.id) as any;
         if (!task) return reply.notFound('Task not found');
         if (task.assigneeId !== request.user.sub) {
           return reply.forbidden('Access denied');
         }
-        if (parsed.data.assigneeId !== undefined && parsed.data.assigneeId !== request.user.sub) {
+        if (request.body.assigneeId !== undefined && request.body.assigneeId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign tasks');
         }
       }
 
-      const updated = await updateTask(request.params.id, parsed.data, auditMeta(request)) as any;
+      const updated = await updateTask(request.params.id, request.body, auditMeta(request)) as any;
       if (!updated) return reply.notFound('Task not found');
 
-      if (parsed.data.status === 'completed') {
+      if (request.body.status === 'completed') {
         eventBus.emit('task_completed', {
           taskId: updated.id,
           task: updated as unknown as Record<string, unknown>,
@@ -567,9 +652,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Delete task
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/v1/tasks/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:delete')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('tasks:delete')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Delete a task',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       if (isAgent(request)) {
         const task = await getTaskById(request.params.id) as any;
@@ -591,15 +684,19 @@ export async function publicApiRoutes(app: FastifyInstance) {
   // =========================================================================
 
   // List messages (requires conversationId)
-  app.get<{
-    Querystring: {
-      conversationId: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/v1/messages',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'List messages for a conversation',
+        querystring: paginationQuery.extend({
+          conversationId: z.string(),
+        }),
+      },
+    },
     async (request, reply) => {
       if (!request.query.conversationId) {
         return reply.badRequest('conversationId query parameter is required');
@@ -618,9 +715,17 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Get single message
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/v1/messages/:id',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:read')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:read')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Get a single message',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const message = await getMessageById(request.params.id);
       if (!message) return reply.notFound('Message not found');
@@ -629,18 +734,21 @@ export async function publicApiRoutes(app: FastifyInstance) {
   );
 
   // Send a message
-  app.post(
+  typedApp.post(
     '/api/v1/messages',
-    { onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:send')], config: { rateLimit: rl } },
+    {
+      onRequest: [authenticateApiKeyOrJwt, requireApiPermission('messages:send')],
+      config: { rateLimit: rl },
+      schema: {
+        tags: ['Public API'],
+        summary: 'Send a message',
+        body: sendMessageBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = sendMessageBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       const message = await sendMessage(
         {
-          ...parsed.data,
+          ...request.body,
           senderId: request.user.sub,
         },
         auditMeta(request),
@@ -650,8 +758,8 @@ export async function publicApiRoutes(app: FastifyInstance) {
         return reply.notFound('Conversation not found');
       }
 
-      if (parsed.data.direction === 'inbound') {
-        const conversation = await getConversationById(parsed.data.conversationId) as any;
+      if (request.body.direction === 'inbound') {
+        const conversation = await getConversationById(request.body.conversationId) as any;
         if (conversation) {
           eventBus.emit('message_received', {
             messageId: message.id,

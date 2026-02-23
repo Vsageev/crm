@@ -22,9 +22,15 @@ import {
   Download,
   Play,
   MapPin,
+  Sparkles,
+  Loader2,
+  Phone,
 } from 'lucide-react';
 import { api, apiUpload, ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/useAuth';
+import { toast } from '../../stores/toast';
+import { usePhone } from '../../features/phone/usePhone';
+import { Tooltip } from '../../ui';
 import styles from './InboxPage.module.css';
 
 /* ── Types ── */
@@ -47,7 +53,7 @@ interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
+  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'novofon' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -129,8 +135,11 @@ const CHANNEL_LABELS: Record<Conversation['channelType'], string> = {
   web_chat: 'Web Chat',
   whatsapp: 'WhatsApp',
   instagram: 'Instagram',
+  novofon: 'Novofon',
   other: 'Other',
 };
+
+const INBOX_REFRESH_INTERVAL_MS = 5000;
 
 /* ── Helpers ── */
 
@@ -197,6 +206,36 @@ function groupMessagesByDate(msgs: Message[]): { label: string; messages: Messag
   }
 
   return groups;
+}
+
+function areConversationListsEqual(a: Conversation[], b: Conversation[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].updatedAt !== b[i].updatedAt ||
+      a[i].lastMessageAt !== b[i].lastMessageAt ||
+      a[i].status !== b[i].status ||
+      a[i].isUnread !== b[i].isUnread
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areMessageListsEqual(a: Message[], b: Message[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].id !== b[i].id ||
+      a[i].updatedAt !== b[i].updatedAt ||
+      a[i].status !== b[i].status
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -308,6 +347,7 @@ function formatDuration(seconds: number | undefined): string {
 
 export function InboxPage() {
   const { user } = useAuth();
+  const { makeCall, providers, callState } = usePhone();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Conversation list state
@@ -344,6 +384,10 @@ export function InboxPage() {
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
 
+  // AI suggest state
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
@@ -354,9 +398,12 @@ export function InboxPage() {
   const isTelegram = activeConversation?.channelType === 'telegram';
 
   /* ── Fetch conversations ── */
-  const fetchConversations = useCallback(async () => {
-    setConvsLoading(true);
-    setConvsError('');
+  const fetchConversations = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    if (!silent) {
+      setConvsLoading(true);
+      setConvsError('');
+    }
     try {
       const params = new URLSearchParams();
       params.set('limit', '100');
@@ -364,11 +411,15 @@ export function InboxPage() {
       if (searchInput) params.set('search', searchInput);
 
       const data = await api<PaginatedResponse<Conversation>>(`/conversations?${params}`);
-      setConversations(data.entries);
+      setConversations((prev) => (areConversationListsEqual(prev, data.entries) ? prev : data.entries));
     } catch (err) {
-      setConvsError(err instanceof ApiError ? err.message : 'Failed to load conversations');
+      if (!silent) {
+        setConvsError(err instanceof ApiError ? err.message : 'Failed to load conversations');
+      }
     } finally {
-      setConvsLoading(false);
+      if (!silent) {
+        setConvsLoading(false);
+      }
     }
   }, [statusFilter, searchInput]);
 
@@ -377,19 +428,27 @@ export function InboxPage() {
   }, [fetchConversations]);
 
   /* ── Fetch messages for selected conversation ── */
-  const fetchMessages = useCallback(async (conversationId: string) => {
-    setMsgsLoading(true);
-    setMsgsError('');
+  const fetchMessages = useCallback(async (conversationId: string, options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    if (!silent) {
+      setMsgsLoading(true);
+      setMsgsError('');
+    }
     try {
       const data = await api<PaginatedResponse<Message>>(
         `/messages?conversationId=${conversationId}&limit=200`,
       );
       // API returns newest first; reverse to show oldest at top
-      setMessages(data.entries.reverse());
+      const next = data.entries.reverse();
+      setMessages((prev) => (areMessageListsEqual(prev, next) ? prev : next));
     } catch (err) {
-      setMsgsError(err instanceof ApiError ? err.message : 'Failed to load messages');
+      if (!silent) {
+        setMsgsError(err instanceof ApiError ? err.message : 'Failed to load messages');
+      }
     } finally {
-      setMsgsLoading(false);
+      if (!silent) {
+        setMsgsLoading(false);
+      }
     }
   }, []);
 
@@ -400,22 +459,44 @@ export function InboxPage() {
       return;
     }
 
-    // Find conversation from list or fetch it
-    const found = conversations.find((c) => c.id === selectedId);
-    if (found) {
-      setActiveConversation(found);
-    } else {
-      // Fetch single conversation
-      api<Conversation>(`/conversations/${selectedId}`)
-        .then(setActiveConversation)
-        .catch(() => setActiveConversation(null));
-    }
+    // Fetch selected conversation once on selection change (fallback if list is stale).
+    api<Conversation>(`/conversations/${selectedId}`)
+      .then(setActiveConversation)
+      .catch(() => setActiveConversation(null));
 
     fetchMessages(selectedId);
 
     // Mark as read
     api(`/conversations/${selectedId}/read`, { method: 'POST' }).catch(() => {});
-  }, [selectedId, conversations, fetchMessages]);
+  }, [selectedId, fetchMessages]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+
+    const found = conversations.find((c) => c.id === selectedId);
+    if (!found) return;
+
+    setActiveConversation((prev) => {
+      if (!prev) return found;
+      if (prev.id !== found.id) return found;
+      if (prev.updatedAt !== found.updatedAt || prev.lastMessageAt !== found.lastMessageAt || prev.isUnread !== found.isUnread || prev.status !== found.status) {
+        return found;
+      }
+      return prev;
+    });
+  }, [selectedId, conversations]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.hidden) return;
+      fetchConversations({ silent: true });
+      if (selectedId) {
+        fetchMessages(selectedId, { silent: true });
+      }
+    }, INBOX_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [fetchConversations, fetchMessages, selectedId]);
 
   /* ── Scroll to bottom on new messages ── */
   useEffect(() => {
@@ -645,6 +726,27 @@ export function InboxPage() {
     }
   }
 
+  /* ── AI suggest reply ── */
+  async function handleAiSuggest() {
+    if (!selectedId || aiLoading) return;
+    setAiLoading(true);
+    setAiError('');
+    try {
+      const data = await api<{ suggestion: string }>('/ai/suggest-reply', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId: selectedId }),
+      });
+      setReplyText(data.suggestion);
+      replyInputRef.current?.focus();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Failed to generate AI suggestion';
+      setAiError(msg);
+      setTimeout(() => setAiError(''), 5000);
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   /* ── Handle keyboard in reply box ── */
   function handleReplyKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -822,31 +924,52 @@ export function InboxPage() {
                 </div>
               </div>
               <div className={styles.threadActions}>
+                {providers.length > 0 && activeConversation.contact?.phone && callState.status === 'idle' && (
+                  <Tooltip label={`Call ${activeConversation.contact.phone}`}>
+                    <button
+                      className={styles.iconBtn}
+                      onClick={() => {
+                        void makeCall(
+                          activeConversation.contact!.phone!,
+                          getContactName(activeConversation.contact),
+                          activeConversation.contact!.id,
+                        ).catch((err) => {
+                          toast.error(err instanceof Error ? err.message : 'Failed to start call');
+                        });
+                      }}
+                    >
+                      <Phone size={16} />
+                    </button>
+                  </Tooltip>
+                )}
                 {activeConversation.status === 'open' ? (
                   <>
-                    <button
-                      className={styles.iconBtn}
-                      title="Close conversation"
-                      onClick={() => updateConversationStatus('closed')}
-                    >
-                      <CheckCircle2 size={16} />
-                    </button>
-                    <button
-                      className={styles.iconBtn}
-                      title="Archive conversation"
-                      onClick={() => updateConversationStatus('archived')}
-                    >
-                      <Archive size={16} />
-                    </button>
+                    <Tooltip label="Close conversation">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => updateConversationStatus('closed')}
+                      >
+                        <CheckCircle2 size={16} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label="Archive conversation">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => updateConversationStatus('archived')}
+                      >
+                        <Archive size={16} />
+                      </button>
+                    </Tooltip>
                   </>
                 ) : (
-                  <button
-                    className={styles.iconBtn}
-                    title="Reopen conversation"
-                    onClick={() => updateConversationStatus('open')}
-                  >
-                    <RotateCcw size={16} />
-                  </button>
+                  <Tooltip label="Reopen conversation">
+                    <button
+                      className={styles.iconBtn}
+                      onClick={() => updateConversationStatus('open')}
+                    >
+                      <RotateCcw size={16} />
+                    </button>
+                  </Tooltip>
                 )}
               </div>
             </div>
@@ -864,7 +987,7 @@ export function InboxPage() {
                 </div>
               ) : (
                 dateGroups.map((group) => (
-                  <div key={group.label}>
+                  <div key={group.label} className={styles.dateGroupContainer}>
                     <div className={styles.dateGroup}>
                       <span className={styles.dateLine} />
                       <span className={styles.dateLabel}>{group.label}</span>
@@ -1058,51 +1181,56 @@ export function InboxPage() {
               {/* Formatting toolbar — only for Telegram conversations */}
               {isTelegram && (
                 <div className={styles.formattingToolbar}>
-                  <button
-                    className={styles.fmtBtn}
-                    title="Bold"
-                    onClick={insertBold}
-                    type="button"
-                  >
-                    <Bold size={14} />
-                  </button>
-                  <button
-                    className={styles.fmtBtn}
-                    title="Italic"
-                    onClick={insertItalic}
-                    type="button"
-                  >
-                    <Italic size={14} />
-                  </button>
-                  <button
-                    className={styles.fmtBtn}
-                    title="Code"
-                    onClick={insertCode}
-                    type="button"
-                  >
-                    <Code size={14} />
-                  </button>
-                  <button
-                    className={styles.fmtBtn}
-                    title="Insert link"
-                    onClick={insertLink}
-                    type="button"
-                  >
-                    <Link size={14} />
-                  </button>
-                  <span className={styles.fmtSep} />
-                  <div className={styles.keyboardAnchor} ref={keyboardRef}>
+                  <Tooltip label="Bold" position="bottom">
                     <button
-                      className={[
-                        styles.fmtBtn,
-                        keyboardRows.length > 0 ? styles.fmtBtnActive : '',
-                      ].join(' ')}
-                      title="Inline keyboard"
-                      onClick={() => setKeyboardOpen((v) => !v)}
+                      className={styles.fmtBtn}
+                      onClick={insertBold}
                       type="button"
                     >
-                      <Grid3X3 size={14} />
+                      <Bold size={14} />
                     </button>
+                  </Tooltip>
+                  <Tooltip label="Italic" position="bottom">
+                    <button
+                      className={styles.fmtBtn}
+                      onClick={insertItalic}
+                      type="button"
+                    >
+                      <Italic size={14} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Code" position="bottom">
+                    <button
+                      className={styles.fmtBtn}
+                      onClick={insertCode}
+                      type="button"
+                    >
+                      <Code size={14} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Insert link" position="bottom">
+                    <button
+                      className={styles.fmtBtn}
+                      onClick={insertLink}
+                      type="button"
+                    >
+                      <Link size={14} />
+                    </button>
+                  </Tooltip>
+                  <span className={styles.fmtSep} />
+                  <div className={styles.keyboardAnchor} ref={keyboardRef}>
+                    <Tooltip label="Inline keyboard" position="bottom">
+                      <button
+                        className={[
+                          styles.fmtBtn,
+                          keyboardRows.length > 0 ? styles.fmtBtnActive : '',
+                        ].join(' ')}
+                        onClick={() => setKeyboardOpen((v) => !v)}
+                        type="button"
+                      >
+                        <Grid3X3 size={14} />
+                      </button>
+                    </Tooltip>
                     {keyboardOpen && (
                       <div className={styles.keyboardPopover}>
                         <div className={styles.keyboardPopoverHeader}>
@@ -1126,14 +1254,15 @@ export function InboxPage() {
                               <div key={ri} className={styles.keyboardRowEditor}>
                                 <div className={styles.keyboardRowLabel}>
                                   <span>Row {ri + 1}</span>
-                                  <button
-                                    className={styles.keyboardRemoveRow}
-                                    onClick={() => removeKeyboardRow(ri)}
-                                    title="Remove row"
-                                    type="button"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
+                                  <Tooltip label="Remove row">
+                                    <button
+                                      className={styles.keyboardRemoveRow}
+                                      onClick={() => removeKeyboardRow(ri)}
+                                      type="button"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </Tooltip>
                                 </div>
                                 {row.map((btn, bi) => (
                                   <div key={bi} className={styles.keyboardBtnEditor}>
@@ -1160,14 +1289,15 @@ export function InboxPage() {
                                       }}
                                       className={styles.keyboardInput}
                                     />
-                                    <button
-                                      className={styles.keyboardRemoveBtn}
-                                      onClick={() => removeButton(ri, bi)}
-                                      title="Remove button"
-                                      type="button"
-                                    >
-                                      <X size={12} />
-                                    </button>
+                                    <Tooltip label="Remove button">
+                                      <button
+                                        className={styles.keyboardRemoveBtn}
+                                        onClick={() => removeButton(ri, bi)}
+                                        type="button"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </Tooltip>
                                   </div>
                                 ))}
                                 <button
@@ -1201,24 +1331,27 @@ export function InboxPage() {
 
               <div className={styles.replyRow}>
                 <div className={styles.templatesAnchor} ref={templatesRef}>
-                  <button
-                    className={styles.iconBtn}
-                    title="Quick replies"
-                    onClick={() => setTemplatesOpen((v) => !v)}
-                  >
-                    <Zap size={16} />
-                  </button>
+                  <Tooltip label="Quick replies">
+                    <button
+                      className={styles.iconBtn}
+                      onClick={() => setTemplatesOpen((v) => !v)}
+                    >
+                      <Zap size={16} />
+                    </button>
+                  </Tooltip>
                   {templatesOpen && (
                     <div className={styles.templatesPopover}>
                       <div className={styles.templatesHeader}>
                         <span className={styles.templatesTitle}>Templates</span>
-                        <button
-                          className={styles.iconBtn}
-                          onClick={() => setTemplatesOpen(false)}
-                          style={{ border: 'none', width: 24, height: 24 }}
-                        >
-                          <X size={14} />
-                        </button>
+                        <Tooltip label="Close">
+                          <button
+                            className={styles.iconBtn}
+                            onClick={() => setTemplatesOpen(false)}
+                            style={{ border: 'none', width: 24, height: 24 }}
+                          >
+                            <X size={14} />
+                          </button>
+                        </Tooltip>
                       </div>
                       {isTelegram && (
                         <div className={styles.templatesTabs}>
@@ -1307,31 +1440,47 @@ export function InboxPage() {
                     setAttachedFile(file);
                   }}
                 />
-                <button
-                  className={styles.iconBtn}
-                  title="Attach file"
-                  onClick={() => fileInputRef.current?.click()}
-                  type="button"
-                >
-                  <Paperclip size={16} />
-                </button>
+                <Tooltip label="Attach file">
+                  <button
+                    className={styles.iconBtn}
+                    onClick={() => fileInputRef.current?.click()}
+                    type="button"
+                  >
+                    <Paperclip size={16} />
+                  </button>
+                </Tooltip>
+                <Tooltip label="AI suggest reply">
+                  <button
+                    className={styles.iconBtn}
+                    onClick={handleAiSuggest}
+                    disabled={aiLoading}
+                    type="button"
+                  >
+                    {aiLoading ? (
+                      <Loader2 size={16} className={styles.aiSpinner} />
+                    ) : (
+                      <Sparkles size={16} />
+                    )}
+                  </button>
+                </Tooltip>
                 <div className={styles.replyInputWrap}>
                   {attachedFile && (
                     <div className={styles.attachedFileBar}>
                       <FileText size={14} />
                       <span className={styles.attachedFileName}>{attachedFile.name}</span>
                       <span className={styles.attachedFileSize}>{formatFileSize(attachedFile.size)}</span>
-                      <button
-                        className={styles.attachedFileRemove}
-                        onClick={() => {
-                          setAttachedFile(null);
-                          if (fileInputRef.current) fileInputRef.current.value = '';
-                        }}
-                        type="button"
-                        title="Remove file"
-                      >
-                        <X size={12} />
-                      </button>
+                      <Tooltip label="Remove file">
+                        <button
+                          className={styles.attachedFileRemove}
+                          onClick={() => {
+                            setAttachedFile(null);
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                          type="button"
+                        >
+                          <X size={12} />
+                        </button>
+                      </Tooltip>
                     </div>
                   )}
                   <textarea
@@ -1353,6 +1502,9 @@ export function InboxPage() {
                   <Send size={16} />
                 </button>
               </div>
+              {aiError && (
+                <div className={styles.aiError}>{aiError}</div>
+              )}
             </div>
           </div>
         ) : (

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -24,10 +25,12 @@ const autoGreetingBody = z.object({
 });
 
 export async function whatsappRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List connected accounts
-  app.get(
+  typedApp.get(
     '/api/whatsapp/accounts',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['WhatsApp'], summary: 'List connected accounts' } },
     async (_request, reply) => {
       const accounts = await listWhatsAppAccounts();
       return reply.send({ entries: accounts });
@@ -35,9 +38,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // Get single account
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/whatsapp/accounts/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['WhatsApp'], summary: 'Get single account', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const account = await getWhatsAppAccountById(request.params.id);
       if (!account) {
@@ -48,17 +51,12 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // Connect a new account
-  app.post(
+  typedApp.post(
     '/api/whatsapp/accounts',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['WhatsApp'], summary: 'Connect a new account', body: connectAccountBody } },
     async (request, reply) => {
-      const parsed = connectAccountBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       try {
-        const account = await connectWhatsAppAccount(parsed.data, {
+        const account = await connectWhatsAppAccount(request.body, {
           userId: request.user.sub,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
@@ -72,9 +70,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // Disconnect (delete) an account
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/whatsapp/accounts/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['WhatsApp'], summary: 'Disconnect an account', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const deleted = await disconnectWhatsAppAccount(request.params.id, {
         userId: request.user.sub,
@@ -91,9 +89,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // Test connection for an account
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/whatsapp/accounts/:id/test',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['WhatsApp'], summary: 'Test account connection', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       try {
         const account = await testWhatsAppAccount(request.params.id, {
@@ -115,16 +113,11 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // Update auto-greeting settings
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/whatsapp/accounts/:id/auto-greeting',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['WhatsApp'], summary: 'Update auto-greeting settings', params: z.object({ id: z.uuid() }), body: autoGreetingBody } },
     async (request, reply) => {
-      const parsed = autoGreetingBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const account = await updateAutoGreeting(request.params.id, parsed.data, {
+      const account = await updateAutoGreeting(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -139,18 +132,13 @@ export async function whatsappRoutes(app: FastifyInstance) {
   );
 
   // WhatsApp webhook verification (GET) — Meta sends a verification challenge
-  app.get<{
-    Querystring: {
-      'hub.mode'?: string;
-      'hub.verify_token'?: string;
-      'hub.challenge'?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/whatsapp/webhook',
+    { schema: { tags: ['WhatsApp'], summary: 'WhatsApp webhook verification' } },
     async (request, reply) => {
-      const mode = request.query['hub.mode'];
-      const token = request.query['hub.verify_token'];
-      const challenge = request.query['hub.challenge'];
+      const mode = (request.query as Record<string, string>)['hub.mode'];
+      const token = (request.query as Record<string, string>)['hub.verify_token'];
+      const challenge = (request.query as Record<string, string>)['hub.challenge'];
 
       if (mode !== 'subscribe' || !token || !challenge) {
         return reply.status(403).send('Forbidden');
@@ -172,8 +160,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
 
   // WhatsApp webhook endpoint (POST) — receives inbound notifications from Meta
   // No auth middleware: verified by webhook signature
-  app.post(
+  typedApp.post(
     '/api/whatsapp/webhook',
+    { schema: { tags: ['WhatsApp'], summary: 'WhatsApp webhook endpoint' } },
     async (request, reply) => {
       try {
         await handleWhatsAppWebhook(

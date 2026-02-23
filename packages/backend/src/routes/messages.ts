@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -38,16 +39,23 @@ const updateStatusBody = z.object({
 });
 
 export async function messageRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List messages for a conversation
-  app.get<{
-    Querystring: {
-      conversationId: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/messages',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Messages'],
+        summary: 'List messages for a conversation',
+        querystring: z.object({
+          conversationId: z.string(),
+          limit: z.coerce.number().optional(),
+          offset: z.coerce.number().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       if (!request.query.conversationId) {
         return reply.badRequest('conversationId query parameter is required');
@@ -55,23 +63,30 @@ export async function messageRoutes(app: FastifyInstance) {
 
       const { entries, total } = await listMessages({
         conversationId: request.query.conversationId,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Get single message
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/messages/:id',
-    { onRequest: [app.authenticate, requirePermission('messages:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:read')],
+      schema: {
+        tags: ['Messages'],
+        summary: 'Get a single message by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const message = await getMessageById(request.params.id);
       if (!message) {
@@ -82,16 +97,18 @@ export async function messageRoutes(app: FastifyInstance) {
   );
 
   // Send a message
-  app.post(
+  typedApp.post(
     '/api/messages',
-    { onRequest: [app.authenticate, requirePermission('messages:send')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Messages'],
+        summary: 'Send a message',
+        body: sendMessageBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = sendMessageBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const { parseMode, inlineKeyboard, ...messageData } = parsed.data;
+      const { parseMode, inlineKeyboard, ...messageData } = request.body;
 
       // Store inline keyboard and parse mode in metadata if provided
       let metadata = messageData.metadata;
@@ -120,8 +137,8 @@ export async function messageRoutes(app: FastifyInstance) {
       }
 
       // Emit automation trigger for inbound messages
-      if (parsed.data.direction === 'inbound') {
-        const conversation = await getConversationById(parsed.data.conversationId) as any;
+      if (request.body.direction === 'inbound') {
+        const conversation = await getConversationById(request.body.conversationId) as any;
         if (conversation) {
           eventBus.emit('message_received', {
             messageId: message.id,
@@ -133,13 +150,13 @@ export async function messageRoutes(app: FastifyInstance) {
       }
 
       // For outbound messages, attempt to deliver via the appropriate channel
-      if (parsed.data.direction === 'outbound' && message.content) {
-        const conversation = await getConversationById(parsed.data.conversationId) as any;
+      if (request.body.direction === 'outbound' && message.content) {
+        const conversation = await getConversationById(request.body.conversationId) as any;
 
         if (conversation?.channelType === 'telegram') {
           // Fire-and-forget: send to Telegram in the background
           sendTelegramMessage({
-            conversationId: parsed.data.conversationId,
+            conversationId: request.body.conversationId,
             messageId: message.id,
             text: message.content,
             parseMode,
@@ -150,7 +167,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else if (conversation?.channelType === 'email') {
           // Fire-and-forget: send via SMTP in the background
           sendEmailMessage({
-            conversationId: parsed.data.conversationId,
+            conversationId: request.body.conversationId,
             messageId: message.id,
             text: message.content,
           }).catch((err: unknown) => {
@@ -159,7 +176,7 @@ export async function messageRoutes(app: FastifyInstance) {
         } else if (conversation?.channelType === 'instagram') {
           // Fire-and-forget: send via Instagram/Messenger in the background
           sendInstagramMessage({
-            conversationId: parsed.data.conversationId,
+            conversationId: request.body.conversationId,
             messageId: message.id,
             text: message.content,
           }).catch((err: unknown) => {
@@ -173,16 +190,19 @@ export async function messageRoutes(app: FastifyInstance) {
   );
 
   // Update message status
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/messages/:id/status',
-    { onRequest: [app.authenticate, requirePermission('messages:send')] },
+    {
+      onRequest: [app.authenticate, requirePermission('messages:send')],
+      schema: {
+        tags: ['Messages'],
+        summary: 'Update message status',
+        params: z.object({ id: z.uuid() }),
+        body: updateStatusBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateStatusBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const updated = await updateMessageStatus(request.params.id, parsed.data.status);
+      const updated = await updateMessageStatus(request.params.id, request.body.status);
       if (!updated) {
         return reply.notFound('Message not found');
       }

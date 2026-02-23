@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -44,10 +45,21 @@ const updateFlowBody = z.object({
 });
 
 export async function chatbotFlowRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List flows (optionally filtered by botId)
-  app.get<{ Querystring: { botId?: string } }>(
+  typedApp.get(
     '/api/chatbot-flows',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Chatbot Flows'],
+        summary: 'List chatbot flows',
+        querystring: z.object({
+          botId: z.string().uuid().optional(),
+        }),
+      },
+    },
     async (request, reply) => {
       const flows = await listFlows(request.query.botId);
       return reply.send({ entries: flows });
@@ -55,9 +67,16 @@ export async function chatbotFlowRoutes(app: FastifyInstance) {
   );
 
   // Get single flow with steps
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/chatbot-flows/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Chatbot Flows'],
+        summary: 'Get chatbot flow by ID',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const flow = await getFlowById(request.params.id);
       if (!flow) {
@@ -68,16 +87,18 @@ export async function chatbotFlowRoutes(app: FastifyInstance) {
   );
 
   // Create flow
-  app.post(
+  typedApp.post(
     '/api/chatbot-flows',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Chatbot Flows'],
+        summary: 'Create a chatbot flow',
+        body: createFlowBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = createFlowBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const flow = await createFlow(parsed.data, {
+      const flow = await createFlow(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -88,16 +109,19 @@ export async function chatbotFlowRoutes(app: FastifyInstance) {
   );
 
   // Update flow
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/chatbot-flows/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Chatbot Flows'],
+        summary: 'Update a chatbot flow',
+        params: z.object({ id: z.uuid() }),
+        body: updateFlowBody,
+      },
+    },
     async (request, reply) => {
-      const parsed = updateFlowBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const flow = await updateFlow(request.params.id, parsed.data, {
+      const flow = await updateFlow(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -112,9 +136,16 @@ export async function chatbotFlowRoutes(app: FastifyInstance) {
   );
 
   // Delete flow
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/chatbot-flows/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Chatbot Flows'],
+        summary: 'Delete a chatbot flow',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
     async (request, reply) => {
       const deleted = await deleteFlow(request.params.id, {
         userId: request.user.sub,

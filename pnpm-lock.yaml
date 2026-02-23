@@ -80,9 +80,15 @@ importers:
       fastify:
         specifier: ^5.7.4
         version: 5.7.4
+      fastify-type-provider-zod:
+        specifier: ^6.1.0
+        version: 6.1.0(@fastify/swagger@9.7.0)(fastify@5.7.4)(openapi-types@12.1.3)(zod@4.3.6)
       node-cron:
         specifier: ^4.2.1
         version: 4.2.1
+      openai:
+        specifier: ^6.22.0
+        version: 6.22.0(zod@4.3.6)
       otpauth:
         specifier: ^9.5.0
         version: 9.5.0
@@ -126,6 +132,9 @@ importers:
       shared:
         specifier: workspace:*
         version: link:../shared
+      voximplant-websdk:
+        specifier: 4.11.1-2965
+        version: 4.11.1-2965
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^6.9.1
@@ -151,6 +160,8 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.3.0)(jsdom@28.1.0(@noble/hashes@2.0.1))(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/ngrok: {}
 
   packages/shared:
     devDependencies:
@@ -1257,6 +1268,14 @@ packages:
   fastify-plugin@5.1.0:
     resolution: {integrity: sha512-FAIDA8eovSt5qcDgcBvDuX/v0Cjz0ohGhENZ/wpc3y+oZCY2afZ9Baqql3g/lC+OHRnciQol4ww7tuthOb9idw==}
 
+  fastify-type-provider-zod@6.1.0:
+    resolution: {integrity: sha512-Sl19VZFSX4W/+AFl3hkL5YgWk3eDXZ4XYOdrq94HunK+o7GQBCAqgk7+3gPXoWkF0bNxOiIgfnFGJJ3i9a2BtQ==}
+    peerDependencies:
+      '@fastify/swagger': '>=9.5.1'
+      fastify: ^5.5.0
+      openapi-types: ^12.1.3
+      zod: '>=4.1.5'
+
   fastify@5.7.4:
     resolution: {integrity: sha512-e6l5NsRdaEP8rdD8VR0ErJASeyaRbzXYpmkrpr2SuvuMq6Si3lvsaVy5C+7gLanEkvjpMDzBXWE5HPeb/hgTxA==}
 
@@ -1589,6 +1608,18 @@ packages:
   onetime@7.0.0:
     resolution: {integrity: sha512-VXJjc87FScF88uafS3JllDgvAm+c/Slfz06lorj2uAY34rlUu0Nt+v8wreiImcrgAjjIHp1rXpTDlLOGw29WwQ==}
     engines: {node: '>=18'}
+
+  openai@6.22.0:
+    resolution: {integrity: sha512-7Yvy17F33Bi9RutWbsaYt5hJEEJ/krRPOrwan+f9aCPuMat1WVsb2VNSII5W1EksKT6fF69TG/xj4XzodK3JZw==}
+    hasBin: true
+    peerDependencies:
+      ws: ^8.18.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      ws:
+        optional: true
+      zod:
+        optional: true
 
   openapi-types@12.1.3:
     resolution: {integrity: sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw==}
@@ -2024,6 +2055,9 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  voximplant-websdk@4.11.1-2965:
+    resolution: {integrity: sha512-TT5MIuVQNyNcF3hXe0gLYMkp9SnNSRMqihz4xHaaFfJ+2zC28TuTolWejtx0joqloN2KrnWd9LpAE7MsmCO0yA==}
 
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
@@ -3165,6 +3199,14 @@ snapshots:
 
   fastify-plugin@5.1.0: {}
 
+  fastify-type-provider-zod@6.1.0(@fastify/swagger@9.7.0)(fastify@5.7.4)(openapi-types@12.1.3)(zod@4.3.6):
+    dependencies:
+      '@fastify/error': 4.2.0
+      '@fastify/swagger': 9.7.0
+      fastify: 5.7.4
+      openapi-types: 12.1.3
+      zod: 4.3.6
+
   fastify@5.7.4:
     dependencies:
       '@fastify/ajv-compiler': 4.0.5
@@ -3495,6 +3537,10 @@ snapshots:
   onetime@7.0.0:
     dependencies:
       mimic-function: 5.0.1
+
+  openai@6.22.0(zod@4.3.6):
+    optionalDependencies:
+      zod: 4.3.6
 
   openapi-types@12.1.3: {}
 
@@ -3888,6 +3934,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  voximplant-websdk@4.11.1-2965: {}
 
   w3c-xmlserializer@5.0.0:
     dependencies:

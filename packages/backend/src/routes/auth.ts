@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { store } from '../db/index.js';
 import {
@@ -52,14 +53,11 @@ const disableTotpBody = z.object({
 });
 
 export async function authRoutes(app: FastifyInstance) {
-  // Register
-  app.post('/api/auth/register', { config: { rateLimit: authRateLimitConfig() } }, async (request, reply) => {
-    const parsed = registerBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
-    const { email, password, firstName, lastName } = parsed.data;
+  // Register
+  typedApp.post('/api/auth/register', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Register a new user', body: registerBody } }, async (request, reply) => {
+    const { email, password, firstName, lastName } = request.body;
 
     // Enforce password complexity policy (OWASP A07:2021)
     const passwordCheck = validatePasswordStrength(password);
@@ -101,13 +99,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Login
-  app.post('/api/auth/login', { config: { rateLimit: authRateLimitConfig() } }, async (request, reply) => {
-    const parsed = loginBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
-
-    const { email, password } = parsed.data;
+  typedApp.post('/api/auth/login', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Login', body: loginBody } }, async (request, reply) => {
+    const { email, password } = request.body;
 
     const user = store.findOne('users', (u) => u.email === email.toLowerCase());
 
@@ -173,13 +166,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Verify 2FA during login
-  app.post('/api/auth/2fa/verify', { config: { rateLimit: authRateLimitConfig() } }, async (request, reply) => {
-    const parsed = twoFactorVerifyBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
-
-    const { twoFactorToken, code } = parsed.data;
+  typedApp.post('/api/auth/2fa/verify', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Verify 2FA during login', body: twoFactorVerifyBody } }, async (request, reply) => {
+    const { twoFactorToken, code } = request.body;
 
     let payload: { sub: string; role: string; twoFactor?: boolean };
     try {
@@ -250,13 +238,8 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Refresh token
-  app.post('/api/auth/refresh', { config: { rateLimit: authRateLimitConfig() } }, async (request, reply) => {
-    const parsed = refreshBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
-
-    const tokens = await refreshAccessToken(app, parsed.data.refreshToken);
+  typedApp.post('/api/auth/refresh', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Refresh access token', body: refreshBody } }, async (request, reply) => {
+    const tokens = await refreshAccessToken(app, request.body.refreshToken);
     if (!tokens) {
       return reply.unauthorized('Invalid or expired refresh token');
     }
@@ -265,7 +248,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Get current user
-  app.get('/api/auth/me', { onRequest: [app.authenticate] }, async (request, reply) => {
+  typedApp.get('/api/auth/me', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Get current user' } }, async (request, reply) => {
     const { sub } = request.user;
 
     const user = store.getById('users', sub);
@@ -289,7 +272,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Logout (revoke all refresh tokens)
-  app.post('/api/auth/logout', { onRequest: [app.authenticate] }, async (request, reply) => {
+  typedApp.post('/api/auth/logout', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Logout' } }, async (request, reply) => {
     const { sub } = request.user;
     await revokeUserRefreshTokens(sub);
     return reply.send({ message: 'Logged out successfully' });
@@ -298,7 +281,7 @@ export async function authRoutes(app: FastifyInstance) {
   // --- TOTP 2FA Management (requires auth) ---
 
   // Begin TOTP setup - generates secret and returns QR URI
-  app.post('/api/auth/2fa/setup', { onRequest: [app.authenticate] }, async (request, reply) => {
+  typedApp.post('/api/auth/2fa/setup', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Begin TOTP 2FA setup' } }, async (request, reply) => {
     const { sub } = request.user;
 
     const user = store.getById('users', sub);
@@ -324,12 +307,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Confirm TOTP setup - verifies the user can generate valid codes
-  app.post('/api/auth/2fa/confirm', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const parsed = totpTokenBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
-
+  typedApp.post('/api/auth/2fa/confirm', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Confirm TOTP 2FA setup', body: totpTokenBody } }, async (request, reply) => {
     const { sub } = request.user;
 
     const user = store.getById('users', sub);
@@ -342,7 +320,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.conflict('Two-factor authentication is already enabled');
     }
 
-    const valid = verifyTotpToken(user.totpSecret as string, parsed.data.token, user.email as string);
+    const valid = verifyTotpToken(user.totpSecret as string, request.body.token, user.email as string);
     if (!valid) {
       return reply.unauthorized('Invalid TOTP code');
     }
@@ -366,12 +344,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Disable TOTP (requires password confirmation)
-  app.post('/api/auth/2fa/disable', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const parsed = disableTotpBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.badRequest(z.prettifyError(parsed.error));
-    }
-
+  typedApp.post('/api/auth/2fa/disable', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Disable TOTP 2FA', body: disableTotpBody } }, async (request, reply) => {
     const { sub } = request.user;
 
     const user = store.getById('users', sub);
@@ -384,7 +357,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.badRequest('Two-factor authentication is not enabled');
     }
 
-    const valid = await verifyPassword(parsed.data.password, user.passwordHash as string);
+    const valid = await verifyPassword(request.body.password, user.passwordHash as string);
     if (!valid) {
       return reply.unauthorized('Invalid password');
     }
@@ -404,7 +377,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Regenerate recovery codes
-  app.post('/api/auth/2fa/recovery-codes', { onRequest: [app.authenticate] }, async (request, reply) => {
+  typedApp.post('/api/auth/2fa/recovery-codes', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Regenerate recovery codes' } }, async (request, reply) => {
     const { sub } = request.user;
 
     const user = store.getById('users', sub);

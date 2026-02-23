@@ -7,11 +7,14 @@ import {
   CheckSquare,
   MessageSquare,
   Zap,
+  ClipboardList,
   BarChart3,
   Settings,
   LogOut,
 } from 'lucide-react';
 import { useAuth } from '../stores/useAuth';
+import { SoftphoneWidget } from '../features/phone/SoftphoneWidget';
+import { Tooltip } from '../ui';
 import styles from './Sidebar.module.css';
 
 const navItems = [
@@ -22,6 +25,7 @@ const navItems = [
   { to: '/tasks', icon: CheckSquare, label: 'Tasks' },
   { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
   { to: '/automation', icon: Zap, label: 'Automation' },
+  { to: '/quizzes', icon: ClipboardList, label: 'Quizzes' },
   { to: '/reports', icon: BarChart3, label: 'Reports' },
 ] as const;
 
@@ -52,6 +56,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         ))}
       </nav>
       <div className={styles.bottom}>
+        <SoftphoneWidget />
         <NavLink
           to="/settings"
           className={({ isActive }) =>
@@ -76,13 +81,14 @@ export function Sidebar({ onNavigate }: SidebarProps) {
                 <span className={styles.userRole}>{user.role}</span>
               </div>
             </div>
-            <button
-              className={styles.logoutBtn}
-              onClick={logout}
-              title="Log out"
-            >
-              <LogOut size={16} />
-            </button>
+            <Tooltip label="Log out">
+              <button
+                className={styles.logoutBtn}
+                onClick={logout}
+              >
+                <LogOut size={16} />
+              </button>
+            </Tooltip>
           </div>
         )}
       </div>

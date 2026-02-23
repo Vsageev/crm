@@ -1,0 +1,13 @@
+{
+  "name": "ngrok-runner",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "ngrok http --url=posticous-unmaturely-theola.ngrok-free.dev 3000 --log stdout --log-format logfmt",
+    "build": "echo \"ngrok-runner: nothing to build\"",
+    "lint": "echo \"ngrok-runner: nothing to lint\"",
+    "typecheck": "echo \"ngrok-runner: nothing to typecheck\"",
+    "test": "echo \"ngrok-runner: nothing to test\"",
+    "clean": "echo \"ngrok-runner: nothing to clean\""
+  }
+}

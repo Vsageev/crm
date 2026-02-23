@@ -1,4 +1,5 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission, isAgent } from '../middleware/rbac.js';
 import {
@@ -67,20 +68,38 @@ const duplicateCheckBody = z.object({
   lastName: z.string().max(100).optional(),
 });
 
+const contactsQuerySchema = z.object({
+  ownerId: z.uuid().optional(),
+  companyId: z.uuid().optional(),
+  source: z.string().optional(),
+  search: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+const contactsExportQuerySchema = z.object({
+  ownerId: z.uuid().optional(),
+  companyId: z.uuid().optional(),
+  source: z.string().optional(),
+  search: z.string().optional(),
+});
+
+const activitiesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+const createContactQuerySchema = z.object({
+  skipDuplicateCheck: z.string().optional(),
+});
+
 export async function contactRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List contacts
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      companyId?: string;
-      source?: string;
-      search?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/contacts',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'List contacts', querystring: contactsQuerySchema } },
     async (request, reply) => {
       // Agents can only see their own contacts
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -90,45 +109,33 @@ export async function contactRoutes(app: FastifyInstance) {
         companyId: request.query.companyId,
         source: request.query.source,
         search: request.query.search,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send({
         total,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : 50,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : 0,
+        limit: request.query.limit ?? 50,
+        offset: request.query.offset ?? 0,
         entries,
       });
     },
   );
 
   // Check for duplicate contacts
-  app.post(
+  typedApp.post(
     '/api/contacts/check-duplicates',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'Check for duplicate contacts', body: duplicateCheckBody } },
     async (request, reply) => {
-      const parsed = duplicateCheckBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
-      const result = await findContactDuplicates(parsed.data);
+      const result = await findContactDuplicates(request.body);
       return reply.send(result);
     },
   );
 
   // Export contacts as CSV
-  app.get<{
-    Querystring: {
-      ownerId?: string;
-      companyId?: string;
-      source?: string;
-      search?: string;
-    };
-  }>(
+  typedApp.get(
     '/api/contacts/export/csv',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'Export contacts as CSV', querystring: contactsExportQuerySchema } },
     async (request, reply) => {
       // Agents can only export their own contacts
       const ownerId = isAgent(request) ? request.user.sub : request.query.ownerId;
@@ -168,9 +175,9 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // GDPR data export per contact
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/contacts/:id/export/gdpr',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'GDPR data export per contact', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
@@ -207,9 +214,9 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Import contacts from CSV
-  app.post(
+  typedApp.post(
     '/api/contacts/import/csv',
-    { onRequest: [app.authenticate, requirePermission('contacts:create')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:create')], schema: { tags: ['Contacts'], summary: 'Import contacts from CSV' } },
     async (request, reply) => {
       const file = await request.file();
       if (!file) {
@@ -234,12 +241,9 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Get contact activity timeline
-  app.get<{
-    Params: { id: string };
-    Querystring: { limit?: string; offset?: string };
-  }>(
+  typedApp.get(
     '/api/contacts/:id/activities',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'Get contact activity timeline', params: z.object({ id: z.uuid() }), querystring: activitiesQuerySchema } },
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
@@ -251,8 +255,8 @@ export async function contactRoutes(app: FastifyInstance) {
 
       const result = await listContactActivities({
         contactId: request.params.id,
-        limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
-        offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
+        limit: request.query.limit,
+        offset: request.query.offset,
       });
 
       return reply.send(result);
@@ -260,9 +264,9 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Get single contact
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/contacts/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:read')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:read')], schema: { tags: ['Contacts'], summary: 'Get single contact', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const contact = await getContactById(request.params.id) as any;
       if (!contact) {
@@ -276,18 +280,13 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Create contact
-  app.post<{ Querystring: { skipDuplicateCheck?: string } }>(
+  typedApp.post(
     '/api/contacts',
-    { onRequest: [app.authenticate, requirePermission('contacts:create')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:create')], schema: { tags: ['Contacts'], summary: 'Create contact', body: createContactBody, querystring: createContactQuerySchema } },
     async (request, reply) => {
-      const parsed = createContactBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Check for duplicates unless explicitly skipped
       if (request.query.skipDuplicateCheck !== 'true') {
-        const duplicateResult = await findContactDuplicates(parsed.data);
+        const duplicateResult = await findContactDuplicates(request.body);
         if (duplicateResult.hasDuplicates) {
           return reply.status(409).send({
             error: 'Potential duplicates found',
@@ -298,8 +297,8 @@ export async function contactRoutes(app: FastifyInstance) {
 
       // Agents can only create contacts owned by themselves
       const data = isAgent(request)
-        ? { ...parsed.data, ownerId: request.user.sub }
-        : parsed.data;
+        ? { ...request.body, ownerId: request.user.sub }
+        : request.body;
 
       const contact = await createContact(data, {
         userId: request.user.sub,
@@ -358,15 +357,10 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Update contact
-  app.patch<{ Params: { id: string } }>(
+  typedApp.patch(
     '/api/contacts/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:update')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:update')], schema: { tags: ['Contacts'], summary: 'Update contact', params: z.object({ id: z.uuid() }), body: updateContactBody } },
     async (request, reply) => {
-      const parsed = updateContactBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       // Agents can only update their own contacts
       if (isAgent(request)) {
         const contact = await getContactById(request.params.id) as any;
@@ -377,17 +371,17 @@ export async function contactRoutes(app: FastifyInstance) {
           return reply.forbidden('Access denied');
         }
         // Prevent agents from reassigning ownership
-        if (parsed.data.ownerId !== undefined && parsed.data.ownerId !== request.user.sub) {
+        if (request.body.ownerId !== undefined && request.body.ownerId !== request.user.sub) {
           return reply.forbidden('Agents cannot reassign contact ownership');
         }
       }
 
       // Check if ownership is changing (for lead_assigned notification)
-      const previousOwnerId = parsed.data.ownerId !== undefined
+      const previousOwnerId = request.body.ownerId !== undefined
         ? (await getContactById(request.params.id) as any)?.ownerId
         : undefined;
 
-      const updated = await updateContact(request.params.id, parsed.data, {
+      const updated = await updateContact(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
@@ -398,22 +392,22 @@ export async function contactRoutes(app: FastifyInstance) {
       }
 
       // Emit tag_added if tags were updated
-      if (parsed.data.tagIds && parsed.data.tagIds.length > 0) {
+      if (request.body.tagIds && request.body.tagIds.length > 0) {
         eventBus.emit('tag_added', {
           contactId: updated.id,
-          tagIds: parsed.data.tagIds,
+          tagIds: request.body.tagIds,
           contact: updated as unknown as Record<string, unknown>,
         });
       }
 
       // Notify new owner about lead assignment (fire-and-forget)
       if (
-        parsed.data.ownerId &&
-        parsed.data.ownerId !== previousOwnerId &&
-        parsed.data.ownerId !== request.user.sub
+        request.body.ownerId &&
+        request.body.ownerId !== previousOwnerId &&
+        request.body.ownerId !== request.user.sub
       ) {
         createNotification({
-          userId: parsed.data.ownerId,
+          userId: request.body.ownerId,
           type: 'lead_assigned',
           title: `Lead assigned: ${updated.firstName}`,
           message: `Contact "${updated.firstName} ${updated.lastName ?? ''}" was assigned to you.`.trim(),
@@ -422,7 +416,7 @@ export async function contactRoutes(app: FastifyInstance) {
         }).catch(() => {});
 
         sendTelegramNotification(
-          parsed.data.ownerId,
+          request.body.ownerId,
           formatLeadAssignedNotification(updated, { firstName: '', lastName: '' }),
           'notifyLeadAssigned',
         ).catch(() => {});
@@ -433,9 +427,9 @@ export async function contactRoutes(app: FastifyInstance) {
   );
 
   // Delete contact
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/contacts/:id',
-    { onRequest: [app.authenticate, requirePermission('contacts:delete')] },
+    { onRequest: [app.authenticate, requirePermission('contacts:delete')], schema: { tags: ['Contacts'], summary: 'Delete contact', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       // Agents can only delete their own contacts
       if (isAgent(request)) {

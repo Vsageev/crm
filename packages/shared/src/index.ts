@@ -6,6 +6,7 @@ export type ContactSource =
   | 'manual'
   | 'csv_import'
   | 'web_form'
+  | 'quiz'
   | 'telegram'
   | 'email'
   | 'api'
@@ -76,7 +77,12 @@ export type Permission =
   | 'webhooks:read'
   | 'webhooks:create'
   | 'webhooks:update'
-  | 'webhooks:delete';
+  | 'webhooks:delete'
+  | 'knowledge-base:read'
+  | 'knowledge-base:create'
+  | 'knowledge-base:update'
+  | 'knowledge-base:delete'
+  | 'ai:suggest-reply';
 
 /**
  * Permissions granted to each role.
@@ -136,6 +142,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'webhooks:create',
     'webhooks:update',
     'webhooks:delete',
+    'knowledge-base:read',
+    'knowledge-base:create',
+    'knowledge-base:update',
+    'knowledge-base:delete',
+    'ai:suggest-reply',
   ],
   manager: [
     'users:read',
@@ -178,6 +189,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'webhooks:create',
     'webhooks:update',
     'webhooks:delete',
+    'knowledge-base:read',
+    'knowledge-base:create',
+    'knowledge-base:update',
+    'knowledge-base:delete',
+    'ai:suggest-reply',
   ],
   agent: [
     'contacts:read',
@@ -201,6 +217,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     'activities:update',
     'notifications:read',
     'forms:read',
+    'knowledge-base:read',
+    'ai:suggest-reply',
   ],
 } as const;
 

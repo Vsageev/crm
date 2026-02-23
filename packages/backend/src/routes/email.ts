@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -26,10 +27,12 @@ const connectEmailBody = z.object({
 });
 
 export async function emailRoutes(app: FastifyInstance) {
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+
   // List connected email accounts
-  app.get(
+  typedApp.get(
     '/api/email/accounts',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Email'], summary: 'List connected email accounts' } },
     async (_request, reply) => {
       const accounts = await listEmailAccounts();
       return reply.send({ entries: accounts });
@@ -37,9 +40,9 @@ export async function emailRoutes(app: FastifyInstance) {
   );
 
   // Get single email account
-  app.get<{ Params: { id: string } }>(
+  typedApp.get(
     '/api/email/accounts/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:read')] },
+    { onRequest: [app.authenticate, requirePermission('settings:read')], schema: { tags: ['Email'], summary: 'Get single email account', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const account = await getEmailAccountById(request.params.id);
       if (!account) {
@@ -50,17 +53,12 @@ export async function emailRoutes(app: FastifyInstance) {
   );
 
   // Connect a new email account
-  app.post(
+  typedApp.post(
     '/api/email/accounts',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Email'], summary: 'Connect a new email account', body: connectEmailBody } },
     async (request, reply) => {
-      const parsed = connectEmailBody.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest(z.prettifyError(parsed.error));
-      }
-
       try {
-        const account = await connectEmailAccount(parsed.data, {
+        const account = await connectEmailAccount(request.body, {
           userId: request.user.sub,
           ipAddress: request.ip,
           userAgent: request.headers['user-agent'],
@@ -74,9 +72,9 @@ export async function emailRoutes(app: FastifyInstance) {
   );
 
   // Disconnect (delete) an email account
-  app.delete<{ Params: { id: string } }>(
+  typedApp.delete(
     '/api/email/accounts/:id',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Email'], summary: 'Disconnect an email account', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       const deleted = await disconnectEmailAccount(request.params.id, {
         userId: request.user.sub,
@@ -93,9 +91,9 @@ export async function emailRoutes(app: FastifyInstance) {
   );
 
   // Test connection for an email account
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/email/accounts/:id/test',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Email'], summary: 'Test email account connection', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       try {
         const account = await testEmailAccount(request.params.id, {
@@ -117,9 +115,9 @@ export async function emailRoutes(app: FastifyInstance) {
   );
 
   // Trigger manual sync for an email account
-  app.post<{ Params: { id: string } }>(
+  typedApp.post(
     '/api/email/accounts/:id/sync',
-    { onRequest: [app.authenticate, requirePermission('settings:update')] },
+    { onRequest: [app.authenticate, requirePermission('settings:update')], schema: { tags: ['Email'], summary: 'Trigger manual email sync', params: z.object({ id: z.uuid() }) } },
     async (request, reply) => {
       try {
         const result = await syncEmailAccount(request.params.id);

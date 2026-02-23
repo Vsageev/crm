@@ -1,6 +1,6 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, AlertCircle } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { Button, Card, Input, Select, Textarea } from '../../ui';
 import { api } from '../../lib/api';
@@ -37,6 +37,7 @@ export function ContactFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isEdit = Boolean(id);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -75,6 +76,30 @@ export function ContactFormPage() {
     fetchContact();
   }, [id]);
 
+  function clearFieldError(field: string) {
+    if (fieldErrors[field]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  }
+
+  function focusFirstError(errors: Record<string, string>) {
+    const firstKey = Object.keys(errors)[0];
+    if (!firstKey || !formRef.current) return;
+    const el = formRef.current.querySelector<HTMLElement>(
+      `#${firstKey.replace(/\s+/g, '-')}`,
+    ) || formRef.current.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+      `[name="${firstKey}"]`,
+    );
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.focus();
+    }
+  }
+
   function validate(): boolean {
     const errors: Record<string, string> = {};
 
@@ -101,7 +126,11 @@ export function ContactFormPage() {
     }
 
     setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (Object.keys(errors).length > 0) {
+      focusFirstError(errors);
+      return false;
+    }
+    return true;
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -147,6 +176,7 @@ export function ContactFormPage() {
       }
     } catch (err) {
       setError(getErrorMessage(err));
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } finally {
       setLoading(false);
     }
@@ -176,35 +206,52 @@ export function ContactFormPage() {
       </div>
 
       <Card className={styles.formCard}>
-        <form onSubmit={handleSubmit} className={styles.form}>
-          {error && <div className={styles.alert}>{error}</div>}
+        <form ref={formRef} onSubmit={handleSubmit} className={styles.form}>
+          {error && (
+            <div className={styles.alert}>
+              <AlertCircle size={16} className={styles.alertIcon} />
+              {error}
+            </div>
+          )}
 
           <div className={styles.section}>
             <h3 className={styles.sectionTitle}>Basic Information</h3>
             <div className={styles.row}>
               <Input
                 label="First Name"
+                id="firstName"
                 placeholder="John"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => {
+                  setFirstName(e.target.value);
+                  clearFieldError('firstName');
+                }}
                 error={fieldErrors.firstName}
                 required
                 autoFocus
               />
               <Input
                 label="Last Name"
+                id="lastName"
                 placeholder="Doe"
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => {
+                  setLastName(e.target.value);
+                  clearFieldError('lastName');
+                }}
                 error={fieldErrors.lastName}
               />
             </div>
 
             <Input
               label="Position"
+              id="position"
               placeholder="Product Manager"
               value={position}
-              onChange={(e) => setPosition(e.target.value)}
+              onChange={(e) => {
+                setPosition(e.target.value);
+                clearFieldError('position');
+              }}
               error={fieldErrors.position}
             />
           </div>
@@ -214,18 +261,26 @@ export function ContactFormPage() {
             <div className={styles.row}>
               <Input
                 label="Email"
+                id="email"
                 type="email"
                 placeholder="john@company.com"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  clearFieldError('email');
+                }}
                 error={fieldErrors.email}
               />
               <Input
                 label="Phone"
+                id="phone"
                 type="tel"
                 placeholder="+1 (555) 000-0000"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => {
+                  setPhone(e.target.value);
+                  clearFieldError('phone');
+                }}
                 error={fieldErrors.phone}
               />
             </div>

@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Plus,
   Search,
@@ -14,6 +14,7 @@ import {
   Eye,
   Code,
   ClipboardList,
+  AlertCircle,
 } from 'lucide-react';
 import { Button, Card, Input, Textarea, Badge, Select } from '../../ui';
 import { api, ApiError } from '../../lib/api';
@@ -82,6 +83,100 @@ interface Submission {
 interface SubmissionsResponse {
   total: number;
   entries: Submission[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function asNullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function normalizeField(raw: unknown, index: number): WebFormField {
+  if (!isRecord(raw)) {
+    return { ...EMPTY_FIELD, position: index };
+  }
+
+  return {
+    id: asOptionalString(raw.id),
+    label: asString(raw.label),
+    fieldType: asString(raw.fieldType, 'text'),
+    placeholder: asOptionalString(raw.placeholder),
+    isRequired: Boolean(raw.isRequired),
+    position: typeof raw.position === 'number' ? raw.position : index,
+    options: Array.isArray(raw.options)
+      ? raw.options.filter((opt): opt is string => typeof opt === 'string')
+      : null,
+    defaultValue: asNullableString(raw.defaultValue),
+    contactFieldMapping: asNullableString(raw.contactFieldMapping),
+  };
+}
+
+function normalizeWebForm(raw: unknown): WebForm | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.id !== 'string' || typeof raw.name !== 'string') return null;
+
+  const fieldList = Array.isArray(raw.fields) ? raw.fields : [];
+  const status = raw.status === 'inactive' || raw.status === 'archived' ? raw.status : 'active';
+
+  return {
+    id: raw.id,
+    name: raw.name,
+    description: asNullableString(raw.description),
+    status,
+    pipelineId: asNullableString(raw.pipelineId),
+    pipelineStageId: asNullableString(raw.pipelineStageId),
+    assigneeId: asNullableString(raw.assigneeId),
+    submitButtonText: asString(raw.submitButtonText, 'Submit'),
+    successMessage: asString(raw.successMessage, 'Thank you for your submission!'),
+    redirectUrl: asNullableString(raw.redirectUrl),
+    fields: fieldList.map(normalizeField),
+    createdAt: asString(raw.createdAt),
+    updatedAt: asString(raw.updatedAt),
+  };
+}
+
+function normalizeSubmission(raw: unknown): Submission | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string') return null;
+
+  return {
+    id: raw.id,
+    data: isRecord(raw.data) ? raw.data : {},
+    status: asString(raw.status, 'new'),
+    ipAddress: asNullableString(raw.ipAddress),
+    referrerUrl: asNullableString(raw.referrerUrl),
+    utmSource: asNullableString(raw.utmSource),
+    createdAt: asString(raw.createdAt),
+  };
+}
+
+function normalizeWebFormsResponse(raw: unknown): { total: number; entries: WebForm[] } {
+  if (!isRecord(raw)) return { total: 0, entries: [] };
+  const entriesRaw = Array.isArray(raw.entries) ? raw.entries : [];
+  const entries = entriesRaw
+    .map(normalizeWebForm)
+    .filter((form): form is WebForm => form !== null);
+  const total = typeof raw.total === 'number' ? raw.total : entries.length;
+  return { total, entries };
+}
+
+function normalizeSubmissionsResponse(raw: unknown): { total: number; entries: Submission[] } {
+  if (!isRecord(raw)) return { total: 0, entries: [] };
+  const entriesRaw = Array.isArray(raw.entries) ? raw.entries : [];
+  const entries = entriesRaw
+    .map(normalizeSubmission)
+    .filter((submission): submission is Submission => submission !== null);
+  const total = typeof raw.total === 'number' ? raw.total : entries.length;
+  return { total, entries };
 }
 
 /* ── Field type metadata ── */
@@ -191,6 +286,9 @@ export function WebFormsTab() {
   // Preview
   const [previewFormId, setPreviewFormId] = useState<string | null>(null);
 
+  // Refs
+  const modalBodyRef = useRef<HTMLDivElement>(null);
+
   /* ── Fetch forms ── */
 
   const fetchForms = useCallback(async () => {
@@ -203,8 +301,13 @@ export function WebFormsTab() {
       if (statusFilter) params.set('status', statusFilter);
 
       const data = await api<WebFormsResponse>(`/web-forms?${params}`);
-      setForms(data.entries);
-      setTotal(data.total);
+      const normalized = normalizeWebFormsResponse(data);
+      setForms(normalized.entries);
+      setTotal(normalized.total);
+
+      if (!Array.isArray((data as unknown as { entries?: unknown }).entries)) {
+        setError('Unexpected response format from server. Some forms may be hidden.');
+      }
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError('Failed to load forms');
@@ -270,6 +373,31 @@ export function WebFormsTab() {
     setFormError('');
   }
 
+  function clearFormError(field: string) {
+    if (formErrors[field]) {
+      setFormErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  }
+
+  function scrollToFirstError(errors: Record<string, string>) {
+    const firstKey = Object.keys(errors)[0];
+    if (!firstKey || !modalBodyRef.current) return;
+
+    // Try to find the element by data-error-key attribute
+    const el = modalBodyRef.current.querySelector<HTMLElement>(
+      `[data-error-key="${firstKey}"]`,
+    );
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const input = el.querySelector<HTMLInputElement | HTMLSelectElement>('input, select, textarea');
+      input?.focus();
+    }
+  }
+
   function validateForm(): boolean {
     const errors: Record<string, string> = {};
     if (!form.name.trim()) errors.name = 'Name is required';
@@ -286,7 +414,12 @@ export function WebFormsTab() {
       }
     }
     setFormErrors(errors);
-    return Object.keys(errors).length === 0;
+    if (Object.keys(errors).length > 0) {
+      // Use requestAnimationFrame to ensure DOM is updated before scrolling
+      requestAnimationFrame(() => scrollToFirstError(errors));
+      return false;
+    }
+    return true;
   }
 
   async function handleSave(e: FormEvent) {
@@ -299,14 +432,9 @@ export function WebFormsTab() {
     try {
       const body: Record<string, unknown> = {
         name: form.name.trim(),
-        description: form.description.trim() || null,
         status: form.status,
         submitButtonText: form.submitButtonText.trim() || 'Submit',
         successMessage: form.successMessage.trim() || 'Thank you for your submission!',
-        redirectUrl: form.redirectUrl.trim() || null,
-        pipelineId: form.pipelineId || null,
-        pipelineStageId: form.pipelineStageId || null,
-        assigneeId: form.assigneeId || null,
         fields: form.fields.map((f, i) => ({
           label: f.label.trim(),
           fieldType: f.fieldType,
@@ -318,6 +446,22 @@ export function WebFormsTab() {
           contactFieldMapping: f.contactFieldMapping || undefined,
         })),
       };
+
+      // Only include optional fields if they have values, or if editing (send null to clear)
+      if (form.description.trim()) body.description = form.description.trim();
+      else if (editingId) body.description = null;
+
+      if (form.redirectUrl.trim()) body.redirectUrl = form.redirectUrl.trim();
+      else if (editingId) body.redirectUrl = null;
+
+      if (form.pipelineId) body.pipelineId = form.pipelineId;
+      else if (editingId) body.pipelineId = null;
+
+      if (form.pipelineStageId) body.pipelineStageId = form.pipelineStageId;
+      else if (editingId) body.pipelineStageId = null;
+
+      if (form.assigneeId) body.assigneeId = form.assigneeId;
+      else if (editingId) body.assigneeId = null;
 
       if (editingId) {
         await api(`/web-forms/${editingId}`, {
@@ -337,6 +481,8 @@ export function WebFormsTab() {
     } catch (err) {
       if (err instanceof ApiError) setFormError(err.message);
       else setFormError('Failed to save form');
+      // Scroll modal to top to show the error
+      modalBodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     } finally {
       setSaving(false);
     }
@@ -367,6 +513,7 @@ export function WebFormsTab() {
       ...f,
       fields: [...f.fields, { ...EMPTY_FIELD, position: f.fields.length }],
     }));
+    clearFormError('fields');
   }
 
   function removeField(index: number) {
@@ -442,8 +589,9 @@ export function WebFormsTab() {
     setSubmissionsLoading(true);
     try {
       const data = await api<SubmissionsResponse>(`/web-forms/${formId}/submissions?limit=50`);
-      setSubmissions(data.entries);
-      setSubmissionsTotal(data.total);
+      const normalized = normalizeSubmissionsResponse(data);
+      setSubmissions(normalized.entries);
+      setSubmissionsTotal(normalized.total);
     } catch {
       setSubmissions([]);
       setSubmissionsTotal(0);
@@ -485,8 +633,18 @@ export function WebFormsTab() {
           </Button>
         </div>
 
-        {success && <div className={styles.success}>{success}</div>}
-        {error && <div className={styles.alert}>{error}</div>}
+        {success && (
+          <div className={styles.success}>
+            <Check size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+            {success}
+          </div>
+        )}
+        {error && (
+          <div className={styles.alert}>
+            <AlertCircle size={16} className={styles.alertIcon} />
+            {error}
+          </div>
+        )}
 
         <Card>
           <div className={styles.toolbar}>
@@ -709,6 +867,7 @@ export function WebFormsTab() {
                     </p>
                   )}
                   {previewForm.fields
+                    .slice()
                     .sort((a, b) => a.position - b.position)
                     .map((field, i) => (
                       <div key={i} style={{ marginBottom: 14 }}>
@@ -877,6 +1036,7 @@ export function WebFormsTab() {
       {modalOpen && (
         <div className={styles.modalOverlay} onClick={closeModal}>
           <div
+            ref={modalBodyRef}
             className={styles.modal}
             style={{ maxWidth: 640 }}
             onClick={(e) => e.stopPropagation()}
@@ -891,18 +1051,28 @@ export function WebFormsTab() {
             </div>
             <form onSubmit={handleSave}>
               <div className={styles.modalBody}>
-                {formError && <div className={styles.alert}>{formError}</div>}
+                {formError && (
+                  <div className={styles.alert}>
+                    <AlertCircle size={16} className={styles.alertIcon} />
+                    {formError}
+                  </div>
+                )}
 
                 {/* Basic info */}
-                <Input
-                  label="Form Name"
-                  placeholder="e.g. Contact Us"
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  error={formErrors.name}
-                  required
-                  autoFocus
-                />
+                <div data-error-key="name">
+                  <Input
+                    label="Form Name"
+                    placeholder="e.g. Contact Us"
+                    value={form.name}
+                    onChange={(e) => {
+                      setForm((f) => ({ ...f, name: e.target.value }));
+                      clearFormError('name');
+                    }}
+                    error={formErrors.name}
+                    required
+                    autoFocus
+                  />
+                </div>
                 <Textarea
                   label="Description"
                   placeholder="Optional description shown on the form"
@@ -1041,7 +1211,8 @@ export function WebFormsTab() {
                   </div>
 
                   {formErrors.fields && (
-                    <div style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: 8 }}>
+                    <div data-error-key="fields" className={styles.fieldError} style={{ marginBottom: 8 }}>
+                      <AlertCircle size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
                       {formErrors.fields}
                     </div>
                   )}
@@ -1162,14 +1333,16 @@ export function WebFormsTab() {
                               gap: 8,
                             }}
                           >
-                            <div>
+                            <div data-error-key={`field_${fi}_label`}>
                               <input
                                 type="text"
                                 placeholder="Field label"
                                 value={field.label}
-                                onChange={(e) =>
-                                  updateField(fi, { label: e.target.value })
-                                }
+                                onChange={(e) => {
+                                  updateField(fi, { label: e.target.value });
+                                  clearFormError(`field_${fi}_label`);
+                                }}
+                                className={formErrors[`field_${fi}_label`] ? styles.fieldErrorBorder : undefined}
                                 style={{
                                   width: '100%',
                                   padding: '6px 8px',
@@ -1181,7 +1354,7 @@ export function WebFormsTab() {
                                 }}
                               />
                               {formErrors[`field_${fi}_label`] && (
-                                <span style={{ fontSize: 12, color: 'var(--color-error)' }}>
+                                <span className={styles.fieldError}>
                                   {formErrors[`field_${fi}_label`]}
                                 </span>
                               )}
@@ -1332,7 +1505,7 @@ export function WebFormsTab() {
                                 </button>
                               </div>
                               {formErrors[`field_${fi}_options`] && (
-                                <span style={{ fontSize: 12, color: 'var(--color-error)' }}>
+                                <span data-error-key={`field_${fi}_options`} className={styles.fieldError}>
                                   {formErrors[`field_${fi}_options`]}
                                 </span>
                               )}
