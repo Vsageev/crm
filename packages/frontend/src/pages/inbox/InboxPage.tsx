@@ -22,12 +22,10 @@ import {
   Download,
   Play,
   MapPin,
-  Phone,
 } from 'lucide-react';
 import { api, apiUpload, ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/useAuth';
 import { toast } from '../../stores/toast';
-import { usePhone } from '../../features/phone/usePhone';
 import { Tooltip } from '../../ui';
 import styles from './InboxPage.module.css';
 
@@ -51,7 +49,7 @@ interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'novofon' | 'other';
+  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -133,7 +131,6 @@ const CHANNEL_LABELS: Record<Conversation['channelType'], string> = {
   web_chat: 'Web Chat',
   whatsapp: 'WhatsApp',
   instagram: 'Instagram',
-  novofon: 'Novofon',
   other: 'Other',
 };
 
@@ -345,7 +342,6 @@ function formatDuration(seconds: number | undefined): string {
 
 export function InboxPage() {
   const { user } = useAuth();
-  const { makeCall, providers, callState } = usePhone();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Conversation list state
@@ -1004,24 +1000,6 @@ export function InboxPage() {
                 </div>
               </div>
               <div className={styles.threadActions}>
-                {providers.length > 0 && activeConversation.contact?.phone && callState.status === 'idle' && (
-                  <Tooltip label={`Call ${activeConversation.contact.phone}`}>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => {
-                        void makeCall(
-                          activeConversation.contact!.phone!,
-                          getContactName(activeConversation.contact),
-                          activeConversation.contact!.id,
-                        ).catch((err) => {
-                          toast.error(err instanceof Error ? err.message : 'Failed to start call');
-                        });
-                      }}
-                    >
-                      <Phone size={16} />
-                    </button>
-                  </Tooltip>
-                )}
                 {activeConversation.status === 'open' ? (
                   <>
                     <Tooltip label="Close conversation">

@@ -18,8 +18,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.0",
-    "shared": "workspace:*",
-    "voximplant-websdk": "4.11.1-2965"
+    "shared": "workspace:*"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

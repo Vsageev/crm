@@ -13,7 +13,6 @@ import {
   LogOut,
 } from 'lucide-react';
 import { useAuth } from '../stores/useAuth';
-import { SoftphoneWidget } from '../features/phone/SoftphoneWidget';
 import { Tooltip } from '../ui';
 import styles from './Sidebar.module.css';
 
@@ -56,7 +55,6 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         ))}
       </nav>
       <div className={styles.bottom}>
-        <SoftphoneWidget />
         <NavLink
           to="/settings"
           className={({ isActive }) =>

@@ -29,12 +29,6 @@ const envSchema = z.object({
   INSTAGRAM_WEBHOOK_BASE_URL: z.string().url().optional(),
   INSTAGRAM_APP_SECRET: z.string().optional(),
 
-  // Novofon VoIP
-  NOVOFON_WEBHOOK_BASE_URL: z.string().url().optional(),
-
-  // Voximplant VoIP
-  VOXIMPLANT_WEBHOOK_BASE_URL: z.string().url().optional(),
-
   // Media / file uploads
   UPLOAD_DIR: z.string().default('./uploads'),
 

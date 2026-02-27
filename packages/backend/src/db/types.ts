@@ -70,7 +70,7 @@ export interface Contact {
   position: string | null;
   companyId: string | null;
   ownerId: string | null;
-  source: 'manual' | 'csv_import' | 'web_form' | 'quiz' | 'telegram' | 'email' | 'api' | 'novofon' | 'voximplant' | 'other';
+  source: 'manual' | 'csv_import' | 'web_form' | 'quiz' | 'telegram' | 'email' | 'api' | 'other';
   telegramId: string | null;
   whatsappPhoneId: string | null;
   instagramScopedId: string | null;
@@ -128,7 +128,7 @@ export interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'other';
+  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -543,37 +543,6 @@ export interface InstagramPage {
   webhookVerifyToken: string | null;
   autoGreetingEnabled: boolean;
   autoGreetingText: string | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface NovofonAccount {
-  id: string;
-  apiKey: string;
-  apiSecret: string;
-  sipLogin: string;
-  accountName: string | null;
-  webhookConfigured: boolean;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface VoximplantAccount {
-  id: string;
-  accountId: string;
-  keyId: string;
-  privateKey: string;
-  callbackRuleId: number | null;
-  agentPhoneNumber: string | null;
-  callerId: string | null;
-  accountName: string | null;
-  webhookConfigured: boolean;
   status: 'active' | 'inactive' | 'error';
   statusMessage: string | null;
   createdById: string | null;

@@ -11,23 +11,19 @@ import { WebChatTab } from './WebChatTab';
 import { EmailAccountsTab } from './EmailAccountsTab';
 import { WhatsAppTab } from './WhatsAppTab';
 import { InstagramAccountsTab } from './InstagramAccountsTab';
-import { NovofonTab } from './NovofonTab';
-import { VoximplantTab } from './VoximplantTab';
 import { KommoTab } from './KommoTab';
 import { AIKnowledgeBaseTab } from './AIKnowledgeBaseTab';
 import { ApiKeysTab } from './ApiKeysTab';
 import { BackupsTab } from './BackupsTab';
 import styles from './SettingsPage.module.css';
 
-type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'kommo' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
+type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'kommo' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
 
 const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
   { key: 'bots', label: 'Telegram Bots', icon: Bot },
   { key: 'email', label: 'Email', icon: Mail },
   { key: 'whatsapp', label: 'WhatsApp', icon: Phone },
   { key: 'instagram', label: 'Instagram', icon: Instagram },
-  { key: 'novofon', label: 'Novofon VoIP', icon: Phone },
-  { key: 'voximplant', label: 'Voximplant VoIP', icon: Phone },
   { key: 'kommo', label: 'amoCRM', icon: ArrowRightLeft },
   { key: 'web-chat', label: 'Web Chat', icon: MessageCircle },
   { key: 'templates', label: 'Quick Replies', icon: MessageSquareText },
@@ -66,8 +62,6 @@ export function SettingsPage() {
       {activeTab === 'email' && <EmailAccountsTab />}
       {activeTab === 'whatsapp' && <WhatsAppTab />}
       {activeTab === 'instagram' && <InstagramAccountsTab />}
-      {activeTab === 'novofon' && <NovofonTab />}
-      {activeTab === 'voximplant' && <VoximplantTab />}
       {activeTab === 'kommo' && <KommoTab />}
       {activeTab === 'web-chat' && <WebChatTab />}
       {activeTab === 'templates' && <TemplatesTab />}

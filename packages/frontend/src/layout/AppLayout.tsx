@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Menu, X } from 'lucide-react';
-import { PhoneProvider } from '../features/phone';
-import { IncomingCallBanner } from '../features/phone/IncomingCallBanner';
 import { Tooltip } from '../ui';
 import styles from './AppLayout.module.css';
 
@@ -11,8 +9,7 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <PhoneProvider>
-      <div className={styles.layout}>
+    <div className={styles.layout}>
         {/* Mobile header */}
         <header className={styles.mobileHeader}>
           <Tooltip label="Open menu" position="right">
@@ -50,8 +47,6 @@ export function AppLayout() {
           <Outlet />
         </main>
 
-        <IncomingCallBanner />
       </div>
-    </PhoneProvider>
   );
 }

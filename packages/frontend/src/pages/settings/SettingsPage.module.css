@@ -213,64 +213,6 @@
   flex: 1;
 }
 
-/* Voximplant form needs a wider, responsive layout than the shared connectForm */
-.voximplantConnectForm {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: var(--space-3);
-  align-items: end;
-  width: 100%;
-  max-width: 100%;
-}
-
-.voximplantConnectForm > div {
-  grid-column: span 4;
-  min-width: 0;
-}
-
-.voximplantConnectForm > button {
-  grid-column: span 2;
-  justify-self: start;
-}
-
-.voximplantConnectForm input {
-  width: 100%;
-}
-
-.voximplantConnectForm > .voximplantUploadRow {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.voximplantLoadedBadge {
-  font-size: 13px;
-  color: var(--color-success);
-}
-
-@media (max-width: 1100px) {
-  .voximplantConnectForm > div {
-    grid-column: span 6;
-  }
-
-  .voximplantConnectForm > button {
-    grid-column: span 3;
-  }
-}
-
-@media (max-width: 720px) {
-  .voximplantConnectForm > div,
-  .voximplantConnectForm > button {
-    grid-column: 1 / -1;
-  }
-
-  .voximplantConnectForm > button {
-    justify-self: stretch;
-  }
-}
-
 /* Template list */
 .templateList {
   display: flex;

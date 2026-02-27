@@ -612,7 +612,6 @@ All plans include a 14-day free trial. No credit card required for trial.`,
     title: 'Supported Integrations',
     content: `Our platform integrates with:
 - Messaging: Telegram, WhatsApp Business, Instagram DM, Email (IMAP/SMTP)
-- VoIP: Novofon, Voximplant
 - Payments: Stripe (coming soon)
 - Calendar: Google Calendar, Outlook (via API)
 - Storage: Google Drive, Dropbox (file attachments)
