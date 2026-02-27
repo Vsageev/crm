@@ -58,6 +58,7 @@ import { knowledgeBaseRoutes } from './routes/knowledge-base.js';
 import { quizRoutes } from './routes/quizzes.js';
 import { batchRoutes } from './routes/batch.js';
 import { messageDraftRoutes } from './routes/message-drafts.js';
+import { kommoRoutes } from './routes/kommo.js';
 import { registerIdempotency } from './middleware/idempotency.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
@@ -142,6 +143,7 @@ export async function buildApp() {
   await app.register(knowledgeBaseRoutes);
   await app.register(quizRoutes);
   await app.register(batchRoutes);
+  await app.register(kommoRoutes);
 
   return app;
 }

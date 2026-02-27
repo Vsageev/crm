@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bot, MessageSquareText, Bell, Send, Workflow, FileText, Mail, MessageCircle, Phone, Instagram, Brain, Key, HardDrive } from 'lucide-react';
+import { Bot, MessageSquareText, Bell, Send, Workflow, FileText, Mail, MessageCircle, Phone, Instagram, Brain, Key, HardDrive, ArrowRightLeft } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { TelegramBotsTab } from './TelegramBotsTab';
 import { TemplatesTab } from './TemplatesTab';
@@ -13,12 +13,13 @@ import { WhatsAppTab } from './WhatsAppTab';
 import { InstagramAccountsTab } from './InstagramAccountsTab';
 import { NovofonTab } from './NovofonTab';
 import { VoximplantTab } from './VoximplantTab';
+import { KommoTab } from './KommoTab';
 import { AIKnowledgeBaseTab } from './AIKnowledgeBaseTab';
 import { ApiKeysTab } from './ApiKeysTab';
 import { BackupsTab } from './BackupsTab';
 import styles from './SettingsPage.module.css';
 
-type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
+type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'novofon' | 'voximplant' | 'kommo' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
 
 const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
   { key: 'bots', label: 'Telegram Bots', icon: Bot },
@@ -27,6 +28,7 @@ const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
   { key: 'instagram', label: 'Instagram', icon: Instagram },
   { key: 'novofon', label: 'Novofon VoIP', icon: Phone },
   { key: 'voximplant', label: 'Voximplant VoIP', icon: Phone },
+  { key: 'kommo', label: 'amoCRM', icon: ArrowRightLeft },
   { key: 'web-chat', label: 'Web Chat', icon: MessageCircle },
   { key: 'templates', label: 'Quick Replies', icon: MessageSquareText },
   { key: 'telegram-templates', label: 'Telegram Templates', icon: Send },
@@ -66,6 +68,7 @@ export function SettingsPage() {
       {activeTab === 'instagram' && <InstagramAccountsTab />}
       {activeTab === 'novofon' && <NovofonTab />}
       {activeTab === 'voximplant' && <VoximplantTab />}
+      {activeTab === 'kommo' && <KommoTab />}
       {activeTab === 'web-chat' && <WebChatTab />}
       {activeTab === 'templates' && <TemplatesTab />}
       {activeTab === 'telegram-templates' && <TelegramTemplatesTab />}

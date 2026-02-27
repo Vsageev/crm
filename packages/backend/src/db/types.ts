@@ -581,6 +581,19 @@ export interface VoximplantAccount {
   updatedAt: string;
 }
 
+export interface KommoAccount {
+  id: string;
+  subdomain: string;
+  accessToken: string;
+  accountName: string | null;
+  accountId: number | null;
+  status: 'active' | 'inactive' | 'error';
+  statusMessage: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MessageDraft {
   id: string;
   conversationId: string;
