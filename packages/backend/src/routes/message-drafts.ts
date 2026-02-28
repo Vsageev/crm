@@ -88,6 +88,12 @@ export async function messageDraftRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const draft = await upsertDraft(request.body);
+      if (!draft) {
+        throw ApiError.notFound(
+          'conversation_not_found',
+          `Conversation ${request.body.conversationId} not found`,
+        );
+      }
       return reply.send(draft);
     },
   );

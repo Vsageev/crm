@@ -25,7 +25,6 @@ import {
 } from 'lucide-react';
 import { api, apiUpload, ApiError } from '../../lib/api';
 import { useAuth } from '../../stores/useAuth';
-import { toast } from '../../stores/toast';
 import { Tooltip } from '../../ui';
 import styles from './InboxPage.module.css';
 
@@ -49,7 +48,7 @@ interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'internal' | 'other';
+  channelType: string;
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -125,10 +124,12 @@ interface InlineKeyboardButton {
 
 /* ── Channel labels ── */
 
-const CHANNEL_LABELS: Record<Conversation['channelType'], string> = {
+const CHANNEL_LABELS: Record<string, string> = {
   telegram: 'Telegram',
   internal: 'Internal',
   other: 'Other',
+  email: 'Email',
+  web_chat: 'Web Chat',
 };
 
 const INBOX_REFRESH_INTERVAL_MS = 5000;
@@ -501,7 +502,7 @@ export function InboxPage() {
     return () => window.clearInterval(intervalId);
   }, [fetchConversations, fetchMessages, selectedId]);
 
-  /* ── Scroll to bottom on new messages ── */
+  /* ── Scroll to bottom on new messages or streaming ── */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -911,9 +912,12 @@ export function InboxPage() {
               onChange={(e) => setChannelFilter(e.target.value)}
               className={styles.statusFilter}
             >
-              <option value="">All</option>
+              <option value="">All channels</option>
+              <option value="email">Email</option>
+              <option value="web_chat">Web Chat</option>
+              <option value="telegram">Telegram</option>
               <option value="internal">Internal</option>
-              <option value="telegram">Inbound</option>
+              <option value="other">Other</option>
             </select>
             <select
               value={statusFilter}
@@ -971,10 +975,10 @@ export function InboxPage() {
                       )}
                       <div className={styles.convFooter}>
                         <span className={styles.convPreview}>
-                          {conv.subject || CHANNEL_LABELS[conv.channelType]}
+                          {conv.subject || CHANNEL_LABELS[conv.channelType] || conv.channelType}
                         </span>
                         <span className={styles.channelBadge}>
-                          {CHANNEL_LABELS[conv.channelType]}
+                          {CHANNEL_LABELS[conv.channelType] || conv.channelType}
                         </span>
                         {conv.isUnread && <span className={styles.unreadDot} />}
                         {draftConversationIds.has(conv.id) && <span className={styles.draftBadge}>Draft</span>}
@@ -1075,13 +1079,14 @@ export function InboxPage() {
                           : styles.messageOutbound,
                       ].join(' ');
 
-                      const senderName = msg.sender
-                        ? [msg.sender.firstName, msg.sender.lastName]
-                            .filter(Boolean)
-                            .join(' ')
-                        : msg.direction === 'inbound'
-                          ? getContactName(activeConversation.contact)
-                          : 'You';
+                      const senderName =
+                        msg.direction === 'outbound'
+                          ? 'You'
+                          : msg.sender
+                            ? [msg.sender.firstName, msg.sender.lastName]
+                                .filter(Boolean)
+                                .join(' ')
+                            : getContactName(activeConversation.contact);
 
                       const inlineKb = getMessageInlineKeyboard(msg);
                       const contentHtml = msg.content && hasHtmlFormatting(msg.content);
@@ -1551,14 +1556,16 @@ export function InboxPage() {
                     rows={1}
                   />
                 </div>
-                <button
-                  className={styles.sendBtn}
-                  onClick={handleSend}
-                  disabled={(!replyText.trim() && !attachedFile) || sending}
-                  title="Send message"
-                >
-                  <Send size={16} />
-                </button>
+                <Tooltip label="Send message">
+                  <button
+                    className={styles.sendBtn}
+                    onClick={handleSend}
+                    disabled={(!replyText.trim() && !attachedFile) || sending}
+                    aria-label="Send message"
+                  >
+                    <Send size={16} />
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </div>

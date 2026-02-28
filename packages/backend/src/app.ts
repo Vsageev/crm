@@ -35,6 +35,8 @@ import { folderRoutes } from './routes/folders.js';
 import { cardRoutes } from './routes/cards.js';
 import { boardRoutes } from './routes/boards.js';
 import { storageRoutes } from './routes/storage.js';
+import { agentRoutes } from './routes/agents.js';
+import { agentChatRoutes } from './routes/agent-chat.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
   if (!env.TLS_CERT_PATH || !env.TLS_KEY_PATH) return undefined;
@@ -94,6 +96,8 @@ export async function buildApp() {
   await app.register(cardRoutes);
   await app.register(boardRoutes);
   await app.register(storageRoutes);
+  await app.register(agentRoutes);
+  await app.register(agentChatRoutes);
 
   return app;
 }

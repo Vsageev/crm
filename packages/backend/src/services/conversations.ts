@@ -1,5 +1,6 @@
 import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
+import { isAgentConversationRecord } from './conversation-scope.js';
 
 export interface ConversationListQuery {
   contactId?: string;
@@ -34,6 +35,7 @@ export async function listConversations(query: ConversationListQuery) {
   const offset = query.offset ?? 0;
 
   const predicate = (r: Record<string, unknown>) => {
+    if (isAgentConversationRecord(r)) return false;
     if (query.contactId && r.contactId !== query.contactId) return false;
     if (query.assigneeId && r.assigneeId !== query.assigneeId) return false;
     if (query.channelType && r.channelType !== query.channelType) return false;
@@ -89,7 +91,7 @@ export async function listConversations(query: ConversationListQuery) {
 
 export async function getConversationById(id: string) {
   const conversation = store.getById('conversations', id);
-  if (!conversation) return null;
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
 
   const contact = conversation.contactId
     ? store.getById('contacts', conversation.contactId as string)
@@ -145,6 +147,9 @@ export async function updateConversation(
   data: UpdateConversationData,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
+  const existing = store.getById('conversations', id);
+  if (!existing || isAgentConversationRecord(existing)) return null;
+
   const setData: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value !== undefined) {
@@ -177,6 +182,8 @@ export async function updateConversation(
 }
 
 export async function markConversationRead(id: string) {
+  const existing = store.getById('conversations', id);
+  if (!existing || isAgentConversationRecord(existing)) return null;
   const updated = store.update('conversations', id, { isUnread: false });
   return updated ?? null;
 }
@@ -185,6 +192,9 @@ export async function deleteConversation(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
+  const existing = store.getById('conversations', id);
+  if (!existing || isAgentConversationRecord(existing)) return false;
+
   // Delete all messages and drafts belonging to this conversation
   store.deleteWhere('messages', (r: any) => r.conversationId === id);
   store.deleteWhere('messageDrafts', (r: any) => r.conversationId === id);

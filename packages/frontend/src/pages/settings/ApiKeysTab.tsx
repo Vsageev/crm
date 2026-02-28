@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Copy, Check, AlertTriangle } from 'lucide-react';
-import { Button, Card, Badge, ApiKeyFormFields, type ApiKeyFormData } from '../../ui';
+import { Button, Card, Badge, ApiKeyFormFields, Tooltip, type ApiKeyFormData } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import styles from './SettingsPage.module.css';
 
@@ -294,13 +294,15 @@ export function ApiKeysTab() {
                     )}
                   </div>
                   <div className={styles.templateActions}>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => openEdit(key)}
-                      title="Edit API key"
-                    >
-                      <Pencil size={15} />
-                    </button>
+                    <Tooltip label="Edit API key">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => openEdit(key)}
+                        aria-label="Edit API key"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                    </Tooltip>
                     {deletingId === key.id ? (
                       <>
                         <Button
@@ -320,13 +322,15 @@ export function ApiKeysTab() {
                         </Button>
                       </>
                     ) : (
-                      <button
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        onClick={() => setDeletingId(key.id)}
-                        title="Delete API key"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      <Tooltip label="Delete API key">
+                        <button
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          onClick={() => setDeletingId(key.id)}
+                          aria-label="Delete API key"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
                 </div>
@@ -372,13 +376,15 @@ export function ApiKeysTab() {
                   wordBreak: 'break-all',
                 }}>
                   <span style={{ flex: 1 }}>{createdKey}</span>
-                  <button
-                    className={styles.iconBtn}
-                    onClick={handleCopy}
-                    title="Copy to clipboard"
-                  >
-                    {copied ? <Check size={16} /> : <Copy size={16} />}
-                  </button>
+                  <Tooltip label={copied ? 'Copied' : 'Copy to clipboard'}>
+                    <button
+                      className={styles.iconBtn}
+                      onClick={handleCopy}
+                      aria-label="Copy to clipboard"
+                    >
+                      {copied ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </Tooltip>
                 </div>
                 <div className={styles.modalFooter} style={{ padding: 0, borderTop: 'none' }}>
                   <Button variant="secondary" size="md" onClick={closeModal}>

@@ -1,0 +1,18 @@
+# {{agentName}}
+
+{{description}}
+
+## Instructions
+
+Add agent-specific instructions here.
+
+Default workspace behavior:
+- Work in the current folder by default for commands and file operations.
+- Use other paths only if the user asks or the task requires it; ask first when avoidable.
+
+For long-running tasks, report progress and final output in agent chat:
+- Use `POST $WORKSPACE_API_URL/api/agents/:agentId/chat/messages` with `{"conversationId":"...","content":"...","isFinal":false}`
+- Send the final answer through the same endpoint with `isFinal: true`
+
+When you need Workspace app API endpoints or schemas, use the live reference at `$WORKSPACE_API_URL/docs` (OpenAPI JSON: `$WORKSPACE_API_URL/docs/json`).
+This API is the Workspace app backend interface for reading and updating workspace data (for example cards, messages, storage, boards, folders, tags, and interacting with other agents).

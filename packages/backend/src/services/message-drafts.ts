@@ -1,4 +1,5 @@
 import { store } from '../db/index.js';
+import { isAgentConversationRecord } from './conversation-scope.js';
 
 export interface DraftListQuery {
   conversationId?: string;
@@ -16,9 +17,21 @@ export interface UpsertDraftData {
 export async function listDrafts(query: DraftListQuery) {
   const limit = query.limit ?? 50;
   const offset = query.offset ?? 0;
+  const conversationScopeCache = new Map<string, boolean>();
+
+  const isInboxConversation = (conversationId: string): boolean => {
+    const cached = conversationScopeCache.get(conversationId);
+    if (cached !== undefined) return cached;
+    const conversation = store.getById('conversations', conversationId);
+    const isInbox = Boolean(conversation && !isAgentConversationRecord(conversation));
+    conversationScopeCache.set(conversationId, isInbox);
+    return isInbox;
+  };
 
   const predicate = (r: Record<string, unknown>) => {
-    if (query.conversationId && r.conversationId !== query.conversationId) return false;
+    const conversationId = r.conversationId as string | undefined;
+    if (!conversationId || !isInboxConversation(conversationId)) return false;
+    if (query.conversationId && conversationId !== query.conversationId) return false;
     return true;
   };
 
@@ -35,10 +48,17 @@ export async function listDrafts(query: DraftListQuery) {
 }
 
 export async function getDraftById(id: string) {
-  return store.getById('messageDrafts', id);
+  const draft = store.getById('messageDrafts', id);
+  if (!draft) return null;
+  const conversation = store.getById('conversations', draft.conversationId as string);
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
+  return draft;
 }
 
 export async function upsertDraft(data: UpsertDraftData) {
+  const conversation = store.getById('conversations', data.conversationId);
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
+
   const existing = store.findOne(
     'messageDrafts',
     (r) => r.conversationId === data.conversationId,
@@ -62,10 +82,17 @@ export async function upsertDraft(data: UpsertDraftData) {
 }
 
 export async function deleteDraft(id: string) {
+  const draft = store.getById('messageDrafts', id);
+  if (!draft) return false;
+  const conversation = store.getById('conversations', draft.conversationId as string);
+  if (!conversation || isAgentConversationRecord(conversation)) return false;
   return store.delete('messageDrafts', id);
 }
 
 export async function deleteDraftByConversationId(conversationId: string) {
+  const conversation = store.getById('conversations', conversationId);
+  if (!conversation || isAgentConversationRecord(conversation)) return false;
+
   const deleted = store.deleteWhere(
     'messageDrafts',
     (r: any) => r.conversationId === conversationId,

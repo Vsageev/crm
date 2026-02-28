@@ -146,7 +146,7 @@ export const conversationSchema = z
     id: z.string(),
     contactId: z.string(),
     assigneeId: z.string().nullable(),
-    channelType: z.enum(['telegram', 'internal', 'other']),
+    channelType: z.string(),
     status: z.enum(['open', 'closed', 'archived']),
     subject: z.string().nullable(),
     externalId: z.string().nullable(),

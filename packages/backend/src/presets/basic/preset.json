@@ -1,0 +1,9 @@
+{
+  "id": "basic",
+  "name": "Basic Agent",
+  "description": "A simple agent with CLAUDE.MD and AGENT.MD files",
+  "files": [
+    { "type": "file", "name": "CLAUDE.MD", "template": "CLAUDE.MD.hbs" },
+    { "type": "symlink", "name": "AGENT.MD", "target": "CLAUDE.MD" }
+  ]
+}

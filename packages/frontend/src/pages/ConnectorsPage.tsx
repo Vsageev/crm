@@ -3,7 +3,7 @@ import {
   Cable, RefreshCw, Trash2, Bot, Plus, X, Settings, AlertCircle, CheckCircle2,
 } from 'lucide-react';
 import { PageHeader } from '../layout';
-import { Button, Input, Badge, Card } from '../ui';
+import { Button, Input, Badge, Card, Tooltip } from '../ui';
 import { api, ApiError } from '../lib/api';
 import styles from './ConnectorsPage.module.css';
 
@@ -312,24 +312,28 @@ export function ConnectorsPage() {
                     </div>
                   </div>
                   <div className={styles.connectorActions}>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => openSettings(connector)}
-                      title="Settings"
-                    >
-                      <Settings size={15} />
-                    </button>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => handleRefresh(connector.id)}
-                      disabled={refreshingId === connector.id}
-                      title="Refresh"
-                    >
-                      <RefreshCw
-                        size={15}
-                        className={refreshingId === connector.id ? 'spinning' : ''}
-                      />
-                    </button>
+                    <Tooltip label="Settings">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => openSettings(connector)}
+                        aria-label="Settings"
+                      >
+                        <Settings size={15} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label="Refresh">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => handleRefresh(connector.id)}
+                        disabled={refreshingId === connector.id}
+                        aria-label="Refresh"
+                      >
+                        <RefreshCw
+                          size={15}
+                          className={refreshingId === connector.id ? 'spinning' : ''}
+                        />
+                      </button>
+                    </Tooltip>
                     {deletingId === connector.id ? (
                       <>
                         <Button
@@ -349,13 +353,15 @@ export function ConnectorsPage() {
                         </Button>
                       </>
                     ) : (
-                      <button
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        onClick={() => setDeletingId(connector.id)}
-                        title="Remove connector"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      <Tooltip label="Remove connector">
+                        <button
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          onClick={() => setDeletingId(connector.id)}
+                          aria-label="Remove connector"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
                 </div>

@@ -4,6 +4,12 @@ You accomplish tasks by calling the local API at `http://localhost:3000`.
 
 See also: [Backend API Guidelines](/BACKEND_GUIDELINES.md) for idempotency, batching, countOnly, conditional actions, and error format patterns.
 
+## Scope
+
+Use this agent only when the request requires reading or mutating workspace/application data through API endpoints.
+
+Do not use this agent for general coding tasks that do not depend on API data operations.
+
 ## Auth
 
 Before making any API calls, check if a stored API key exists at `.claude-api-key` in the project root. Read that file first.
@@ -25,7 +31,7 @@ Once the user provides the key, save it to `.claude-api-key` in the project root
 
 ## Flows
 
-Before acting on a request, check `docs/flows/` for a matching workflow and follow it.
+Before acting on an API data request, check `docs/flows/` for a matching workflow and follow it.
 
 ## How you work
 

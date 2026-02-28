@@ -9,6 +9,11 @@ function hashKey(rawKey: string): string {
   return createHash('sha256').update(rawKey).digest('hex');
 }
 
+function isActive(record: Record<string, unknown>): boolean {
+  // Backward compatibility: older keys may be missing isActive.
+  return record.isActive !== false;
+}
+
 export interface CreateApiKeyParams {
   name: string;
   permissions: string[];
@@ -28,7 +33,13 @@ export interface UpdateApiKeyParams {
 // Fields to expose (exclude keyHash)
 function sanitize(record: Record<string, unknown>) {
   const { keyHash, ...rest } = record;
-  return rest;
+  return {
+    ...rest,
+    isActive: isActive(rest),
+    expiresAt: rest.expiresAt ?? null,
+    lastUsedAt: rest.lastUsedAt ?? null,
+    description: rest.description ?? null,
+  };
 }
 
 /**
@@ -49,8 +60,10 @@ export async function createApiKey(
     keyPrefix,
     permissions: params.permissions,
     createdById: params.createdById,
-    description: params.description,
-    expiresAt: params.expiresAt,
+    isActive: true,
+    description: params.description ?? null,
+    expiresAt: params.expiresAt ?? null,
+    lastUsedAt: null,
   });
 
   if (audit) {
@@ -154,7 +167,7 @@ export async function deleteApiKey(
 export async function validateApiKey(rawKey: string) {
   const keyHash = hashKey(rawKey);
 
-  const key = store.findOne('apiKeys', (r) => r.keyHash === keyHash && r.isActive === true);
+  const key = store.findOne('apiKeys', (r) => r.keyHash === keyHash && isActive(r));
 
   if (!key) return null;
 

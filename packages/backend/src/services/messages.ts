@@ -1,5 +1,6 @@
 import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
+import { isAgentConversationRecord } from './conversation-scope.js';
 
 export interface MessageListQuery {
   conversationId: string;
@@ -21,6 +22,11 @@ export interface SendMessageData {
 export async function listMessages(query: MessageListQuery) {
   const limit = query.limit ?? 50;
   const offset = query.offset ?? 0;
+
+  const conversation = store.getById('conversations', query.conversationId);
+  if (!conversation || isAgentConversationRecord(conversation)) {
+    return { entries: [], total: 0 };
+  }
 
   const allMatching = store.find(
     'messages',
@@ -56,6 +62,8 @@ export async function listMessages(query: MessageListQuery) {
 export async function getMessageById(id: string) {
   const message = store.getById('messages', id);
   if (!message) return null;
+  const conversation = store.getById('conversations', message.conversationId as string);
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
 
   const sender = message.senderId
     ? store.getById('users', message.senderId as string)
@@ -79,7 +87,7 @@ export async function sendMessage(
 ) {
   // Verify conversation exists
   const conversation = store.getById('conversations', data.conversationId);
-  if (!conversation) return null;
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
 
   const message = store.insert('messages', {
     conversationId: data.conversationId,
@@ -122,6 +130,10 @@ export async function updateMessageStatus(
   id: string,
   status: 'pending' | 'sent' | 'delivered' | 'read' | 'failed',
 ) {
+  const message = store.getById('messages', id);
+  if (!message) return null;
+  const conversation = store.getById('conversations', message.conversationId as string);
+  if (!conversation || isAgentConversationRecord(conversation)) return null;
   const updated = store.update('messages', id, { status });
   return updated ?? null;
 }

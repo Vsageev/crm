@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Upload, Download, RotateCcw, Trash2 } from 'lucide-react';
-import { Button, Card } from '../../ui';
+import { Button, Card, Tooltip } from '../../ui';
 import { api, getAccessToken, ApiError } from '../../lib/api';
 import styles from './SettingsPage.module.css';
 
@@ -224,13 +224,15 @@ export function BackupsTab() {
                     </div>
                   </div>
                   <div className={styles.templateActions}>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => handleDownload(backup.filename)}
-                      title="Download backup"
-                    >
-                      <Download size={15} />
-                    </button>
+                    <Tooltip label="Download backup">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => handleDownload(backup.filename)}
+                        aria-label="Download backup"
+                      >
+                        <Download size={15} />
+                      </button>
+                    </Tooltip>
 
                     {restoringName === backup.filename ? (
                       <>
@@ -251,13 +253,15 @@ export function BackupsTab() {
                         </Button>
                       </>
                     ) : (
-                      <button
-                        className={styles.iconBtn}
-                        onClick={() => { setRestoringName(backup.filename); setDeletingName(null); }}
-                        title="Restore backup"
-                      >
-                        <RotateCcw size={15} />
-                      </button>
+                      <Tooltip label="Restore backup">
+                        <button
+                          className={styles.iconBtn}
+                          onClick={() => { setRestoringName(backup.filename); setDeletingName(null); }}
+                          aria-label="Restore backup"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      </Tooltip>
                     )}
 
                     {deletingName === backup.filename ? (
@@ -279,13 +283,15 @@ export function BackupsTab() {
                         </Button>
                       </>
                     ) : (
-                      <button
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        onClick={() => { setDeletingName(backup.filename); setRestoringName(null); }}
-                        title="Delete backup"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      <Tooltip label="Delete backup">
+                        <button
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          onClick={() => { setDeletingName(backup.filename); setRestoringName(null); }}
+                          aria-label="Delete backup"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
                 </div>

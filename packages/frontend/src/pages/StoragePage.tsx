@@ -9,10 +9,15 @@ import {
   Download,
   ChevronRight,
   CornerLeftUp,
+  Eye,
+  FileText,
+  Image,
 } from 'lucide-react';
 import { PageHeader } from '../layout';
-import { Button, Input } from '../ui';
+import { Button, Input, Tooltip } from '../ui';
 import { api, apiUpload, ApiError } from '../lib/api';
+import { formatFileSize, formatFileDate, isTextPreviewable, isImagePreviewable, isPreviewable } from '../lib/file-utils';
+import { FilePreviewModal } from '../components/FilePreviewModal';
 import styles from './StoragePage.module.css';
 
 interface StorageEntry {
@@ -24,26 +29,10 @@ interface StorageEntry {
   createdAt: string;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '—';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let size = bytes;
-  while (size >= 1024 && i < units.length - 1) {
-    size /= 1024;
-    i++;
-  }
-  return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function getFileIcon(entry: StorageEntry) {
+  if (isImagePreviewable(entry.name)) return <Image size={18} className={styles.iconFile} />;
+  if (isTextPreviewable(entry.name)) return <FileText size={18} className={styles.iconFile} />;
+  return <File size={18} className={styles.iconFile} />;
 }
 
 export function StoragePage() {
@@ -61,6 +50,9 @@ export function StoragePage() {
   // Delete confirmation
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Preview
+  const [previewEntry, setPreviewEntry] = useState<StorageEntry | null>(null);
 
   // Upload / drag-and-drop
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +198,8 @@ export function StoragePage() {
   function handleEntryClick(entry: StorageEntry) {
     if (entry.type === 'folder') {
       navigateTo(entry.path);
+    } else if (entry.type === 'file' && isPreviewable(entry.name)) {
+      setPreviewEntry(entry);
     } else {
       handleDownload(entry.path);
     }
@@ -352,21 +346,34 @@ export function StoragePage() {
                     {entry.type === 'folder' ? (
                       <Folder size={18} className={styles.iconFolder} />
                     ) : (
-                      <File size={18} className={styles.iconFile} />
+                      getFileIcon(entry)
                     )}
                     <span className={styles.fileName}>{entry.name}</span>
                   </button>
-                  <span className={styles.colSize}>{entry.type === 'file' ? formatSize(entry.size) : '—'}</span>
-                  <span className={styles.colDate}>{formatDate(entry.createdAt)}</span>
+                  <span className={styles.colSize}>{entry.type === 'file' ? formatFileSize(entry.size) : '—'}</span>
+                  <span className={styles.colDate}>{formatFileDate(entry.createdAt)}</span>
                   <span className={styles.colActions}>
+                    {entry.type === 'file' && isPreviewable(entry.name) && (
+                      <Tooltip label="Preview">
+                        <button
+                          className={styles.iconBtn}
+                          onClick={() => setPreviewEntry(entry)}
+                          aria-label="Preview"
+                        >
+                          <Eye size={16} />
+                        </button>
+                      </Tooltip>
+                    )}
                     {entry.type === 'file' && (
-                      <button
-                        className={styles.iconBtn}
-                        onClick={() => handleDownload(entry.path)}
-                        title="Download"
-                      >
-                        <Download size={16} />
-                      </button>
+                      <Tooltip label="Download">
+                        <button
+                          className={styles.iconBtn}
+                          onClick={() => handleDownload(entry.path)}
+                          aria-label="Download"
+                        >
+                          <Download size={16} />
+                        </button>
+                      </Tooltip>
                     )}
                     {deletingPath === entry.path ? (
                       <>
@@ -387,13 +394,15 @@ export function StoragePage() {
                         </Button>
                       </>
                     ) : (
-                      <button
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        onClick={() => setDeletingPath(entry.path)}
-                        title="Delete"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <Tooltip label="Delete">
+                        <button
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          onClick={() => setDeletingPath(entry.path)}
+                          aria-label="Delete"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </Tooltip>
                     )}
                   </span>
                 </div>
@@ -401,6 +410,15 @@ export function StoragePage() {
             </div>
           )}
         </div>
+      )}
+
+      {previewEntry && (
+        <FilePreviewModal
+          fileName={previewEntry.name}
+          downloadUrl={`/api/storage/download?path=${encodeURIComponent(previewEntry.path)}`}
+          onClose={() => setPreviewEntry(null)}
+          onDownload={() => handleDownload(previewEntry.path)}
+        />
       )}
     </>
   );

@@ -12,6 +12,7 @@ import { sendMessage } from '../services/messages.js';
 import { sendTelegramMedia } from '../services/telegram-outbound.js';
 import { env } from '../config/env.js';
 import { validateUploadedFile } from '../utils/file-validation.js';
+import { isAgentConversationRecord } from '../services/conversation-scope.js';
 
 // Ensure upload directory exists
 function ensureUploadDir(): string {
@@ -58,6 +59,11 @@ export async function mediaRoutes(app: FastifyInstance) {
       const msg = store.getById('messages', messageId);
 
       if (!msg) {
+        return reply.notFound('Message not found');
+      }
+
+      const messageConversation = store.getById('conversations', msg.conversationId as string);
+      if (!messageConversation || isAgentConversationRecord(messageConversation)) {
         return reply.notFound('Message not found');
       }
 
@@ -218,7 +224,7 @@ export async function mediaRoutes(app: FastifyInstance) {
       // Verify conversation exists
       const conversation = store.getById('conversations', conversationId);
 
-      if (!conversation) {
+      if (!conversation || isAgentConversationRecord(conversation)) {
         return reply.notFound('Conversation not found');
       }
 

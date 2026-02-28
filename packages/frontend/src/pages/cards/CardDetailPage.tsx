@@ -5,7 +5,7 @@ import {
   FileText, User, Send, Check, Pencil,
 } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { Button, PageLoader } from '../../ui';
+import { Button, PageLoader, Tooltip } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import styles from './CardDetailPage.module.css';
 
@@ -382,9 +382,11 @@ export function CardDetailPage() {
                         </div>
                         <div className={styles.commentText}>{c.content}</div>
                       </div>
-                      <button className={styles.commentX} onClick={() => deleteComment(c.id)} title="Delete">
-                        <X size={11} />
-                      </button>
+                      <Tooltip label="Delete">
+                        <button className={styles.commentX} onClick={() => deleteComment(c.id)} aria-label="Delete">
+                          <X size={11} />
+                        </button>
+                      </Tooltip>
                     </div>
                   ))}
                 </div>
@@ -401,14 +403,16 @@ export function CardDetailPage() {
                     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addComment();
                   }}
                 />
-                <button
-                  className={styles.commentSend}
-                  onClick={addComment}
-                  disabled={!newComment.trim() || submittingComment}
-                  title="Send"
-                >
-                  <Send size={14} />
-                </button>
+                <Tooltip label="Send">
+                  <button
+                    className={styles.commentSend}
+                    onClick={addComment}
+                    disabled={!newComment.trim() || submittingComment}
+                    aria-label="Send"
+                  >
+                    <Send size={14} />
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </div>
@@ -487,9 +491,11 @@ export function CardDetailPage() {
                   {card.tags.map((tag) => (
                     <span key={tag.id} className={styles.tag} style={{ background: tag.color }}>
                       {tag.name}
-                      <button className={styles.tagX} onClick={() => removeTag(tag.id)} title="Remove">
-                        <X size={7} />
-                      </button>
+                      <Tooltip label="Remove">
+                        <button className={styles.tagX} onClick={() => removeTag(tag.id)} aria-label="Remove">
+                          <X size={7} />
+                        </button>
+                      </Tooltip>
                     </span>
                   ))}
                 </div>
@@ -535,14 +541,16 @@ export function CardDetailPage() {
                             >
                               {tagIds.has(tag.id) ? 'Added' : 'Add'}
                             </button>
-                            <button
-                              className={styles.tagMgrDelete}
-                              onClick={() => deleteTag(tag.id)}
-                              disabled={deletingTagId === tag.id}
-                              title="Delete tag"
-                            >
-                              <Trash2 size={11} />
-                            </button>
+                            <Tooltip label="Delete tag">
+                              <button
+                                className={styles.tagMgrDelete}
+                                onClick={() => deleteTag(tag.id)}
+                                disabled={deletingTagId === tag.id}
+                                aria-label="Delete tag"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </Tooltip>
                           </div>
                         </div>
                       ))}
@@ -576,9 +584,11 @@ export function CardDetailPage() {
                   <div key={lc.linkId} className={styles.linkRow}>
                     <FileText size={13} className={styles.linkIcon} />
                     <Link to={`/cards/${lc.id}`} className={styles.linkName}>{lc.name}</Link>
-                    <button className={styles.linkRemove} onClick={() => unlinkCard(lc.linkId)} title="Remove">
-                      <X size={11} />
-                    </button>
+                    <Tooltip label="Remove">
+                      <button className={styles.linkRemove} onClick={() => unlinkCard(lc.linkId)} aria-label="Remove">
+                        <X size={11} />
+                      </button>
+                    </Tooltip>
                   </div>
                 ))
               ) : (

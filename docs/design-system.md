@@ -65,6 +65,7 @@ Communicate value visually. Prioritize scannability, clear hierarchy, and real-f
 - **Secondary:** White background, 1px border, dark text, 8px radius
 - **Ghost:** No background, text only with arrow
 - **Link:** Accent color text with underline on hover
+- **Icon-only buttons:** Always use the shared custom `Tooltip` component (`ui/Tooltip`) for hover/focus labels. Do not use native `title` tooltips. Keep an `aria-label` on the button for accessibility.
 
 ### Cards
 
