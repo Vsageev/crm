@@ -79,12 +79,11 @@ export async function authRoutes(app: FastifyInstance) {
       passwordHash,
       firstName,
       lastName,
-      role: 'agent',
       isActive: true,
       totpEnabled: false,
     });
 
-    const tokens = await generateTokens(app, user.id as string, user.role as string);
+    const tokens = await generateTokens(app, user.id as string);
 
     return reply.status(201).send({
       user: {
@@ -92,7 +91,6 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -131,7 +129,7 @@ export async function authRoutes(app: FastifyInstance) {
     // If 2FA is enabled, return a temporary token for 2FA verification
     if (user.totpEnabled) {
       const twoFactorToken = app.jwt.sign(
-        { sub: user.id as string, role: user.role as string, twoFactor: true },
+        { sub: user.id as string, twoFactor: true },
         { expiresIn: '5m' },
       );
 
@@ -141,7 +139,7 @@ export async function authRoutes(app: FastifyInstance) {
       });
     }
 
-    const tokens = await generateTokens(app, user.id as string, user.role as string);
+    const tokens = await generateTokens(app, user.id as string);
 
     // Audit successful login
     createAuditLog({
@@ -159,7 +157,6 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -170,7 +167,7 @@ export async function authRoutes(app: FastifyInstance) {
   typedApp.post('/api/auth/2fa/verify', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Verify 2FA during login', body: twoFactorVerifyBody } }, async (request, reply) => {
     const { twoFactorToken, code } = request.body;
 
-    let payload: { sub: string; role: string; twoFactor?: boolean };
+    let payload: { sub: string; twoFactor?: boolean };
     try {
       payload = app.jwt.verify(twoFactorToken);
     } catch {
@@ -212,7 +209,7 @@ export async function authRoutes(app: FastifyInstance) {
       throw ApiError.unauthorized('invalid_2fa_code', 'Invalid two-factor code', 'Provide a valid 6-digit TOTP code from your authenticator app, or a recovery code');
     }
 
-    const tokens = await generateTokens(app, user.id as string, user.role as string);
+    const tokens = await generateTokens(app, user.id as string);
 
     // Audit successful 2FA login
     createAuditLog({
@@ -231,7 +228,6 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -264,7 +260,6 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
-        role: user.role,
         isActive: user.isActive,
         totpEnabled: user.totpEnabled,
         createdAt: user.createdAt,

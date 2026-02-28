@@ -8,3 +8,5 @@ export { PageLoader } from './PageLoader';
 export { ToastContainer } from './Toast';
 export { ErrorBoundary } from './ErrorBoundary';
 export { Tooltip } from './Tooltip';
+export { ApiKeyFormFields } from './ApiKeyFormFields';
+export type { ApiKeyFormData } from './ApiKeyFormFields';

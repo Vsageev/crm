@@ -15,7 +15,7 @@ function getUtmParams(): Record<string, string> {
 
 function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
   const wrapper = document.createElement('div');
-  wrapper.className = 'crm-form__field';
+  wrapper.className = 'ws-form__field';
 
   if (field.fieldType === 'hidden') {
     const input = document.createElement('input');
@@ -29,8 +29,8 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
   // Label
   if (field.fieldType !== 'checkbox') {
     const label = document.createElement('label');
-    label.className = 'crm-form__label';
-    if (field.isRequired) label.className += ' crm-form__label--required';
+    label.className = 'ws-form__label';
+    if (field.isRequired) label.className += ' ws-form__label--required';
     label.textContent = field.label;
     label.setAttribute('for', `field-${field.id}`);
     wrapper.appendChild(label);
@@ -42,13 +42,13 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
   switch (field.fieldType) {
     case 'textarea': {
       input = document.createElement('textarea');
-      input.className = 'crm-form__textarea';
+      input.className = 'ws-form__textarea';
       if (field.placeholder) input.placeholder = field.placeholder;
       break;
     }
     case 'select': {
       input = document.createElement('select');
-      input.className = 'crm-form__select';
+      input.className = 'ws-form__select';
       const emptyOpt = document.createElement('option');
       emptyOpt.value = '';
       emptyOpt.textContent = field.placeholder ?? 'Select...';
@@ -65,12 +65,12 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
     }
     case 'checkbox': {
       const checkWrapper = document.createElement('div');
-      checkWrapper.className = 'crm-form__checkbox-wrapper';
+      checkWrapper.className = 'ws-form__checkbox-wrapper';
       input = document.createElement('input');
       input.type = 'checkbox';
-      input.className = 'crm-form__checkbox';
+      input.className = 'ws-form__checkbox';
       const checkLabel = document.createElement('label');
-      checkLabel.className = 'crm-form__checkbox-label';
+      checkLabel.className = 'ws-form__checkbox-label';
       checkLabel.textContent = field.label;
       checkLabel.setAttribute('for', `field-${field.id}`);
       checkWrapper.appendChild(input);
@@ -84,7 +84,7 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
 
       // Error container
       const error = document.createElement('div');
-      error.className = 'crm-form__error';
+      error.className = 'ws-form__error';
       error.style.display = 'none';
       error.dataset.fieldId = field.id;
       wrapper.appendChild(error);
@@ -93,7 +93,7 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
     }
     default: {
       input = document.createElement('input');
-      input.className = 'crm-form__input';
+      input.className = 'ws-form__input';
 
       const typeMap: Record<string, string> = {
         text: 'text',
@@ -119,14 +119,14 @@ function createFieldInput(field: FormField, shadow: ShadowRoot): HTMLElement {
   input.addEventListener('input', () => {
     const errorEl = shadow.querySelector(`[data-field-id="${field.id}"]`) as HTMLElement | null;
     if (errorEl) errorEl.style.display = 'none';
-    input.classList.remove('crm-form__input--error', 'crm-form__textarea--error', 'crm-form__select--error');
+    input.classList.remove('ws-form__input--error', 'ws-form__textarea--error', 'ws-form__select--error');
   });
 
   wrapper.appendChild(input);
 
   // Error container
   const error = document.createElement('div');
-  error.className = 'crm-form__error';
+  error.className = 'ws-form__error';
   error.style.display = 'none';
   error.dataset.fieldId = field.id;
   wrapper.appendChild(error);
@@ -174,26 +174,26 @@ export function renderForm(container: HTMLElement, config: FormConfig, api: ApiC
 
   // Form wrapper
   const formEl = document.createElement('div');
-  formEl.className = 'crm-form';
+  formEl.className = 'ws-form';
   shadow.appendChild(formEl);
 
   // Title
   const title = document.createElement('h2');
-  title.className = 'crm-form__title';
+  title.className = 'ws-form__title';
   title.textContent = config.name;
   formEl.appendChild(title);
 
   // Description
   if (config.description) {
     const desc = document.createElement('p');
-    desc.className = 'crm-form__description';
+    desc.className = 'ws-form__description';
     desc.textContent = config.description;
     formEl.appendChild(desc);
   }
 
   // Global error area
   const globalError = document.createElement('div');
-  globalError.className = 'crm-form__global-error';
+  globalError.className = 'ws-form__global-error';
   globalError.style.display = 'none';
   formEl.appendChild(globalError);
 
@@ -211,7 +211,7 @@ export function renderForm(container: HTMLElement, config: FormConfig, api: ApiC
   // Submit button
   const submitBtn = document.createElement('button');
   submitBtn.type = 'submit';
-  submitBtn.className = 'crm-form__submit';
+  submitBtn.className = 'ws-form__submit';
   submitBtn.textContent = config.submitButtonText || 'Submit';
   form.appendChild(submitBtn);
 
@@ -240,10 +240,10 @@ export function renderForm(container: HTMLElement, config: FormConfig, api: ApiC
         }
         input.classList.add(
           field.fieldType === 'textarea'
-            ? 'crm-form__textarea--error'
+            ? 'ws-form__textarea--error'
             : field.fieldType === 'select'
-              ? 'crm-form__select--error'
-              : 'crm-form__input--error',
+              ? 'ws-form__select--error'
+              : 'ws-form__input--error',
         );
       } else {
         data[field.id] = value;
@@ -270,16 +270,16 @@ export function renderForm(container: HTMLElement, config: FormConfig, api: ApiC
 
       formEl.innerHTML = '';
       const success = document.createElement('div');
-      success.className = 'crm-form__success';
+      success.className = 'ws-form__success';
       success.innerHTML = `
-        <div class="crm-form__success-icon">
+        <div class="ws-form__success-icon">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
         </div>
-        <p class="crm-form__success-message"></p>
+        <p class="ws-form__success-message"></p>
       `;
-      const msgEl = success.querySelector('.crm-form__success-message')!;
+      const msgEl = success.querySelector('.ws-form__success-message')!;
       msgEl.textContent = result.successMessage || config.successMessage || 'Thank you for your submission!';
       formEl.appendChild(success);
     } catch (err) {
@@ -298,10 +298,10 @@ export function renderLoading(container: HTMLElement): ShadowRoot {
   shadow.appendChild(style);
 
   const wrapper = document.createElement('div');
-  wrapper.className = 'crm-form';
+  wrapper.className = 'ws-form';
   wrapper.innerHTML = `
-    <div class="crm-form__loading">
-      <div class="crm-form__spinner"></div>
+    <div class="ws-form__loading">
+      <div class="ws-form__spinner"></div>
       <div>Loading form...</div>
     </div>
   `;
@@ -320,9 +320,9 @@ export function renderError(container: HTMLElement, message: string): void {
   shadow.appendChild(style);
 
   const wrapper = document.createElement('div');
-  wrapper.className = 'crm-form';
-  wrapper.innerHTML = `<div class="crm-form__global-error"></div>`;
-  const errorEl = wrapper.querySelector('.crm-form__global-error')!;
+  wrapper.className = 'ws-form';
+  wrapper.innerHTML = `<div class="ws-form__global-error"></div>`;
+  const errorEl = wrapper.querySelector('.ws-form__global-error')!;
   errorEl.textContent = message;
   shadow.appendChild(wrapper);
 }

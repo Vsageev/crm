@@ -7,7 +7,7 @@ async function init(options: CrmFormOptions): Promise<void> {
 
   const el = typeof container === 'string' ? document.querySelector<HTMLElement>(container) : container;
   if (!el) {
-    throw new Error(`CrmForm: container "${container}" not found`);
+    throw new Error(`WsForm: container "${container}" not found`);
   }
 
   // Show loading state
@@ -33,10 +33,10 @@ async function init(options: CrmFormOptions): Promise<void> {
 }
 
 function autoInit(): void {
-  const elements = document.querySelectorAll<HTMLElement>('[data-crm-form]');
+  const elements = document.querySelectorAll<HTMLElement>('[data-ws-form]');
   for (const el of elements) {
-    const formId = el.dataset.crmForm;
-    const apiUrl = el.dataset.crmApiUrl;
+    const formId = el.dataset.wsForm;
+    const apiUrl = el.dataset.wsApiUrl;
     if (!formId || !apiUrl) continue;
     init({ formId, apiUrl, container: el });
   }
@@ -50,5 +50,5 @@ if (document.readyState === 'loading') {
 }
 
 // Export for programmatic usage
-// In IIFE mode, Vite wraps everything under the `CrmForm` global
+// In IIFE mode, Vite wraps everything under the `WsForm` global
 export { init };

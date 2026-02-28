@@ -69,7 +69,7 @@ Communicate value visually. Prioritize scannability, clear hierarchy, and real-f
 ### Cards
 
 - White background, 1px border (#E8EAED), 12px radius
-- Subtle box-shadow on hover: `0 4px 12px rgba(0,0,0,0.06)`
+- **No box-shadow on hover.** Cards are flat — interaction is communicated through border color or background tint changes, never shadows.
 - Interior padding: 20px-24px
 
 ### Badges
@@ -91,15 +91,25 @@ Communicate value visually. Prioritize scannability, clear hierarchy, and real-f
 - Section padding: 80px vertical
 - Card padding: 20-24px
 - Element gap: 12-16px
+- **Be intentional with spacing.** Every margin and padding should serve hierarchy — avoid arbitrary values. Use the spacing scale consistently (4, 8, 12, 16, 20, 24, 32, 48, 64, 80px). Don't add extra spacing "just to breathe" — whitespace should guide the eye, not fill emptiness.
 
 ## Animation & Interaction
 
 ### Hover Effects
 
-1. **Card Lift:** translateY(-2px) + enhanced shadow on hover
-2. **Link Underline Sweep:** Underline grows from left on hover
+1. **Card:** Border color darkens or background tint changes on hover. **No shadow on hover** — no `box-shadow` transitions. No position shift (`translateY`), no wiggle, no movement — cards stay flat and in place.
+2. **Inline text link:** Underline grows from left on hover (underline sweep). Only for true inline text links within body copy.
+3. **Navigation link** (back links, breadcrumbs): Color darkens on hover. No underline, no movement.
+4. **Interactive controls** (buttons, action triggers): Background/border subtly darken. No link-style underlines, no position shift.
+
+### Rules
+
+- **No hover shadows:** Never add or enhance `box-shadow` on hover. The interface is flat — use border or background changes instead.
+- **No hover movement:** Never use `transform: translateY()` or `translate()` on hover. Elements must not shift position on interaction.
+- **No fake link styling:** Only true inline text links get underline effects. Navigation elements, cards, list items, and action buttons must never gain underlines on hover.
+- **Link Blue is for links only:** Reserve `var(--color-link)` for actual hyperlinks and form focus rings. Do not use it for card borders, button hovers, or list item highlights.
 
 ### Transitions
 
 - Duration: 0.2s ease for interactions
-- Smooth color and shadow transitions
+- Smooth color and border transitions

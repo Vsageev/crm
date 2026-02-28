@@ -15,41 +15,37 @@ async function seed() {
   const agentPasswordHash = await hashPassword('agent123');
 
   const adminUser = store.insert('users', {
-    email: 'admin@crm.local',
+    email: 'admin@workspace.local',
     passwordHash: adminPasswordHash,
     firstName: 'Admin',
     lastName: 'User',
-    role: 'admin',
     isActive: true,
     totpEnabled: false,
   });
 
   const managerUser = store.insert('users', {
-    email: 'manager@crm.local',
+    email: 'manager@workspace.local',
     passwordHash: managerPasswordHash,
     firstName: 'Maria',
     lastName: 'Johnson',
-    role: 'manager',
     isActive: true,
     totpEnabled: false,
   });
 
   const agent1 = store.insert('users', {
-    email: 'agent1@crm.local',
+    email: 'agent1@workspace.local',
     passwordHash: agentPasswordHash,
     firstName: 'Alex',
     lastName: 'Smith',
-    role: 'agent',
     isActive: true,
     totpEnabled: false,
   });
 
   const agent2 = store.insert('users', {
-    email: 'agent2@crm.local',
+    email: 'agent2@workspace.local',
     passwordHash: agentPasswordHash,
     firstName: 'Sarah',
     lastName: 'Williams',
-    role: 'agent',
     isActive: true,
     totpEnabled: false,
   });
@@ -59,7 +55,7 @@ async function seed() {
   // --- Tags ---
   const tagVip = store.insert('tags', { name: 'VIP', color: '#EF4444' });
   const tagPartner = store.insert('tags', { name: 'Partner', color: '#3B82F6' });
-  const tagLead = store.insert('tags', { name: 'Lead', color: '#10B981' });
+  const tagNew = store.insert('tags', { name: 'New', color: '#10B981' });
   const tagHot = store.insert('tags', { name: 'Hot', color: '#F59E0B' });
   const tagCold = store.insert('tags', { name: 'Cold', color: '#6B7280' });
 
@@ -212,159 +208,134 @@ async function seed() {
   // --- Contact Tags ---
   store.insert('contactTags', { contactId: createdContacts[0].id, tagId: tagVip.id });
   store.insert('contactTags', { contactId: createdContacts[0].id, tagId: tagPartner.id });
-  store.insert('contactTags', { contactId: createdContacts[1].id, tagId: tagLead.id });
+  store.insert('contactTags', { contactId: createdContacts[1].id, tagId: tagNew.id });
   store.insert('contactTags', { contactId: createdContacts[1].id, tagId: tagHot.id });
   store.insert('contactTags', { contactId: createdContacts[2].id, tagId: tagPartner.id });
   store.insert('contactTags', { contactId: createdContacts[3].id, tagId: tagHot.id });
   store.insert('contactTags', { contactId: createdContacts[4].id, tagId: tagVip.id });
-  store.insert('contactTags', { contactId: createdContacts[5].id, tagId: tagLead.id });
+  store.insert('contactTags', { contactId: createdContacts[5].id, tagId: tagNew.id });
   store.insert('contactTags', { contactId: createdContacts[6].id, tagId: tagCold.id });
   store.insert('contactTags', { contactId: createdContacts[7].id, tagId: tagPartner.id });
 
   console.log('  Assigned contact tags');
 
-  // --- Pipelines ---
-  const salesPipeline = store.insert('pipelines', {
-    name: 'Sales Pipeline',
-    description: 'Main sales process',
+  // --- Boards ---
+  const projectBoard = store.insert('pipelines', {
+    name: 'Project Tracker',
+    description: 'Main project management board',
     isDefault: true,
     createdBy: adminUser.id,
   });
 
-  const partnerPipeline = store.insert('pipelines', {
-    name: 'Partner Onboarding',
-    description: 'Pipeline for partner onboarding deals',
+  const hiringBoard = store.insert('pipelines', {
+    name: 'Hiring Pipeline',
+    description: 'Board for tracking hiring candidates',
     isDefault: false,
     createdBy: managerUser.id,
   });
 
-  const salesStages = [
-    store.insert('pipelineStages', { pipelineId: salesPipeline.id, name: 'Lead In', color: '#6B7280', position: 0 }),
-    store.insert('pipelineStages', { pipelineId: salesPipeline.id, name: 'Qualification', color: '#3B82F6', position: 1 }),
-    store.insert('pipelineStages', { pipelineId: salesPipeline.id, name: 'Proposal Sent', color: '#8B5CF6', position: 2 }),
-    store.insert('pipelineStages', { pipelineId: salesPipeline.id, name: 'Negotiation', color: '#F59E0B', position: 3 }),
-    store.insert('pipelineStages', {
-      pipelineId: salesPipeline.id,
-      name: 'Closed Won',
-      color: '#10B981',
-      position: 4,
-      isWinStage: true,
-    }),
-    store.insert('pipelineStages', {
-      pipelineId: salesPipeline.id,
-      name: 'Closed Lost',
-      color: '#EF4444',
-      position: 5,
-      isLossStage: true,
-    }),
+  const projectColumns = [
+    store.insert('pipelineStages', { pipelineId: projectBoard.id, name: 'Backlog', color: '#6B7280', position: 0 }),
+    store.insert('pipelineStages', { pipelineId: projectBoard.id, name: 'In Progress', color: '#3B82F6', position: 1 }),
+    store.insert('pipelineStages', { pipelineId: projectBoard.id, name: 'Review', color: '#8B5CF6', position: 2 }),
+    store.insert('pipelineStages', { pipelineId: projectBoard.id, name: 'Done', color: '#10B981', position: 3 }),
+    store.insert('pipelineStages', { pipelineId: projectBoard.id, name: 'Archived', color: '#EF4444', position: 4 }),
   ];
 
-  const partnerStages = [
-    store.insert('pipelineStages', { pipelineId: partnerPipeline.id, name: 'Application', color: '#6B7280', position: 0 }),
-    store.insert('pipelineStages', { pipelineId: partnerPipeline.id, name: 'Review', color: '#3B82F6', position: 1 }),
-    store.insert('pipelineStages', { pipelineId: partnerPipeline.id, name: 'Agreement', color: '#8B5CF6', position: 2 }),
-    store.insert('pipelineStages', {
-      pipelineId: partnerPipeline.id,
-      name: 'Active Partner',
-      color: '#10B981',
-      position: 3,
-      isWinStage: true,
-    }),
-    store.insert('pipelineStages', {
-      pipelineId: partnerPipeline.id,
-      name: 'Rejected',
-      color: '#EF4444',
-      position: 4,
-      isLossStage: true,
-    }),
+  const hiringColumns = [
+    store.insert('pipelineStages', { pipelineId: hiringBoard.id, name: 'Applied', color: '#6B7280', position: 0 }),
+    store.insert('pipelineStages', { pipelineId: hiringBoard.id, name: 'Screening', color: '#3B82F6', position: 1 }),
+    store.insert('pipelineStages', { pipelineId: hiringBoard.id, name: 'Interview', color: '#8B5CF6', position: 2 }),
+    store.insert('pipelineStages', { pipelineId: hiringBoard.id, name: 'Offer', color: '#10B981', position: 3 }),
+    store.insert('pipelineStages', { pipelineId: hiringBoard.id, name: 'Rejected', color: '#EF4444', position: 4 }),
   ];
 
-  console.log(`  Created 2 pipelines with stages`);
+  console.log(`  Created 2 boards with columns`);
 
-  // --- Deals ---
+  // --- Cards ---
   const now = new Date();
   const inDays = (days: number) => new Date(now.getTime() + days * 86400000).toISOString();
 
-  const createdDeals = [
+  const createdCards = [
     store.insert('deals', {
-      title: 'Acme Corp - Enterprise License',
+      title: 'Website Redesign',
       value: '75000.00',
       currency: 'USD',
-      stage: 'negotiation',
-      pipelineId: salesPipeline.id,
-      pipelineStageId: salesStages[3].id,
+      stage: 'in_progress',
+      pipelineId: projectBoard.id,
+      pipelineStageId: projectColumns[1].id,
       stageOrder: 0,
       contactId: createdContacts[0].id,
       companyId: compAcme.id,
       ownerId: agent1.id,
       expectedCloseDate: inDays(14),
-      leadSource: 'referral',
+      source: 'referral',
     }),
     store.insert('deals', {
-      title: 'Global Industries - Supply Contract',
+      title: 'API Integration',
       value: '120000.00',
       currency: 'USD',
-      stage: 'proposal',
-      pipelineId: salesPipeline.id,
-      pipelineStageId: salesStages[2].id,
+      stage: 'review',
+      pipelineId: projectBoard.id,
+      pipelineStageId: projectColumns[2].id,
       stageOrder: 0,
       contactId: createdContacts[2].id,
       companyId: compGlobal.id,
       ownerId: agent2.id,
       expectedCloseDate: inDays(30),
-      leadSource: 'website',
+      source: 'website',
     }),
     store.insert('deals', {
-      title: 'TechStart - Starter Plan',
+      title: 'Mobile App MVP',
       value: '5000.00',
       currency: 'USD',
-      stage: 'qualification',
-      pipelineId: salesPipeline.id,
-      pipelineStageId: salesStages[1].id,
+      stage: 'backlog',
+      pipelineId: projectBoard.id,
+      pipelineStageId: projectColumns[0].id,
       stageOrder: 0,
       contactId: createdContacts[3].id,
       companyId: compTech.id,
       ownerId: agent1.id,
       expectedCloseDate: inDays(21),
-      leadSource: 'organic',
+      source: 'organic',
     }),
     store.insert('deals', {
-      title: 'BrightPath - Consulting Retainer',
+      title: 'Data Migration',
       value: '36000.00',
       currency: 'USD',
-      stage: 'won',
-      pipelineId: salesPipeline.id,
-      pipelineStageId: salesStages[4].id,
+      stage: 'done',
+      pipelineId: projectBoard.id,
+      pipelineStageId: projectColumns[3].id,
       stageOrder: 0,
       contactId: createdContacts[4].id,
       companyId: compBright.id,
       ownerId: managerUser.id,
       closedAt: new Date(now.getTime() - 5 * 86400000).toISOString(),
-      leadSource: 'referral',
+      source: 'referral',
     }),
     store.insert('deals', {
-      title: 'Nova Dynamics - Integration Project',
+      title: 'Infrastructure Upgrade',
       value: '95000.00',
       currency: 'USD',
-      stage: 'new',
-      pipelineId: salesPipeline.id,
-      pipelineStageId: salesStages[0].id,
+      stage: 'backlog',
+      pipelineId: projectBoard.id,
+      pipelineStageId: projectColumns[0].id,
       stageOrder: 0,
       contactId: createdContacts[5].id,
       companyId: compNova.id,
       ownerId: agent2.id,
       expectedCloseDate: inDays(45),
-      leadSource: 'linkedin',
+      source: 'linkedin',
       utmSource: 'linkedin',
       utmMedium: 'social',
     }),
     store.insert('deals', {
-      title: 'Global Industries - Partner Program',
+      title: 'Senior Engineer - Backend',
       value: '0.00',
       currency: 'USD',
-      stage: 'new',
-      pipelineId: partnerPipeline.id,
-      pipelineStageId: partnerStages[0].id,
+      stage: 'applied',
+      pipelineId: hiringBoard.id,
+      pipelineStageId: hiringColumns[0].id,
       stageOrder: 0,
       contactId: createdContacts[7].id,
       companyId: compGlobal.id,
@@ -373,79 +344,79 @@ async function seed() {
     }),
   ];
 
-  console.log(`  Created ${createdDeals.length} deals`);
+  console.log(`  Created ${createdCards.length} cards`);
 
-  // --- Deal Tags ---
-  store.insert('dealTags', { dealId: createdDeals[0].id, tagId: tagVip.id });
-  store.insert('dealTags', { dealId: createdDeals[0].id, tagId: tagHot.id });
-  store.insert('dealTags', { dealId: createdDeals[1].id, tagId: tagPartner.id });
-  store.insert('dealTags', { dealId: createdDeals[3].id, tagId: tagVip.id });
-  store.insert('dealTags', { dealId: createdDeals[4].id, tagId: tagLead.id });
+  // --- Card Tags ---
+  store.insert('dealTags', { dealId: createdCards[0].id, tagId: tagVip.id });
+  store.insert('dealTags', { dealId: createdCards[0].id, tagId: tagHot.id });
+  store.insert('dealTags', { dealId: createdCards[1].id, tagId: tagPartner.id });
+  store.insert('dealTags', { dealId: createdCards[3].id, tagId: tagVip.id });
+  store.insert('dealTags', { dealId: createdCards[4].id, tagId: tagNew.id });
 
-  console.log('  Assigned deal tags');
+  console.log('  Assigned card tags');
 
   // --- Tasks ---
   store.insert('tasks', {
-    title: 'Follow up with John Doe on license terms',
-    description: 'Discuss pricing tiers and volume discounts for the enterprise license.',
+    title: 'Review design specs with John Doe',
+    description: 'Go through the redesign requirements and finalize scope.',
     type: 'call',
     status: 'pending',
     priority: 'high',
     dueDate: inDays(2),
     contactId: createdContacts[0].id,
-    dealId: createdDeals[0].id,
+    dealId: createdCards[0].id,
     assigneeId: agent1.id,
     createdById: managerUser.id,
   });
 
   store.insert('tasks', {
-    title: 'Send proposal to Global Industries',
-    description: 'Prepare and send the final supply contract proposal.',
+    title: 'Write API documentation for Global Industries',
+    description: 'Prepare and share the integration documentation.',
     type: 'email',
     status: 'in_progress',
     priority: 'high',
     dueDate: inDays(1),
     contactId: createdContacts[2].id,
-    dealId: createdDeals[1].id,
+    dealId: createdCards[1].id,
     assigneeId: agent2.id,
     createdById: managerUser.id,
   });
 
   store.insert('tasks', {
-    title: 'Schedule demo for TechStart',
-    description: 'Set up a product demo to move the deal to proposal stage.',
+    title: 'Set up staging environment for TechStart',
+    description: 'Provision a staging instance for the mobile app MVP.',
     type: 'meeting',
     status: 'pending',
     priority: 'medium',
     dueDate: inDays(5),
     contactId: createdContacts[3].id,
-    dealId: createdDeals[2].id,
+    dealId: createdCards[2].id,
     assigneeId: agent1.id,
     createdById: agent1.id,
   });
 
   store.insert('tasks', {
-    title: 'Onboarding call with BrightPath',
-    description: 'Walk through the onboarding process for the consulting retainer.',
+    title: 'Kickoff call with BrightPath',
+    description: 'Walk through the project timeline and deliverables.',
     type: 'call',
     status: 'pending',
     priority: 'medium',
     dueDate: inDays(3),
     contactId: createdContacts[4].id,
-    dealId: createdDeals[3].id,
+    dealId: createdCards[3].id,
     assigneeId: managerUser.id,
     createdById: managerUser.id,
   });
 
   store.insert('tasks', {
-    title: 'Research Nova Dynamics requirements',
-    description: 'Gather integration requirements before first meeting.',
+    title: 'Gather Nova Dynamics requirements',
+    description: 'Collect infrastructure requirements before first meeting.',
     type: 'other',
     status: 'completed',
     priority: 'low',
     completedAt: new Date(now.getTime() - 2 * 86400000).toISOString(),
     contactId: createdContacts[5].id,
-    dealId: createdDeals[4].id,
+    dealId: createdCards[4].id,
     assigneeId: agent2.id,
     createdById: agent2.id,
   });
@@ -455,10 +426,10 @@ async function seed() {
   // --- Activity Logs ---
   store.insert('activityLogs', {
     type: 'call',
-    title: 'Initial discovery call',
-    description: 'Discussed needs and budget with John Doe. Very interested in enterprise tier.',
+    title: 'Requirements gathering call',
+    description: 'Discussed project scope and timeline with John Doe. Aligned on key deliverables.',
     contactId: createdContacts[0].id,
-    dealId: createdDeals[0].id,
+    dealId: createdCards[0].id,
     duration: 1800,
     occurredAt: new Date(now.getTime() - 7 * 86400000).toISOString(),
     createdById: agent1.id,
@@ -466,10 +437,10 @@ async function seed() {
 
   store.insert('activityLogs', {
     type: 'meeting',
-    title: 'Product demo',
-    description: 'Walked Robert through the product. Positive feedback on integrations.',
+    title: 'Technical review',
+    description: 'Walked Robert through the integration architecture. Positive feedback on API design.',
     contactId: createdContacts[2].id,
-    dealId: createdDeals[1].id,
+    dealId: createdCards[1].id,
     duration: 3600,
     occurredAt: new Date(now.getTime() - 3 * 86400000).toISOString(),
     createdById: agent2.id,
@@ -477,20 +448,20 @@ async function seed() {
 
   store.insert('activityLogs', {
     type: 'note',
-    title: 'Competitor analysis',
-    description: 'Emily mentioned they are evaluating two other solutions. Need to highlight our API.',
+    title: 'Platform evaluation notes',
+    description: 'Emily mentioned they are evaluating two other platforms. Need to highlight our API capabilities.',
     contactId: createdContacts[3].id,
-    dealId: createdDeals[2].id,
+    dealId: createdCards[2].id,
     occurredAt: new Date(now.getTime() - 1 * 86400000).toISOString(),
     createdById: agent1.id,
   });
 
   store.insert('activityLogs', {
     type: 'call',
-    title: 'Contract signing call',
-    description: 'Michael signed the consulting retainer. Starting next month.',
+    title: 'Project completion call',
+    description: 'Michael confirmed the data migration is complete. Moving to production next week.',
     contactId: createdContacts[4].id,
-    dealId: createdDeals[3].id,
+    dealId: createdCards[3].id,
     duration: 900,
     occurredAt: new Date(now.getTime() - 5 * 86400000).toISOString(),
     createdById: managerUser.id,
@@ -504,7 +475,7 @@ async function seed() {
     assigneeId: agent1.id,
     channelType: 'email',
     status: 'open',
-    subject: 'Re: Enterprise License Inquiry',
+    subject: 'Re: Website Redesign Project',
     lastMessageAt: new Date(now.getTime() - 1 * 86400000).toISOString(),
   });
 
@@ -521,7 +492,7 @@ async function seed() {
     conversationId: conv1.id,
     direction: 'inbound',
     type: 'text',
-    content: 'Hi, I wanted to follow up on the enterprise license pricing we discussed last week.',
+    content: 'Hi, I wanted to follow up on the website redesign project we discussed last week.',
     status: 'read',
     createdAt: new Date(now.getTime() - 2 * 86400000).toISOString(),
   });
@@ -532,7 +503,7 @@ async function seed() {
     direction: 'outbound',
     type: 'text',
     content:
-      'Hello John! Thanks for reaching out. I have prepared a detailed breakdown of our enterprise tiers. Let me send that over.',
+      'Hello John! Thanks for reaching out. I have prepared a detailed breakdown of the project phases. Let me send that over.',
     status: 'delivered',
     createdAt: new Date(now.getTime() - 1.5 * 86400000).toISOString(),
   });
@@ -568,103 +539,15 @@ async function seed() {
 
   console.log(`  Created 2 conversations with 5 messages`);
 
-  // --- Knowledge Base ---
-  store.insert('knowledgeBaseEntries', {
-    title: 'Company Overview',
-    content: `We are a B2B SaaS company providing CRM and business automation solutions. Founded in 2020, headquartered in San Francisco, CA. Our platform helps small and mid-sized businesses manage customer relationships, automate workflows, and grow revenue.
-
-Key facts:
-- 500+ active customers worldwide
-- Available in English, Spanish, and Russian
-- SOC 2 Type II certified
-- 99.9% uptime SLA`,
-    createdBy: adminUser.id,
-  });
-
-  store.insert('knowledgeBaseEntries', {
-    title: 'Pricing Plans',
-    content: `We offer three pricing tiers:
-
-1. Starter Plan — $29/user/month (billed annually) or $39/user/month (monthly)
-   - Up to 5 users, 1,000 contacts, email & web chat channels, basic reports
-
-2. Professional Plan — $59/user/month (billed annually) or $79/user/month (monthly)
-   - Up to 25 users, 10,000 contacts, all channels (Telegram, WhatsApp, Instagram, email, web chat), advanced reports, automation rules, API access
-
-3. Enterprise Plan — custom pricing
-   - Unlimited users & contacts, dedicated account manager, custom integrations, SLA, on-premise option available
-
-All plans include a 14-day free trial. No credit card required for trial.`,
-    createdBy: adminUser.id,
-  });
-
-  store.insert('knowledgeBaseEntries', {
-    title: 'Refund & Cancellation Policy',
-    content: `- Monthly plans can be cancelled anytime, effective at end of billing period.
-- Annual plans: full refund within first 30 days; after 30 days, prorated credit for remaining months (no cash refund).
-- Refund requests should be submitted to billing@company.example.com or through Settings > Billing in the app.
-- Downgrades take effect at the next billing cycle.
-- Data is retained for 90 days after cancellation, then permanently deleted.`,
-    createdBy: adminUser.id,
-  });
-
-  store.insert('knowledgeBaseEntries', {
-    title: 'Supported Integrations',
-    content: `Our platform integrates with:
-- Messaging: Telegram, WhatsApp Business, Instagram DM, Email (IMAP/SMTP)
-- Payments: Stripe (coming soon)
-- Calendar: Google Calendar, Outlook (via API)
-- Storage: Google Drive, Dropbox (file attachments)
-- Automation: Webhooks, REST API, Zapier (beta)
-
-Custom integrations are available on the Enterprise plan. API documentation is at docs.company.example.com.`,
-    createdBy: adminUser.id,
-  });
-
-  store.insert('knowledgeBaseEntries', {
-    title: 'Business Hours & Support',
-    content: `Support hours:
-- Starter & Professional plans: Monday–Friday, 9 AM – 6 PM EST (email & chat)
-- Enterprise plan: 24/7 priority support via dedicated Slack channel + phone
-
-Average response times:
-- Chat: under 5 minutes during business hours
-- Email: under 4 hours during business hours
-- Critical issues (system down): 1 hour for Enterprise, 4 hours for others
-
-For urgent issues outside business hours, email urgent@company.example.com.`,
-    createdBy: adminUser.id,
-  });
-
-  store.insert('knowledgeBaseEntries', {
-    title: 'Common Troubleshooting',
-    content: `Frequently asked questions:
-
-Q: I can't log in / forgot my password
-A: Use the "Forgot Password" link on the login page. If you have 2FA enabled and lost your device, contact support with your recovery codes.
-
-Q: Messages are not being delivered to Telegram/WhatsApp
-A: Check Settings > [Channel] tab to verify the bot token or API credentials are correct and the webhook is registered. Also check the channel status indicator.
-
-Q: How do I import contacts?
-A: Go to Contacts > Import (CSV). Download our template CSV for the correct format. Maximum 10,000 contacts per import.
-
-Q: Can I export my data?
-A: Yes, admins can export contacts, deals, and conversations via Settings > Backups or through the REST API.`,
-    createdBy: adminUser.id,
-  });
-
-  console.log(`  Created 6 knowledge base entries`);
-
   // Flush all data to JSON files
   await store.flush();
 
   console.log('\nSeed completed successfully!');
   console.log('\nTest accounts:');
-  console.log('  admin@crm.local    / admin123   (admin)');
-  console.log('  manager@crm.local  / manager123 (manager)');
-  console.log('  agent1@crm.local   / agent123   (agent)');
-  console.log('  agent2@crm.local   / agent123   (agent)');
+  console.log('  admin@workspace.local    / admin123   (admin)');
+  console.log('  manager@workspace.local  / manager123 (manager)');
+  console.log('  agent1@workspace.local   / agent123   (agent)');
+  console.log('  agent2@workspace.local   / agent123   (agent)');
 }
 
 seed().catch((err) => {

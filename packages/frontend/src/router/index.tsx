@@ -12,66 +12,35 @@ import { LoginPage, RegisterPage, TwoFactorSetupPage } from '../pages/auth';
 const DashboardPage = lazy(() =>
   import('../pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
 );
-const ContactsListPage = lazy(() =>
-  import('../pages/contacts/ContactsListPage').then((m) => ({ default: m.ContactsListPage })),
+const FoldersListPage = lazy(() =>
+  import('../pages/folders/FoldersListPage').then((m) => ({ default: m.FoldersListPage })),
 );
-const ContactDetailPage = lazy(() =>
-  import('../pages/contacts/ContactDetailPage').then((m) => ({ default: m.ContactDetailPage })),
+const FolderDetailPage = lazy(() =>
+  import('../pages/folders/FolderDetailPage').then((m) => ({ default: m.FolderDetailPage })),
 );
-const ContactFormPage = lazy(() =>
-  import('../pages/contacts/ContactFormPage').then((m) => ({ default: m.ContactFormPage })),
+const BoardsListPage = lazy(() =>
+  import('../pages/boards/BoardsListPage').then((m) => ({ default: m.BoardsListPage })),
 );
-const CompaniesListPage = lazy(() =>
-  import('../pages/companies/CompaniesListPage').then((m) => ({ default: m.CompaniesListPage })),
+const BoardPage = lazy(() =>
+  import('../pages/boards/BoardPage').then((m) => ({ default: m.BoardPage })),
 );
-const CompanyDetailPage = lazy(() =>
-  import('../pages/companies/CompanyDetailPage').then((m) => ({ default: m.CompanyDetailPage })),
-);
-const CompanyFormPage = lazy(() =>
-  import('../pages/companies/CompanyFormPage').then((m) => ({ default: m.CompanyFormPage })),
-);
-const DealsPage = lazy(() =>
-  import('../pages/DealsPage').then((m) => ({ default: m.DealsPage })),
-);
-const DealDetailPage = lazy(() =>
-  import('../pages/deals/DealDetailPage').then((m) => ({ default: m.DealDetailPage })),
-);
-const TasksListPage = lazy(() =>
-  import('../pages/tasks/TasksListPage').then((m) => ({ default: m.TasksListPage })),
-);
-const TaskDetailPage = lazy(() =>
-  import('../pages/tasks/TaskDetailPage').then((m) => ({ default: m.TaskDetailPage })),
-);
-const TaskFormPage = lazy(() =>
-  import('../pages/tasks/TaskFormPage').then((m) => ({ default: m.TaskFormPage })),
-);
-const AutomationRulesListPage = lazy(() =>
-  import('../pages/automation/AutomationRulesListPage').then((m) => ({
-    default: m.AutomationRulesListPage,
-  })),
-);
-const AutomationRuleFormPage = lazy(() =>
-  import('../pages/automation/AutomationRuleFormPage').then((m) => ({
-    default: m.AutomationRuleFormPage,
-  })),
+const CardDetailPage = lazy(() =>
+  import('../pages/cards/CardDetailPage').then((m) => ({ default: m.CardDetailPage })),
 );
 const InboxPage = lazy(() =>
   import('../pages/inbox/InboxPage').then((m) => ({ default: m.InboxPage })),
 );
-const ReportsPage = lazy(() =>
-  import('../pages/ReportsPage').then((m) => ({ default: m.ReportsPage })),
-);
 const SettingsPage = lazy(() =>
   import('../pages/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
-const QuizzesListPage = lazy(() =>
-  import('../pages/quizzes/QuizzesListPage').then((m) => ({ default: m.QuizzesListPage })),
+const AgentsPage = lazy(() =>
+  import('../pages/AgentsPage').then((m) => ({ default: m.AgentsPage })),
 );
-const QuizBuilderPage = lazy(() =>
-  import('../pages/quizzes/QuizBuilderPage').then((m) => ({ default: m.QuizBuilderPage })),
+const ConnectorsPage = lazy(() =>
+  import('../pages/ConnectorsPage').then((m) => ({ default: m.ConnectorsPage })),
 );
-const QuizTakerPage = lazy(() =>
-  import('../pages/quizzes/QuizTakerPage').then((m) => ({ default: m.QuizTakerPage })),
+const StoragePage = lazy(() =>
+  import('../pages/StoragePage').then((m) => ({ default: m.StoragePage })),
 );
 const NotFoundPage = lazy(() =>
   import('../pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
@@ -112,35 +81,20 @@ export const router = createBrowserRouter([
             element: <AppLayout />,
             children: [
               { index: true, element: <SuspenseWrapper><DashboardPage /></SuspenseWrapper> },
-              { path: 'contacts', element: <SuspenseWrapper><ContactsListPage /></SuspenseWrapper> },
-              { path: 'contacts/new', element: <SuspenseWrapper><ContactFormPage /></SuspenseWrapper> },
-              { path: 'contacts/:id', element: <SuspenseWrapper><ContactDetailPage /></SuspenseWrapper> },
-              { path: 'contacts/:id/edit', element: <SuspenseWrapper><ContactFormPage /></SuspenseWrapper> },
-              { path: 'companies', element: <SuspenseWrapper><CompaniesListPage /></SuspenseWrapper> },
-              { path: 'companies/new', element: <SuspenseWrapper><CompanyFormPage /></SuspenseWrapper> },
-              { path: 'companies/:id', element: <SuspenseWrapper><CompanyDetailPage /></SuspenseWrapper> },
-              { path: 'companies/:id/edit', element: <SuspenseWrapper><CompanyFormPage /></SuspenseWrapper> },
-              { path: 'deals', element: <SuspenseWrapper><DealsPage /></SuspenseWrapper> },
-              { path: 'deals/:id', element: <SuspenseWrapper><DealDetailPage /></SuspenseWrapper> },
-              { path: 'tasks', element: <SuspenseWrapper><TasksListPage /></SuspenseWrapper> },
-              { path: 'tasks/new', element: <SuspenseWrapper><TaskFormPage /></SuspenseWrapper> },
-              { path: 'tasks/:id', element: <SuspenseWrapper><TaskDetailPage /></SuspenseWrapper> },
-              { path: 'tasks/:id/edit', element: <SuspenseWrapper><TaskFormPage /></SuspenseWrapper> },
-              { path: 'automation', element: <SuspenseWrapper><AutomationRulesListPage /></SuspenseWrapper> },
-              { path: 'automation/new', element: <SuspenseWrapper><AutomationRuleFormPage /></SuspenseWrapper> },
-              { path: 'automation/:id/edit', element: <SuspenseWrapper><AutomationRuleFormPage /></SuspenseWrapper> },
-              { path: 'quizzes', element: <SuspenseWrapper><QuizzesListPage /></SuspenseWrapper> },
-              { path: 'quizzes/new', element: <SuspenseWrapper><QuizBuilderPage /></SuspenseWrapper> },
-              { path: 'quizzes/:id/edit', element: <SuspenseWrapper><QuizBuilderPage /></SuspenseWrapper> },
+              { path: 'folders', element: <SuspenseWrapper><FoldersListPage /></SuspenseWrapper> },
+              { path: 'folders/:id', element: <SuspenseWrapper><FolderDetailPage /></SuspenseWrapper> },
+              { path: 'cards/:id', element: <SuspenseWrapper><CardDetailPage /></SuspenseWrapper> },
+              { path: 'boards', element: <SuspenseWrapper><BoardsListPage /></SuspenseWrapper> },
+              { path: 'boards/:id', element: <SuspenseWrapper><BoardPage /></SuspenseWrapper> },
               { path: 'inbox', element: <SuspenseWrapper><InboxPage /></SuspenseWrapper> },
-              { path: 'reports', element: <SuspenseWrapper><ReportsPage /></SuspenseWrapper> },
+              { path: 'agents', element: <SuspenseWrapper><AgentsPage /></SuspenseWrapper> },
+              { path: 'connectors', element: <SuspenseWrapper><ConnectorsPage /></SuspenseWrapper> },
+              { path: 'storage', element: <SuspenseWrapper><StoragePage /></SuspenseWrapper> },
               { path: 'settings', element: <SuspenseWrapper><SettingsPage /></SuspenseWrapper> },
             ],
           },
         ],
       },
-      // Public quiz route (no auth, no layout)
-      { path: 'quiz/:id', element: <SuspenseWrapper><QuizTakerPage /></SuspenseWrapper> },
       // 404 catch-all
       { path: '*', element: <SuspenseWrapper><NotFoundPage /></SuspenseWrapper> },
     ],

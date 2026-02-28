@@ -11,6 +11,7 @@ import {
   restoreBackup,
   deleteBackup,
   importBackup,
+  BackupValidationError,
 } from '../services/backup.js';
 
 const backupNameParam = z.object({
@@ -73,15 +74,25 @@ export async function backupRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { collections, filename } = req.body;
-      const result = await importBackup(collections, filename);
-      return reply.status(201).send({
-        message: 'Backup imported successfully',
-        backup: {
-          filename: result.filename,
-          sizeBytes: result.sizeBytes,
-          createdAt: result.createdAt.toISOString(),
-        },
-      });
+      try {
+        const result = await importBackup(collections, filename);
+        return reply.status(201).send({
+          message: 'Backup imported successfully',
+          backup: {
+            filename: result.filename,
+            sizeBytes: result.sizeBytes,
+            createdAt: result.createdAt.toISOString(),
+          },
+        });
+      } catch (err) {
+        if (err instanceof BackupValidationError) {
+          return reply.status(422).send({
+            message: err.message,
+            validationErrors: err.errors,
+          });
+        }
+        throw err;
+      }
     },
   );
 
@@ -125,8 +136,21 @@ export async function backupRoutes(app: FastifyInstance) {
       if (!backupPath) {
         return reply.status(404).send({ message: `Backup not found: ${name}` });
       }
-      await restoreBackup(name);
-      return reply.send({ message: `Backup restored: ${name}` });
+      try {
+        const { preRestoreBackup } = await restoreBackup(name);
+        return reply.send({
+          message: `Backup restored: ${name}`,
+          preRestoreBackup,
+        });
+      } catch (err) {
+        if (err instanceof BackupValidationError) {
+          return reply.status(422).send({
+            message: err.message,
+            validationErrors: err.errors,
+          });
+        }
+        throw err;
+      }
     },
   );
 

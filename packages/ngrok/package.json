@@ -7,7 +7,6 @@
     "build": "echo \"ngrok-runner: nothing to build\"",
     "lint": "echo \"ngrok-runner: nothing to lint\"",
     "typecheck": "echo \"ngrok-runner: nothing to typecheck\"",
-    "test": "echo \"ngrok-runner: nothing to test\"",
     "clean": "echo \"ngrok-runner: nothing to clean\""
   }
 }

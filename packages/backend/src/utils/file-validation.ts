@@ -1,7 +1,7 @@
 /**
  * File upload validation (OWASP Unrestricted File Upload).
  *
- * Allowlist of safe MIME types for CRM media uploads.
+ * Allowlist of safe MIME types for media uploads.
  * Blocks executable content that could be used for attacks.
  */
 

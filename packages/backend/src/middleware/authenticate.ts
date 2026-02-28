@@ -1,11 +1,9 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { UserRole } from 'shared';
 import { env } from '../config/env.js';
 import { store } from '../db/index.js';
 
 export interface JwtPayload {
   sub: string; // user id
-  role: UserRole;
   iat?: number;
   exp?: number;
 }
@@ -17,7 +15,7 @@ let devAuthWarningLogged = false;
  * and attaches the decoded payload to `request.user`.
  *
  * When DEV_SKIP_AUTH=true, JWT verification is skipped entirely and a
- * mock admin user is injected into the request.
+ * mock user is injected into the request.
  */
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   if (env.DEV_SKIP_AUTH) {
@@ -26,11 +24,11 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
       devAuthWarningLogged = true;
     }
 
-    const adminUser = store.findOne('users', (r) => r.role === 'admin' && r.isActive === true);
+    const activeUser = store.findOne('users', (r) => r.isActive === true);
 
-    request.user = adminUser
-      ? { sub: adminUser.id as string, role: adminUser.role as string }
-      : { sub: 'dev-user', role: 'admin' };
+    request.user = activeUser
+      ? { sub: activeUser.id as string }
+      : { sub: 'dev-user' };
 
     return;
   }

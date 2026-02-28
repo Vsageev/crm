@@ -7,8 +7,9 @@ Patterns optimized for AI agent consumers — reducing token waste, preventing c
 1. [Idempotency Keys](#1-idempotency-keys) — Safety — `src/middleware/idempotency.ts`
 2. [Batch Operations](#2-batch-operations) — Efficiency — `src/routes/batch.ts`
 3. [`countOnly` Parameter](#3-countonly-parameter) — Efficiency — services + routes
-4. [Conditional Actions](#4-conditional-actions) — Correctness — `src/services/deals.ts`
+4. [Conditional Actions](#4-conditional-actions) — Correctness — `src/services/cards.ts`
 5. [Consistent Error Format](#5-consistent-error-format) — Correctness — global
+6. [Check Permissions](#6-check-permissions) — Safety — `src/routes/permissions.ts`
 
 ---
 
@@ -60,7 +61,7 @@ Idempotency-Key: agent-op-12345
 
 **Files:** `src/routes/batch.ts`
 
-**Available endpoints** (same pattern for contacts, deals, tasks, tags):
+**Available endpoints** (same pattern for contacts, cards, tasks, tags):
 
 - `POST /api/batch/{entity}/create` — body: `{ items: [...] }`
 - `POST /api/batch/{entity}/update` — body: `{ items: [{ id, data }] }`
@@ -99,19 +100,19 @@ Idempotency-Key: agent-op-12345
 
 > Skip the payload when you only need a number.
 
-**Problem:** Asking "how many open deals?" returns 500 full objects just to read `total`. Thousands of wasted tokens.
+**Problem:** Asking "how many open cards?" returns 500 full objects just to read `total`. Thousands of wasted tokens.
 
 **Solution:** `countOnly=true` returns `{ total: N }` only — no entries, no sorting, no pagination.
 
 **Files:**
-- Services: `src/services/contacts.ts`, `src/services/deals.ts`, `src/services/tasks.ts`
-- Routes: `src/routes/contacts.ts`, `src/routes/deals.ts`, `src/routes/tasks.ts`, `src/routes/public-api.ts`
+- Services: `src/services/contacts.ts`, `src/services/cards.ts`, `src/services/tasks.ts`
+- Routes: `src/routes/contacts.ts`, `src/routes/cards.ts`, `src/routes/tasks.ts`, `src/routes/public-api.ts`
 
 ```http
 GET /api/contacts?countOnly=true
 -> { "total": 342 }
 
-GET /api/v1/deals?stage=won&countOnly=true
+GET /api/v1/cards?stage=done&countOnly=true
 -> { "total": 57 }
 
 GET /api/tasks?status=pending&countOnly=true
@@ -120,7 +121,7 @@ GET /api/tasks?status=pending&countOnly=true
 
 **Do:**
 - Use `countOnly=true` when you only need the count
-- Combine with filters (`?stage=won&countOnly=true`)
+- Combine with filters (`?stage=done&countOnly=true`)
 
 **Don't:**
 - Fetch full lists and count them client-side
@@ -134,21 +135,21 @@ GET /api/tasks?status=pending&countOnly=true
 
 > Let the API handle business logic.
 
-**Problem:** Agent builds multi-step workflows: "read deal value, if > $10k, move to Won." Each step = extra call, extra room for mistakes.
+**Problem:** Agent builds multi-step workflows: "read card value, if > $10k, move to Done." Each step = extra call, extra room for mistakes.
 
-**Solution:** Embed conditional logic in the API. `moveDeal` accepts `autoClose` + `closeIfValue` — the server evaluates and acts.
+**Solution:** Embed conditional logic in the API. `moveCard` accepts `autoComplete` + `completeIfValue` — the server evaluates and acts.
 
-**Files:** `src/services/deals.ts:moveDeal`, `src/routes/deals.ts`
+**Files:** `src/services/cards.ts:moveCard`, `src/routes/cards.ts`
 
 ```jsonc
-POST /api/deals/:id/move
+POST /api/cards/:id/move
 {
-  "pipelineStageId": "stage-uuid",
-  "autoClose": true,       // enable conditional close
-  "closeIfValue": 10000    // threshold in deal currency
+  "columnId": "column-uuid",
+  "autoComplete": true,       // enable conditional completion
+  "completeIfValue": 10000    // threshold in card currency
 }
-// If deal.value >= 10000 -> auto-moves to win stage, sets closedAt
-// If deal.value <  10000 -> moves to the specified stage normally
+// If card.value >= 10000 -> auto-moves to done column, sets completedAt
+// If card.value <  10000 -> moves to the specified column normally
 ```
 
 **Do:**
@@ -213,6 +214,44 @@ The `ApiError` class provides factory methods: `badRequest()`, `unauthorized()`,
 
 ---
 
+### 6. Check Permissions
+
+> Know what you can do before you try.
+
+**Problem:** Agent calls an endpoint, gets 403, retries, gets 403 again — wasted tokens and no progress.
+
+**Solution:** `POST /api/permissions/check` accepts a list of permission strings and returns a boolean for each one.
+
+**Files:** `src/routes/permissions.ts`
+
+```http
+POST /api/permissions/check
+Authorization: Bearer <token>
+{
+  "permissions": ["contacts:read", "contacts:delete", "users:delete"]
+}
+
+-> 200 OK
+{
+  "permissions": {
+    "contacts:read": true,
+    "contacts:delete": false,
+    "users:delete": false
+  }
+}
+```
+
+**Do:**
+- Check permissions before attempting restricted operations
+- Batch multiple permission checks into a single call (up to 100)
+- Cache recent permission-check results for the current token when appropriate
+
+**Don't:**
+- Call individual endpoints just to test if you have access
+- Hardcode permission assumptions — always verify via this endpoint
+
+---
+
 ## Quick Reference
 
 ```
@@ -224,7 +263,10 @@ EFFICIENCY
   countOnly=true ............ any list endpoint, returns { total } only
 
 CORRECTNESS
-  Conditional move .......... POST /api/deals/:id/move  { autoClose, closeIfValue }
+  Conditional move .......... POST /api/cards/:id/move  { autoComplete, completeIfValue }
   ApiError class ............ { statusCode, code, message, hint }
   Partial failures .......... { succeeded: [...], failed: [...] }
+
+SAFETY
+  Check permissions ......... POST /api/permissions/check  { permissions: [...] }
 ```

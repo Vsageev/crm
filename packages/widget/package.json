@@ -8,12 +8,9 @@
     "build": "vite build && vite build --config vite.chat.config.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "vite": "^7.3.1",
-    "vitest": "^4.0.18"
+    "vite": "^7.3.1"
   }
 }

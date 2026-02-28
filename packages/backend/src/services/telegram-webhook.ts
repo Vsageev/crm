@@ -2,10 +2,7 @@ import { store } from '../db/index.js';
 import { getBotByTelegramId } from './telegram.js';
 import { createConversation } from './conversations.js';
 import { sendMessage, type SendMessageData } from './messages.js';
-import { createContact, getContactByTelegramId, getContactTagNames } from './contacts.js';
 import { answerCallbackQuery, sendTelegramMessage } from './telegram-outbound.js';
-import { linkTelegramChat } from './telegram-notifications.js';
-import { findTriggerFlow, startFlow, handleFlowMessage } from './chatbot-flows.js';
 import { eventBus } from './event-bus.js';
 
 // ---------------------------------------------------------------------------
@@ -373,7 +370,7 @@ async function findOrCreateContact(telegramUser: TelegramUser) {
   const telegramUserId = String(telegramUser.id);
 
   // 1. Primary lookup: direct telegramId on the contact record
-  const directMatch = await getContactByTelegramId(telegramUserId);
+  const directMatch = store.findOne('contacts', (r: any) => r.telegramId === telegramUserId);
   if (directMatch) {
     return syncContactFromTelegram(directMatch, telegramUser);
   }
@@ -391,15 +388,14 @@ async function findOrCreateContact(telegramUser: TelegramUser) {
   }
 
   // 3. Create a new contact from the Telegram user info
-  const contact = await createContact({
+  const contact = store.insert('contacts', {
     firstName: telegramUser.first_name,
-    lastName: telegramUser.last_name,
+    lastName: telegramUser.last_name ?? null,
     source: 'telegram',
     telegramId: telegramUserId,
     notes: buildTelegramNotes(telegramUser),
-  });
+  }) as any;
 
-  // Emit automation trigger for contacts auto-created from Telegram
   eventBus.emit('contact_created', {
     contactId: contact.id,
     contact: contact as unknown as Record<string, unknown>,
@@ -431,7 +427,7 @@ async function findOrCreateConversation(
   });
 
   // Emit automation trigger for new conversations from Telegram (enriched for routing rules)
-  const tagNames = await getContactTagNames(contactId).catch(() => [] as string[]);
+  const tagNames: string[] = [];
   eventBus.emit('conversation_created', {
     conversationId: conversation.id as string,
     contactId,
@@ -490,23 +486,6 @@ export async function handleTelegramWebhook(
     return { ok: true }; // Ignore messages from bots
   }
 
-  // 5a. Handle /start <linkToken> for notification linking
-  if (telegramMessage.text?.startsWith('/start ')) {
-    const token = telegramMessage.text.slice(7).trim();
-    if (token.length > 0) {
-      const chatId = String(telegramMessage.chat.id);
-      const linked = await linkTelegramChat(
-        token,
-        chatId,
-        telegramMessage.from.username,
-      );
-      // Don't return error — just proceed with normal message flow if linking fails
-      if (linked) {
-        return { ok: true };
-      }
-    }
-  }
-
   // 6. Find or create the contact
   const contact = await findOrCreateContact(telegramMessage.from);
 
@@ -539,7 +518,7 @@ export async function handleTelegramWebhook(
   }
 
   // Emit automation trigger for inbound message (enriched for routing rules)
-  const contactTagNames = await getContactTagNames(contact.id as string).catch(() => [] as string[]);
+  const contactTagNames: string[] = [];
   eventBus.emit('message_received', {
     messageId: message.id as string,
     conversationId: conversation.id as string,
@@ -554,39 +533,25 @@ export async function handleTelegramWebhook(
     store.update('conversations', conversation.id as string, { status: 'open', closedAt: null });
   }
 
-  // 11. Handle chatbot flows or auto-greeting for new conversations
-  if (isNewConversation) {
-    // Check for a chatbot flow first (takes priority over simple auto-greeting)
-    const triggerFlow = await findTriggerFlow(bot.botId as string);
-    if (triggerFlow) {
-      startFlow(triggerFlow.id as string, conversation.id as string).catch(() => {
-        // Fire-and-forget — flow errors don't block webhook response
-      });
-    } else if (bot.autoGreetingEnabled && bot.autoGreetingText) {
-      // Fall back to simple auto-greeting
-      const greetingMessage = await sendMessage({
-        conversationId: conversation.id as string,
-        direction: 'outbound',
-        type: 'text',
-        content: bot.autoGreetingText as string,
-        metadata: JSON.stringify({ autoGreeting: true }),
-      });
-
-      if (greetingMessage) {
-        sendTelegramMessage({
-          conversationId: conversation.id as string,
-          messageId: greetingMessage.id as string,
-          text: bot.autoGreetingText as string,
-        }).catch(() => {
-          // Fire-and-forget — status tracked via message record
-        });
-      }
-    }
-  } else {
-    // For existing conversations, check if there's an active flow to handle the message
-    handleFlowMessage(conversation.id as string, parsed.content ?? null).catch(() => {
-      // Fire-and-forget — flow errors don't block webhook response
+  // 11. Auto-greeting for new conversations
+  if (isNewConversation && bot.autoGreetingEnabled && bot.autoGreetingText) {
+    const greetingMessage = await sendMessage({
+      conversationId: conversation.id as string,
+      direction: 'outbound',
+      type: 'text',
+      content: bot.autoGreetingText as string,
+      metadata: JSON.stringify({ autoGreeting: true }),
     });
+
+    if (greetingMessage) {
+      sendTelegramMessage({
+        conversationId: conversation.id as string,
+        messageId: greetingMessage.id as string,
+        text: bot.autoGreetingText as string,
+      }).catch(() => {
+        // Fire-and-forget — status tracked via message record
+      });
+    }
   }
 
   return {
@@ -642,11 +607,6 @@ async function handleCallbackQuery(
         username: callbackQuery.from.username,
       },
     }),
-  });
-
-  // Route callback data through the chatbot flow engine
-  handleFlowMessage(conversation.id as string, callbackQuery.data, callbackQuery.data).catch(() => {
-    // Fire-and-forget — flow errors don't block webhook response
   });
 
   return {

@@ -4,8 +4,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: 'src/index.ts',
-      name: 'CrmForm',
-      fileName: () => 'crm-form.js',
+      name: 'WsForm',
+      fileName: () => 'ws-form.js',
       formats: ['iife'],
     },
     outDir: 'dist',

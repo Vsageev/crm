@@ -21,7 +21,7 @@ export function AppLayout() {
               <Menu size={20} />
             </button>
           </Tooltip>
-          <span className={styles.mobileTitle}>CRM</span>
+          <span className={styles.mobileTitle}>Workspace</span>
         </header>
 
         {/* Overlay for mobile sidebar */}

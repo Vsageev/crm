@@ -49,7 +49,7 @@ interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
+  channelType: 'telegram' | 'internal' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -127,10 +127,7 @@ interface InlineKeyboardButton {
 
 const CHANNEL_LABELS: Record<Conversation['channelType'], string> = {
   telegram: 'Telegram',
-  email: 'Email',
-  web_chat: 'Web Chat',
-  whatsapp: 'WhatsApp',
-  instagram: 'Instagram',
+  internal: 'Internal',
   other: 'Other',
 };
 
@@ -350,6 +347,7 @@ export function InboxPage() {
   const [convsError, setConvsError] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('open');
+  const [channelFilter, setChannelFilter] = useState<string>('');
 
   // Active conversation
   const selectedId = searchParams.get('id') || null;
@@ -404,6 +402,7 @@ export function InboxPage() {
       params.set('limit', '100');
       if (statusFilter) params.set('status', statusFilter);
       if (searchInput) params.set('search', searchInput);
+      if (channelFilter) params.set('channelType', channelFilter);
 
       const data = await api<PaginatedResponse<Conversation>>(`/conversations?${params}`);
       setConversations((prev) => (areConversationListsEqual(prev, data.entries) ? prev : data.entries));
@@ -416,7 +415,7 @@ export function InboxPage() {
         setConvsLoading(false);
       }
     }
-  }, [statusFilter, searchInput]);
+  }, [statusFilter, searchInput, channelFilter]);
 
   useEffect(() => {
     fetchConversations();
@@ -907,6 +906,15 @@ export function InboxPage() {
                 className={styles.searchInput}
               />
             </form>
+            <select
+              value={channelFilter}
+              onChange={(e) => setChannelFilter(e.target.value)}
+              className={styles.statusFilter}
+            >
+              <option value="">All</option>
+              <option value="internal">Internal</option>
+              <option value="telegram">Inbound</option>
+            </select>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}

@@ -3,7 +3,7 @@ import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
 
 const API_KEY_BYTE_LENGTH = 32;
-const API_KEY_PREFIX = 'crm_';
+const API_KEY_PREFIX = 'ws_';
 
 function hashKey(rawKey: string): string {
   return createHash('sha256').update(rawKey).digest('hex');

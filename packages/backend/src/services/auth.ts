@@ -27,9 +27,9 @@ function parseExpiry(duration: string): number {
   return value * multipliers[unit];
 }
 
-export async function generateTokens(app: FastifyInstance, userId: string, role: string) {
+export async function generateTokens(app: FastifyInstance, userId: string) {
   const accessToken = app.jwt.sign(
-    { sub: userId, role },
+    { sub: userId },
     { expiresIn: env.JWT_ACCESS_EXPIRES_IN },
   );
 
@@ -62,7 +62,7 @@ export async function refreshAccessToken(app: FastifyInstance, rawRefreshToken: 
 
   if (!user || !(user as any).isActive) return null;
 
-  return generateTokens(app, (user as any).id, (user as any).role);
+  return generateTokens(app, (user as any).id);
 }
 
 export async function revokeUserRefreshTokens(userId: string) {

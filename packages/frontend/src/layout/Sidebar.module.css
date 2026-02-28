@@ -105,12 +105,6 @@
   text-overflow: ellipsis;
 }
 
-.userRole {
-  font-size: 11px;
-  color: var(--color-text-tertiary);
-  text-transform: capitalize;
-}
-
 .logoutBtn {
   display: flex;
   align-items: center;

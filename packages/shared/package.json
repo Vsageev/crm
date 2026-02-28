@@ -15,11 +15,6 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "clean": "rm -rf dist"
-  },
-  "devDependencies": {
-    "vitest": "^4.0.18"
   }
 }

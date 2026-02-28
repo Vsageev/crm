@@ -16,7 +16,7 @@ import { eventBus } from '../services/event-bus.js';
 const createConversationBody = z.object({
   contactId: z.uuid(),
   assigneeId: z.uuid().optional(),
-  channelType: z.enum(['telegram', 'email', 'web_chat', 'whatsapp', 'instagram', 'other']),
+  channelType: z.enum(['telegram', 'internal', 'other']),
   status: z.enum(['open', 'closed', 'archived']).optional(),
   subject: z.string().max(255).optional(),
   externalId: z.string().max(255).optional(),

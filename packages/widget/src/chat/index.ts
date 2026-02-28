@@ -12,11 +12,11 @@ async function init(options: CrmChatOptions): Promise<void> {
       ? document.querySelector<HTMLElement>(options.container)!
       : options.container;
     if (!el) {
-      throw new Error(`CrmChat: container "${options.container}" not found`);
+      throw new Error(`WsChat: container "${options.container}" not found`);
     }
   } else {
     el = document.createElement('div');
-    el.id = 'crm-chat-widget';
+    el.id = 'ws-chat-widget';
     document.body.appendChild(el);
   }
 
@@ -31,19 +31,19 @@ async function init(options: CrmChatOptions): Promise<void> {
 }
 
 function autoInit(): void {
-  const elements = document.querySelectorAll<HTMLElement>('[data-crm-chat]');
+  const elements = document.querySelectorAll<HTMLElement>('[data-ws-chat]');
   for (const el of elements) {
-    const widgetId = el.dataset.crmChat;
-    const apiUrl = el.dataset.crmApiUrl;
+    const widgetId = el.dataset.wsChat;
+    const apiUrl = el.dataset.wsApiUrl;
     if (!widgetId || !apiUrl) continue;
     init({ widgetId, apiUrl, container: el });
   }
 
   // Also check for script-based initialization
-  const scripts = document.querySelectorAll<HTMLScriptElement>('script[data-crm-chat-widget]');
+  const scripts = document.querySelectorAll<HTMLScriptElement>('script[data-ws-chat-widget]');
   for (const script of scripts) {
-    const widgetId = script.dataset.crmChatWidget;
-    const apiUrl = script.dataset.crmApiUrl;
+    const widgetId = script.dataset.wsChatWidget;
+    const apiUrl = script.dataset.wsApiUrl;
     if (!widgetId || !apiUrl) continue;
     init({ widgetId, apiUrl });
   }

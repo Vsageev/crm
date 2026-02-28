@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { store } from '../db/index.js';
-import { eventBus, type CrmEventName, type CrmEventMap } from './event-bus.js';
+import { eventBus, type AppEventName, type AppEventMap } from './event-bus.js';
 import { getActiveWebhooksByEvent } from './webhooks.js';
 
 // ---------------------------------------------------------------------------
@@ -197,10 +197,10 @@ async function processRetries(): Promise<void> {
 // Event bus listener — fan-out events to registered webhooks
 // ---------------------------------------------------------------------------
 
-const EVENTS: CrmEventName[] = [
+const EVENTS: AppEventName[] = [
   'contact_created',
-  'deal_created',
-  'deal_stage_changed',
+  'card_created',
+  'card_moved',
   'message_received',
   'tag_added',
   'task_completed',
@@ -240,7 +240,7 @@ export function stopWebhookDeliveryEngine() {
   }
 }
 
-async function dispatchEvent(event: CrmEventName, payload: Record<string, unknown>) {
+async function dispatchEvent(event: AppEventName, payload: Record<string, unknown>) {
   const activeWebhooks = await getActiveWebhooksByEvent(event);
 
   if (activeWebhooks.length === 0) return;

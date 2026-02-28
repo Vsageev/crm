@@ -15,12 +15,12 @@ import {
   getDeliveryById,
   retryDelivery,
 } from '../services/webhook-delivery.js';
-import type { CrmEventName } from '../services/event-bus.js';
+import type { AppEventName } from '../services/event-bus.js';
 
 const eventValues = [
   'contact_created',
-  'deal_created',
-  'deal_stage_changed',
+  'card_created',
+  'card_moved',
   'message_received',
   'tag_added',
   'task_completed',
@@ -99,10 +99,10 @@ export async function webhookRoutes(app: FastifyInstance) {
       },
     },
     async (_request, reply) => {
-      const events: { name: CrmEventName | '*'; description: string }[] = [
+      const events: { name: AppEventName | '*'; description: string }[] = [
         { name: 'contact_created', description: 'Fired when a new contact is created' },
-        { name: 'deal_created', description: 'Fired when a new deal is created' },
-        { name: 'deal_stage_changed', description: 'Fired when a deal moves to a different stage' },
+        { name: 'card_created', description: 'Fired when a new card is created' },
+        { name: 'card_moved', description: 'Fired when a card moves to a different column' },
         { name: 'message_received', description: 'Fired when a new message is received' },
         { name: 'tag_added', description: 'Fired when tags are added to a contact' },
         { name: 'task_completed', description: 'Fired when a task is marked as completed' },

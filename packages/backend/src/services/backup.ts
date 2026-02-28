@@ -2,6 +2,7 @@ import { mkdir, readdir, stat, unlink, copyFile, rmdir, readFile, writeFile } fr
 import { join, resolve } from 'node:path';
 import { env } from '../config/env.js';
 import { store } from '../db/index.js';
+import { collectionSchemas } from '../schemas/collections.js';
 
 export interface BackupResult {
   filename: string;
@@ -25,15 +26,55 @@ function getBackupDir(): string {
 function buildSubdirName(): string {
   const now = new Date();
   const ts = now.toISOString().replace(/[:.]/g, '-');
-  return `crm-backup-${ts}`;
+  return `ws-backup-${ts}`;
 }
 
 function parseTimestampFromDirname(dirname: string): Date | null {
-  const match = dirname.match(/^crm-backup-(.+)$/);
+  const match = dirname.match(/^ws-backup-(.+)$/);
   if (!match) return null;
   const isoStr = match[1].replace(/(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, '$1:$2:$3.$4Z');
   const date = new Date(isoStr);
   return isNaN(date.getTime()) ? null : date;
+}
+
+export interface CollectionValidationError {
+  collection: string;
+  index: number;
+  message: string;
+}
+
+export class BackupValidationError extends Error {
+  public readonly errors: CollectionValidationError[];
+
+  constructor(errors: CollectionValidationError[]) {
+    super(`Backup validation failed with ${errors.length} error(s)`);
+    this.name = 'BackupValidationError';
+    this.errors = errors;
+  }
+}
+
+export function validateCollections(
+  collections: Record<string, unknown[]>,
+): { valid: boolean; errors: CollectionValidationError[] } {
+  const errors: CollectionValidationError[] = [];
+
+  for (const [col, records] of Object.entries(collections)) {
+    const schema = collectionSchemas[col];
+    if (!schema) continue; // unknown collections are allowed
+
+    for (let i = 0; i < records.length; i++) {
+      const result = schema.safeParse(records[i]);
+      if (!result.success) {
+        errors.push({
+          collection: col,
+          index: i,
+          message: result.error.message,
+        });
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 export async function ensureBackupDir(): Promise<void> {
@@ -102,7 +143,7 @@ export async function listBackups(): Promise<BackupInfo[]> {
 
   const entries = await readdir(dir, { withFileTypes: true });
   const backupDirs = entries.filter(
-    (e) => e.isDirectory() && e.name.startsWith('crm-backup-'),
+    (e) => e.isDirectory() && e.name.startsWith('ws-backup-'),
   );
 
   const results: BackupInfo[] = [];
@@ -154,10 +195,10 @@ export async function getBackupBundle(name: string): Promise<Record<string, unkn
 }
 
 /**
- * Restores data from a backup: copies JSON files back into DATA_DIR
- * and reloads the in-memory store.
+ * Restores data from a backup: validates records, creates a pre-restore
+ * snapshot, copies JSON files back into DATA_DIR, and reloads the store.
  */
-export async function restoreBackup(name: string): Promise<void> {
+export async function restoreBackup(name: string): Promise<{ preRestoreBackup: string }> {
   const backupPath = await getBackupPath(name);
   if (!backupPath) throw new Error(`Backup not found: ${name}`);
 
@@ -166,6 +207,34 @@ export async function restoreBackup(name: string): Promise<void> {
 
   if (jsonFiles.length === 0) {
     throw new Error('Backup is empty — no JSON files found');
+  }
+
+  // Read and validate all collections before touching DATA_DIR
+  const collections: Record<string, unknown[]> = {};
+  for (const file of jsonFiles) {
+    const col = file.replace('.json', '');
+    const raw = await readFile(join(backupPath, file), 'utf-8');
+    collections[col] = JSON.parse(raw);
+  }
+
+  const { valid, errors } = validateCollections(collections);
+  if (!valid) {
+    throw new BackupValidationError(errors);
+  }
+
+  // Create a pre-restore safety snapshot
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const preRestoreName = `ws-backup-pre-restore-${ts}`;
+  const preRestorePath = join(getBackupDir(), preRestoreName);
+  await mkdir(preRestorePath, { recursive: true });
+
+  try {
+    const dataFiles = await readdir(DATA_DIR);
+    for (const file of dataFiles.filter((f) => f.endsWith('.json'))) {
+      await copyFile(join(DATA_DIR, file), join(preRestorePath, file));
+    }
+  } catch {
+    // DATA_DIR may not exist yet — that's fine
   }
 
   // Copy all JSON files from backup into data directory
@@ -178,6 +247,8 @@ export async function restoreBackup(name: string): Promise<void> {
 
   // Reload in-memory store
   await store.reload();
+
+  return { preRestoreBackup: preRestoreName };
 }
 
 /**
@@ -186,6 +257,12 @@ export async function restoreBackup(name: string): Promise<void> {
  * and returns the backup info.
  */
 export async function importBackup(collections: Record<string, unknown[]>, filename?: string): Promise<BackupResult> {
+  // Validate before writing anything to disk
+  const { valid, errors } = validateCollections(collections);
+  if (!valid) {
+    throw new BackupValidationError(errors);
+  }
+
   const dir = getBackupDir();
   await ensureBackupDir();
 

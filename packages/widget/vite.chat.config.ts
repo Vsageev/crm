@@ -4,8 +4,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: 'src/chat/index.ts',
-      name: 'CrmChat',
-      fileName: () => 'crm-chat.js',
+      name: 'WsChat',
+      fileName: () => 'ws-chat.js',
       formats: ['iife'],
     },
     outDir: 'dist',

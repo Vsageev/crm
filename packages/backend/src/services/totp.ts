@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { TOTP, Secret } from 'otpauth';
 import { store } from '../db/index.js';
 
-const ISSUER = 'CRM';
+const ISSUER = 'Workspace';
 const RECOVERY_CODE_COUNT = 8;
 
 function createTotpInstance(secret: string, userEmail: string): TOTP {

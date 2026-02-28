@@ -1,14 +1,14 @@
-import type { UserRole } from 'shared';
+import '@fastify/jwt';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
     payload: {
       sub: string;
-      role: UserRole;
+      twoFactor?: boolean;
     };
     user: {
       sub: string;
-      role: UserRole;
+      twoFactor?: boolean;
     };
   }
 }

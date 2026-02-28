@@ -1,32 +1,19 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Users,
-  Building2,
+  FolderOpen,
   Kanban,
-  CheckSquare,
   MessageSquare,
-  Zap,
-  ClipboardList,
-  BarChart3,
+  Cpu,
+  Cable,
+  HardDrive,
   Settings,
   LogOut,
 } from 'lucide-react';
 import { useAuth } from '../stores/useAuth';
 import { Tooltip } from '../ui';
+import { getPreferredBoardId, getPreferredFolderId } from '../lib/navigation-preferences';
 import styles from './Sidebar.module.css';
-
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/contacts', icon: Users, label: 'Contacts' },
-  { to: '/companies', icon: Building2, label: 'Companies' },
-  { to: '/deals', icon: Kanban, label: 'Deals' },
-  { to: '/tasks', icon: CheckSquare, label: 'Tasks' },
-  { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
-  { to: '/automation', icon: Zap, label: 'Automation' },
-  { to: '/quizzes', icon: ClipboardList, label: 'Quizzes' },
-  { to: '/reports', icon: BarChart3, label: 'Reports' },
-] as const;
 
 interface SidebarProps {
   onNavigate?: () => void;
@@ -34,10 +21,22 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate }: SidebarProps) {
   const { user, logout } = useAuth();
+  const preferredFolderId = getPreferredFolderId();
+  const preferredBoardId = getPreferredBoardId();
+
+  const navItems = [
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: preferredFolderId ? `/folders/${preferredFolderId}` : '/folders', icon: FolderOpen, label: 'Collections' },
+    { to: preferredBoardId ? `/boards/${preferredBoardId}` : '/boards', icon: Kanban, label: 'Boards' },
+    { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
+    { to: '/agents', icon: Cpu, label: 'Agents' },
+    { to: '/connectors', icon: Cable, label: 'Connectors' },
+    { to: '/storage', icon: HardDrive, label: 'Storage' },
+  ] as const;
 
   return (
     <aside className={styles.sidebar}>
-      <div className={styles.logo}>CRM</div>
+      <div className={styles.logo}>Cards</div>
       <nav className={styles.nav}>
         {navItems.map((item) => (
           <NavLink
@@ -76,7 +75,6 @@ export function Sidebar({ onNavigate }: SidebarProps) {
                 <span className={styles.userName}>
                   {user.firstName} {user.lastName}
                 </span>
-                <span className={styles.userRole}>{user.role}</span>
               </div>
             </div>
             <Tooltip label="Log out">

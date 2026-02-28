@@ -12,9 +12,9 @@ Before making any API calls, check if a stored API key exists at `.claude-api-ke
 - **If the file is missing or empty** — ask the user for an API key using AskUserQuestion. Include these instructions so they know how to get one:
 
 > To create an API key:
-> 1. Open the CRM UI and go to **Settings → API Keys**
+> 1. Open the Workspace UI and go to **Settings → API Keys**
 > 2. Click **"New API Key"**, give it a name, and select the permissions you need
-> 3. Copy the key (starts with `crm_`) — it's only shown once
+> 3. Copy the key (starts with `ws_`) — it's only shown once
 > 4. Paste it here
 
 Once the user provides the key, save it to `.claude-api-key` in the project root.

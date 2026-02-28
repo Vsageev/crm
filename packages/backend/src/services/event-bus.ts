@@ -9,17 +9,17 @@ export interface ContactCreatedEvent {
   contact: Record<string, unknown>;
 }
 
-export interface DealCreatedEvent {
-  dealId: string;
-  deal: Record<string, unknown>;
+export interface CardCreatedEvent {
+  cardId: string;
+  card: Record<string, unknown>;
 }
 
-export interface DealStageChangedEvent {
-  dealId: string;
-  deal: Record<string, unknown>;
-  previousStageId: string | null;
-  newStageId: string;
-  stageName: string;
+export interface CardMovedEvent {
+  cardId: string;
+  card: Record<string, unknown>;
+  previousColumnId: string | null;
+  newColumnId: string;
+  columnName: string;
 }
 
 export interface MessageReceivedEvent {
@@ -56,37 +56,37 @@ export interface ConversationCreatedEvent {
 // Event map — maps trigger names to their payload types
 // ---------------------------------------------------------------------------
 
-export interface CrmEventMap {
+export interface AppEventMap {
   contact_created: ContactCreatedEvent;
-  deal_created: DealCreatedEvent;
-  deal_stage_changed: DealStageChangedEvent;
+  card_created: CardCreatedEvent;
+  card_moved: CardMovedEvent;
   message_received: MessageReceivedEvent;
   tag_added: TagAddedEvent;
   task_completed: TaskCompletedEvent;
   conversation_created: ConversationCreatedEvent;
 }
 
-export type CrmEventName = keyof CrmEventMap;
+export type AppEventName = keyof AppEventMap;
 
 // ---------------------------------------------------------------------------
 // Singleton event bus
 // ---------------------------------------------------------------------------
 
-class CrmEventBus extends EventEmitter {
-  emit<K extends CrmEventName>(event: K, payload: CrmEventMap[K]): boolean {
+class AppEventBus extends EventEmitter {
+  emit<K extends AppEventName>(event: K, payload: AppEventMap[K]): boolean {
     return super.emit(event, payload);
   }
 
-  on<K extends CrmEventName>(event: K, listener: (payload: CrmEventMap[K]) => void): this {
+  on<K extends AppEventName>(event: K, listener: (payload: AppEventMap[K]) => void): this {
     return super.on(event, listener);
   }
 
-  off<K extends CrmEventName>(event: K, listener: (payload: CrmEventMap[K]) => void): this {
+  off<K extends AppEventName>(event: K, listener: (payload: AppEventMap[K]) => void): this {
     return super.off(event, listener);
   }
 }
 
-export const eventBus = new CrmEventBus();
+export const eventBus = new AppEventBus();
 
 // Prevent unhandled-event warnings for automation listeners
 eventBus.setMaxListeners(50);

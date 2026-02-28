@@ -1,15 +1,8 @@
-import React, { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Copy, Check, AlertTriangle } from 'lucide-react';
-import { Button, Card, Input, Badge } from '../../ui';
+import { Button, Card, Badge, ApiKeyFormFields, type ApiKeyFormData } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import styles from './SettingsPage.module.css';
-
-const API_RESOURCES = [
-  'contacts', 'deals', 'tasks', 'pipelines',
-  'messages', 'activities', 'templates', 'webhooks',
-] as const;
-
-type AccessLevel = 'none' | 'read' | 'write';
 
 interface ApiKey {
   id: string;
@@ -34,16 +27,11 @@ interface CreateApiKeyResponse extends ApiKey {
   key: string;
 }
 
-interface ApiKeyFormData {
-  name: string;
-  description: string;
-  permissions: string[];
-  hasExpiration: boolean;
-  expiresAt: string;
+interface FormData extends ApiKeyFormData {
   isActive: boolean;
 }
 
-const EMPTY_FORM: ApiKeyFormData = {
+const EMPTY_FORM: FormData = {
   name: '',
   description: '',
   permissions: [],
@@ -62,7 +50,7 @@ export function ApiKeysTab() {
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<ApiKeyFormData>(EMPTY_FORM);
+  const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -115,7 +103,7 @@ export function ApiKeysTab() {
       hasExpiration: Boolean(key.expiresAt),
       expiresAt: key.expiresAt ? key.expiresAt.slice(0, 16) : '',
       isActive: key.isActive,
-    });
+    } satisfies FormData);
     setFormErrors({});
     setFormError('');
     setCreatedKey(null);
@@ -130,32 +118,6 @@ export function ApiKeysTab() {
     setFormError('');
     setCreatedKey(null);
     setCopied(false);
-  }
-
-  function getResourceLevel(resource: string): AccessLevel {
-    if (form.permissions.includes(`${resource}:write`)) return 'write';
-    if (form.permissions.includes(`${resource}:read`)) return 'read';
-    return 'none';
-  }
-
-  function setResourceLevel(resource: string, level: AccessLevel) {
-    setForm((f) => {
-      const filtered = f.permissions.filter((p) => !p.startsWith(`${resource}:`));
-      if (level === 'write') filtered.push(`${resource}:write`);
-      else if (level === 'read') filtered.push(`${resource}:read`);
-      return { ...f, permissions: filtered };
-    });
-  }
-
-  function setAllResources(level: AccessLevel) {
-    setForm((f) => {
-      const permissions: string[] = [];
-      for (const resource of API_RESOURCES) {
-        if (level === 'write') permissions.push(`${resource}:write`);
-        else if (level === 'read') permissions.push(`${resource}:read`);
-      }
-      return { ...f, permissions };
-    });
   }
 
   function validateForm(): boolean {
@@ -271,7 +233,7 @@ export function ApiKeysTab() {
           <div>
             <h2 className={styles.sectionTitle}>API Keys</h2>
             <p className={styles.sectionDescription}>
-              Create and manage API keys for programmatic access to your CRM.
+              Create and manage API keys for programmatic access to your workspace.
             </p>
           </div>
           <Button size="sm" onClick={openCreate}>
@@ -428,76 +390,11 @@ export function ApiKeysTab() {
               <form onSubmit={handleSave}>
                 <div className={styles.modalBody}>
                   {formError && <div className={styles.alert}>{formError}</div>}
-                  <Input
-                    label="Name"
-                    placeholder="e.g. Production integration"
-                    value={form.name}
-                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    error={formErrors.name}
-                    required
-                    autoFocus
+                  <ApiKeyFormFields
+                    form={form}
+                    onChange={(updater) => setForm((f) => ({ ...f, ...updater(f) }))}
+                    errors={formErrors}
                   />
-                  <Input
-                    label="Description"
-                    placeholder="Optional description"
-                    value={form.description}
-                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                    error={formErrors.description}
-                  />
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 'var(--space-2)', color: 'var(--color-text)' }}>
-                      Expiration
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                      <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-2)',
-                        fontSize: 14,
-                        color: 'var(--color-text)',
-                        cursor: 'pointer',
-                      }}>
-                        <input
-                          type="radio"
-                          name="expiration-mode"
-                          checked={!form.hasExpiration}
-                          onChange={() => setForm((f) => ({ ...f, hasExpiration: false }))}
-                        />
-                        <span>Never expires</span>
-                      </label>
-                      <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-2)',
-                        fontSize: 14,
-                        color: 'var(--color-text)',
-                        cursor: 'pointer',
-                      }}>
-                        <input
-                          type="radio"
-                          name="expiration-mode"
-                          checked={form.hasExpiration}
-                          onChange={() => setForm((f) => ({ ...f, hasExpiration: true }))}
-                        />
-                        <span>Set expiration date and time</span>
-                      </label>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 'var(--space-1)' }}>
-                      {form.hasExpiration
-                        ? 'The key stops working at this date and time (your local timezone).'
-                        : 'The key stays valid until you disable or delete it.'}
-                    </div>
-                  </div>
-
-                  {form.hasExpiration && (
-                    <Input
-                      label="Expires At"
-                      type="datetime-local"
-                      value={form.expiresAt}
-                      onChange={(e) => setForm((f) => ({ ...f, expiresAt: e.target.value }))}
-                      error={formErrors.expiresAt}
-                    />
-                  )}
 
                   {editingId && (
                     <label className={styles.toggleRow} style={{ border: 'none', cursor: 'pointer' }}>
@@ -518,64 +415,6 @@ export function ApiKeysTab() {
                       </div>
                     </label>
                   )}
-
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 'var(--space-2)', color: 'var(--color-text)' }}>
-                      Permissions
-                    </div>
-                    {formErrors.permissions && (
-                      <div className={styles.fieldError}>{formErrors.permissions}</div>
-                    )}
-                    <div style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto auto auto',
-                      gap: 'var(--space-1) var(--space-3)',
-                      alignItems: 'center',
-                      marginTop: 'var(--space-2)',
-                      fontSize: 13,
-                    }}>
-                      {/* Header */}
-                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-text-secondary)' }}>Resource</div>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-text-secondary)', textAlign: 'center' }}>None</div>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-text-secondary)', textAlign: 'center' }}>Read</div>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-text-secondary)', textAlign: 'center' }}>Write</div>
-
-                      {/* Set all row */}
-                      <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>Set all</div>
-                      {(['none', 'read', 'write'] as const).map((level) => (
-                        <div key={level} style={{ textAlign: 'center' }}>
-                          <input
-                            type="radio"
-                            name="set-all"
-                            checked={API_RESOURCES.every((r) => getResourceLevel(r) === level)}
-                            onChange={() => setAllResources(level)}
-                            style={{ cursor: 'pointer' }}
-                          />
-                        </div>
-                      ))}
-
-                      {/* Separator */}
-                      <div style={{ gridColumn: '1 / -1', borderBottom: '1px solid var(--color-border)', margin: 'var(--space-1) 0' }} />
-
-                      {/* Per-resource rows */}
-                      {API_RESOURCES.map((resource) => (
-                        <React.Fragment key={resource}>
-                          <div style={{ textTransform: 'capitalize', color: 'var(--color-text)' }}>{resource}</div>
-                          {(['none', 'read', 'write'] as const).map((level) => (
-                            <div key={level} style={{ textAlign: 'center' }}>
-                              <input
-                                type="radio"
-                                name={`perm-${resource}`}
-                                checked={getResourceLevel(resource) === level}
-                                onChange={() => setResourceLevel(resource, level)}
-                                style={{ cursor: 'pointer' }}
-                              />
-                            </div>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </div>
-                  </div>
                 </div>
                 <div className={styles.modalFooter}>
                   <Button type="button" variant="secondary" size="md" onClick={closeModal}>

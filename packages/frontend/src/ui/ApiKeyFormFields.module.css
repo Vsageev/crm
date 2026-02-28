@@ -1,0 +1,115 @@
+.fieldLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+
+.fieldHint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+.fieldError {
+  font-size: 13px;
+  color: var(--color-error);
+  margin-bottom: var(--space-2);
+}
+
+/* Expiration */
+.expirationRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.expirationInput {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Permission list */
+.permList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.permRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.permSetAll {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.permSeparator {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.permResource {
+  font-size: 13px;
+  text-transform: capitalize;
+  color: var(--color-text);
+}
+
+/* Segmented control for None / Read / Write */
+.permSegment {
+  display: flex;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.permBtn {
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1.4;
+}
+
+.permBtn:hover {
+  color: var(--color-text-secondary);
+}
+
+.permBtnActive {
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.permBtnActiveNeutral {
+  background: var(--color-card);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.permBtnNone {
+  background: var(--color-card);
+  color: var(--color-text-secondary);
+}
+
+.permBtnRead {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.permBtnWrite {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}

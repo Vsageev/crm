@@ -90,7 +90,7 @@ async function resolveConversationBot(conversationId: string) {
 
 /**
  * Send a text message (with optional formatting and inline keyboard) via Telegram.
- * Updates the CRM message status to 'sent' or 'failed' based on the result.
+ * Updates message status to 'sent' or 'failed' based on the result.
  */
 export async function sendTelegramMessage(
   params: SendTelegramMessageParams,
@@ -127,7 +127,7 @@ export async function sendTelegramMessage(
       return { ok: false, error: result.description ?? 'Telegram API error' };
     }
 
-    // Update CRM message with Telegram's message_id and mark as sent
+    // Update message with Telegram's message_id and mark as sent
     store.update('messages', params.messageId, {
       externalId: String(result.result!.message_id),
       status: 'sent',
@@ -225,7 +225,7 @@ export async function sendTelegramMedia(
 
   const { token, chatId } = resolved;
 
-  // Map CRM type to Telegram API method and form field name
+  // Map type to Telegram API method and form field name
   const methodMap: Record<string, { method: string; field: string }> = {
     image: { method: 'sendPhoto', field: 'photo' },
     video: { method: 'sendVideo', field: 'video' },
@@ -262,7 +262,7 @@ export async function sendTelegramMedia(
       return { ok: false, error: data.description ?? 'Telegram API error' };
     }
 
-    // Update CRM message with Telegram's message_id and mark as sent
+    // Update message with Telegram's message_id and mark as sent
     store.update('messages', params.messageId, {
       externalId: String(data.result!.message_id),
       status: 'sent',

@@ -1,0 +1,295 @@
+.page {
+  width: 100%;
+  max-width: 1200px;
+  min-width: 0;
+}
+
+.agentList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.agentCard {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+  gap: var(--space-4);
+}
+
+.agentInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.agentName {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.agentDescription {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.agentMeta {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin-top: var(--space-1);
+}
+
+.agentCaps {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.agentActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.iconBtnDanger:hover {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-10) var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  text-align: center;
+}
+
+.counter {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-4);
+}
+
+/* Detail modal */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--color-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.modalBody {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.detailLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.detailCode {
+  font-size: 13px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+
+/* Model picker cards */
+.modelGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.modelCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.modelCard:hover {
+  border-color: var(--color-text-secondary);
+}
+
+.modelCardSelected {
+  border-color: var(--color-primary-brand);
+  background: var(--color-surface);
+}
+
+.modelName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.modelVendor {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.modelDescription {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.fieldLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+
+/* Key permissions preview */
+.keyPermissions {
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.keyPermissionsLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.keyPermissionsList {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.noKeysHint {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  margin-top: var(--space-2);
+}
+
+/* Key mode tabs (existing / create new) */
+.keyModeTabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.keyModeTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.keyModeTab:hover {
+  color: var(--color-text);
+}
+
+.keyModeTabActive {
+  background: var(--color-card);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+

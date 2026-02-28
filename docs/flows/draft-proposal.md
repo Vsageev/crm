@@ -5,12 +5,12 @@
 ## Steps
 
 1. **Identify the contact** — find the conversation by contact name via `GET /api/conversations`
-2. **Gather context** — fetch related deals, tasks, and company info via the API
+2. **Gather context** — fetch related cards, tasks, and company info via the API
 3. **Compose the message** — include:
-   - Pipeline overview (deal names, values, stages, expected close dates)
-   - Closed/won deals if any
+   - Board overview (card names, values, columns, expected dates)
+   - Completed cards if any
    - Recommended next steps
-   - Total pipeline value
+   - Total board value
 4. **Save as draft** — use the message drafts API (`PUT /api/message-drafts`) in the contact's conversation
 5. **Confirm** — tell the user the draft is ready for review in the inbox
 

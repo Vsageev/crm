@@ -53,7 +53,7 @@ export function RegisterPage() {
       <form onSubmit={handleSubmit} className={styles.form}>
         <div className={styles.header}>
           <h1 className={styles.title}>Create account</h1>
-          <p className={styles.subtitle}>Get started with your CRM</p>
+          <p className={styles.subtitle}>Get started with your Workspace</p>
         </div>
 
         {error && <div className={styles.alert}>{error}</div>}

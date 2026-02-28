@@ -5,7 +5,7 @@ export function AuthLayout() {
   return (
     <div className={styles.layout}>
       <div className={styles.container}>
-        <div className={styles.logo}>CRM</div>
+        <div className={styles.logo}>Workspace</div>
         <Outlet />
       </div>
     </div>

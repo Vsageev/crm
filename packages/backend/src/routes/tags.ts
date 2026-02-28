@@ -27,7 +27,7 @@ export async function tagRoutes(app: FastifyInstance) {
   typedApp.get(
     '/api/tags',
     {
-      onRequest: [app.authenticate, requirePermission('contacts:read')],
+      onRequest: [app.authenticate, requirePermission('cards:read')],
       schema: {
         tags: ['Tags'],
         summary: 'List all tags',
@@ -49,7 +49,7 @@ export async function tagRoutes(app: FastifyInstance) {
   typedApp.post(
     '/api/tags',
     {
-      onRequest: [app.authenticate, requirePermission('contacts:create')],
+      onRequest: [app.authenticate, requirePermission('cards:create')],
       schema: {
         tags: ['Tags'],
         summary: 'Create a new tag',
@@ -72,7 +72,7 @@ export async function tagRoutes(app: FastifyInstance) {
   typedApp.patch(
     '/api/tags/:id',
     {
-      onRequest: [app.authenticate, requirePermission('contacts:update')],
+      onRequest: [app.authenticate, requirePermission('cards:update')],
       schema: {
         tags: ['Tags'],
         summary: 'Update an existing tag',
@@ -103,7 +103,7 @@ export async function tagRoutes(app: FastifyInstance) {
   typedApp.delete(
     '/api/tags/:id',
     {
-      onRequest: [app.authenticate, requirePermission('contacts:delete')],
+      onRequest: [app.authenticate, requirePermission('cards:delete')],
       schema: {
         tags: ['Tags'],
         summary: 'Delete a tag',

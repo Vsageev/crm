@@ -83,7 +83,7 @@ Key areas:
 - **29 route files** — auth, contacts, companies, deals, tasks, conversations, messages, automation rules, webhooks, public API, reports, web forms, settings, and channel-specific routes (Telegram, WhatsApp, Instagram, email)
 - **50+ services** — automation engine, channel webhooks, email sync (IMAP/SMTP), chatbot flows, CSV import/export, duplicate detection, round-robin assignment, GDPR export, webhook delivery with retry
 - **34 DB tables** — users, contacts, companies, deals, pipelines, tasks, conversations, messages, automation rules, web forms, webhooks, API keys, and integration tables for each channel
-- **Security** — JWT auth with refresh tokens, RBAC (79 permissions across admin/manager/agent), 2FA (TOTP), rate limiting, input sanitization, audit logging
+- **Security** — JWT auth with refresh tokens, API key scoped permissions, 2FA (TOTP), rate limiting, input sanitization, audit logging
 
 ### `packages/frontend`
 
@@ -97,7 +97,7 @@ Key areas:
 
 ### `packages/shared`
 
-TypeScript type definitions shared between backend and frontend: user roles, permissions matrix (RBAC), contact sources, deal stages, custom field types, and auth interfaces. Keeps both sides in sync without runtime dependencies.
+TypeScript type definitions shared between backend and frontend: permission types and auth interfaces. Keeps both sides in sync without runtime dependencies.
 
 ### `packages/widget`
 
@@ -127,7 +127,6 @@ Usage example:
 | `pnpm dev:backend:ngrok` | Start backend + reserved ngrok tunnel        |
 | `pnpm dev:ngrok`         | Start ngrok tunnel to local backend (3000)   |
 | `pnpm build`             | Build all packages                           |
-| `pnpm test`              | Run all tests                                |
 | `pnpm lint`              | Lint all packages                            |
 | `pnpm typecheck`         | Type-check all packages                      |
 | `pnpm docker:infra`      | Start Postgres + Redis                       |
@@ -147,9 +146,9 @@ Usage example:
 - **Telegram** -- bot integration, media support, chatbot flows, agent notifications
 - **Lead Capture** -- embeddable web forms, UTM tracking, auto-create contacts + deals
 - **Automation** -- trigger/condition/action rules, round-robin assignment, auto-stage moves
-- **Reporting** -- pipeline summary, agent performance, lead source breakdown, CSV export
+- **Reporting** -- pipeline summary, user performance, lead source breakdown, CSV export
 - **API & Webhooks** -- public REST API, API key auth, webhook subscriptions with retry
-- **Security** -- RBAC, 2FA (TOTP), rate limiting, audit logging, daily backups, GDPR export
+- **Security** -- API key scoped permissions, 2FA (TOTP), rate limiting, audit logging, daily backups, GDPR export
 
 ## Seed Data
 
@@ -157,7 +156,7 @@ Run `pnpm db:seed` from `packages/backend/` to populate the database with realis
 
 | Entity        | Count | Details                                         |
 | ------------- | ----- | ----------------------------------------------- |
-| Users         | 4     | 1 admin, 1 manager, 2 agents                    |
+| Users         | 4     | Sample active users                             |
 | Tags          | 5     | VIP, Partner, Lead, Hot, Cold                   |
 | Companies     | 5     | Various industries and sizes                    |
 | Contacts      | 8     | Linked to companies, with UTM tracking          |
@@ -169,12 +168,12 @@ Run `pnpm db:seed` from `packages/backend/` to populate the database with realis
 
 **Test accounts:**
 
-| Email               | Password     | Role    |
-| ------------------- | ------------ | ------- |
-| `admin@crm.local`   | `admin123`   | Admin   |
-| `manager@crm.local` | `manager123` | Manager |
-| `agent1@crm.local`  | `agent123`   | Agent   |
-| `agent2@crm.local`  | `agent123`   | Agent   |
+| Email                     | Password     |
+| ------------------------- | ------------ |
+| `admin@workspace.local`   | `admin123`   |
+| `manager@workspace.local` | `manager123` |
+| `agent1@workspace.local`  | `agent123`   |
+| `agent2@workspace.local`  | `agent123`   |
 
 > **Note:** The seed script inserts data directly — run it on a fresh database after `pnpm db:push`. Running it twice will fail due to unique constraints.
 

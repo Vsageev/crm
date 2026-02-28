@@ -96,6 +96,8 @@
 .conversationList {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .conversationItem {
@@ -330,7 +332,7 @@
 }
 
 .dateLabel {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -342,7 +344,7 @@
   max-width: 70%;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-lg);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
   word-break: break-word;
 }
@@ -351,6 +353,7 @@
   align-self: flex-start;
   background: var(--color-surface);
   color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-bottom-left-radius: var(--radius-sm);
 }
 
@@ -366,7 +369,7 @@
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-1);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--color-text-tertiary);
 }
 
@@ -382,7 +385,8 @@
 
 .systemMessage {
   align-self: center;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--color-text-tertiary);
   font-style: italic;
   padding: var(--space-2) var(--space-4);

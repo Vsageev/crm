@@ -49,24 +49,12 @@ const envSchema = z.object({
   RATE_LIMIT_API_MAX: z.coerce.number().int().positive().default(10000),
   RATE_LIMIT_API_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
 
-  // Notifications
-  NOTIFICATION_CRON: z.string().default('*/15 * * * *'),
-  NOTIFICATION_CRON_ENABLED: z
-    .string()
-    .default('true')
-    .transform((v) => v !== 'false'),
-
   // Email sync
   EMAIL_SYNC_CRON: z.string().default('*/2 * * * *'),
   EMAIL_SYNC_ENABLED: z
     .string()
     .default('true')
     .transform((v) => v !== 'false'),
-
-  // Web Push (VAPID)
-  VAPID_PUBLIC_KEY: z.string().optional(),
-  VAPID_PRIVATE_KEY: z.string().optional(),
-  VAPID_SUBJECT: z.string().default('mailto:admin@crm.local'),
 
   // Dev auth bypass — skip JWT verification and inject a mock admin user
   DEV_SKIP_AUTH: z.string().default('false').transform((v) => v === 'true'),

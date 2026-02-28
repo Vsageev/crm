@@ -12,8 +12,6 @@ import {
 import { sendMessage } from '../services/messages.js';
 import { getConversationById } from '../services/conversations.js';
 import { sendTelegramMessage } from '../services/telegram-outbound.js';
-import { sendEmailMessage } from '../services/email-outbound.js';
-import { sendInstagramMessage } from '../services/instagram-outbound.js';
 import { ApiError } from '../utils/api-errors.js';
 
 const upsertDraftBody = z.object({
@@ -168,22 +166,6 @@ export async function messageDraftRoutes(app: FastifyInstance) {
             text: content,
           }).catch((err: unknown) => {
             app.log.error(err, 'Failed to send Telegram message from draft');
-          });
-        } else if (conversation.channelType === 'email') {
-          sendEmailMessage({
-            conversationId,
-            messageId: message.id,
-            text: content,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send email message from draft');
-          });
-        } else if (conversation.channelType === 'instagram') {
-          sendInstagramMessage({
-            conversationId,
-            messageId: message.id,
-            text: content,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send Instagram message from draft');
           });
         }
       }

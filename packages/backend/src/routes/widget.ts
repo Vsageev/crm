@@ -5,8 +5,8 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WIDGET_PATH = path.resolve(__dirname, '../../../widget/dist/crm-form.js');
-const CHAT_WIDGET_PATH = path.resolve(__dirname, '../../../widget/dist/crm-chat.js');
+const WIDGET_PATH = path.resolve(__dirname, '../../../widget/dist/ws-form.js');
+const CHAT_WIDGET_PATH = path.resolve(__dirname, '../../../widget/dist/ws-chat.js');
 
 let widgetCache: string | null = null;
 let chatWidgetCache: string | null = null;

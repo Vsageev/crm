@@ -1,47 +1,23 @@
 import { useState } from 'react';
-import { Bot, MessageSquareText, Bell, Send, Workflow, FileText, Mail, MessageCircle, Phone, Instagram, Brain, Key, HardDrive, ArrowRightLeft } from 'lucide-react';
+import { Key, HardDrive } from 'lucide-react';
 import { PageHeader } from '../../layout';
-import { TelegramBotsTab } from './TelegramBotsTab';
-import { TemplatesTab } from './TemplatesTab';
-import { TelegramTemplatesTab } from './TelegramTemplatesTab';
-import { NotificationsTab } from './NotificationsTab';
-import { ChatbotFlowsTab } from './ChatbotFlowsTab';
-import { WebFormsTab } from './WebFormsTab';
-import { WebChatTab } from './WebChatTab';
-import { EmailAccountsTab } from './EmailAccountsTab';
-import { WhatsAppTab } from './WhatsAppTab';
-import { InstagramAccountsTab } from './InstagramAccountsTab';
-import { KommoTab } from './KommoTab';
-import { AIKnowledgeBaseTab } from './AIKnowledgeBaseTab';
 import { ApiKeysTab } from './ApiKeysTab';
 import { BackupsTab } from './BackupsTab';
 import styles from './SettingsPage.module.css';
 
-type SettingsTab = 'bots' | 'email' | 'whatsapp' | 'instagram' | 'kommo' | 'web-chat' | 'templates' | 'telegram-templates' | 'chatbot-flows' | 'notifications' | 'web-forms' | 'ai' | 'api-keys' | 'backups';
+type SettingsTab = 'api-keys' | 'backups';
 
-const TABS: { key: SettingsTab; label: string; icon: typeof Bot }[] = [
-  { key: 'bots', label: 'Telegram Bots', icon: Bot },
-  { key: 'email', label: 'Email', icon: Mail },
-  { key: 'whatsapp', label: 'WhatsApp', icon: Phone },
-  { key: 'instagram', label: 'Instagram', icon: Instagram },
-  { key: 'kommo', label: 'amoCRM', icon: ArrowRightLeft },
-  { key: 'web-chat', label: 'Web Chat', icon: MessageCircle },
-  { key: 'templates', label: 'Quick Replies', icon: MessageSquareText },
-  { key: 'telegram-templates', label: 'Telegram Templates', icon: Send },
-  { key: 'chatbot-flows', label: 'Chatbot Flows', icon: Workflow },
-  { key: 'notifications', label: 'Notifications', icon: Bell },
-  { key: 'web-forms', label: 'Web Forms', icon: FileText },
-  { key: 'ai', label: 'Knowledge Base', icon: Brain },
+const TABS: { key: SettingsTab; label: string; icon: typeof Key }[] = [
   { key: 'api-keys', label: 'API Keys', icon: Key },
   { key: 'backups', label: 'Backups', icon: HardDrive },
 ];
 
 export function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('bots');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('api-keys');
 
   return (
     <div className={styles.page}>
-      <PageHeader title="Settings" description="Configure your CRM integrations and preferences" />
+      <PageHeader title="Settings" description="Configure your integrations and preferences" />
 
       <div className={styles.tabs}>
         {TABS.map((tab) => (
@@ -58,18 +34,6 @@ export function SettingsPage() {
         ))}
       </div>
 
-      {activeTab === 'bots' && <TelegramBotsTab />}
-      {activeTab === 'email' && <EmailAccountsTab />}
-      {activeTab === 'whatsapp' && <WhatsAppTab />}
-      {activeTab === 'instagram' && <InstagramAccountsTab />}
-      {activeTab === 'kommo' && <KommoTab />}
-      {activeTab === 'web-chat' && <WebChatTab />}
-      {activeTab === 'templates' && <TemplatesTab />}
-      {activeTab === 'telegram-templates' && <TelegramTemplatesTab />}
-      {activeTab === 'chatbot-flows' && <ChatbotFlowsTab />}
-      {activeTab === 'notifications' && <NotificationsTab />}
-      {activeTab === 'web-forms' && <WebFormsTab />}
-      {activeTab === 'ai' && <AIKnowledgeBaseTab />}
       {activeTab === 'api-keys' && <ApiKeysTab />}
       {activeTab === 'backups' && <BackupsTab />}
     </div>

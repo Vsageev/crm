@@ -1,85 +1,56 @@
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
-import type { Permission, UserRole } from 'shared';
-import { ROLE_PERMISSIONS } from 'shared';
+import type { Permission } from 'shared';
 
 /**
- * Returns a preHandler that allows access only to users with one of the
- * specified roles.
- *
- * @example
- *   app.get('/admin', { preHandler: [authenticate, requireRole('admin')] }, handler)
- */
-export function requireRole(...roles: UserRole[]): preHandlerHookHandler {
-  return async (request: FastifyRequest, reply: FastifyReply) => {
-    const user = request.user as { sub: string; role: UserRole } | undefined;
-
-    if (!user) {
-      return reply.unauthorized('Authentication required');
-    }
-
-    if (!roles.includes(user.role)) {
-      return reply.forbidden('Insufficient role');
-    }
-  };
-}
-
-/**
- * Returns a preHandler that allows access only to users whose role grants
- * the specified permission.
- *
- * @example
- *   app.delete('/users/:id', { preHandler: [authenticate, requirePermission('users:delete')] }, handler)
+ * Returns a preHandler that enforces permissions only for API-key requests.
+ * User JWT sessions are allowed without permission checks.
  */
 export function requirePermission(permission: Permission): preHandlerHookHandler {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const user = request.user as { sub: string; role: UserRole } | undefined;
+    const user = request.user as { sub: string } | undefined;
 
     if (!user) {
       return reply.unauthorized('Authentication required');
     }
 
-    const allowed = ROLE_PERMISSIONS[user.role];
-    if (!allowed.includes(permission)) {
-      return reply.forbidden('Insufficient permissions');
+    const keyPermissions = request.apiKeyPermissions;
+    if (keyPermissions) {
+      const [resource, action] = permission.split(':');
+      const hasWrite = keyPermissions.includes(`${resource}:write`);
+      const hasRead = keyPermissions.includes(`${resource}:read`);
+      const hasPermission = action === 'read' ? (hasRead || hasWrite) : hasWrite;
+
+      if (!hasPermission) {
+        return reply.forbidden('API key does not have this permission');
+      }
     }
   };
 }
 
 /**
- * Returns a preHandler that allows access if the user has ANY of the
- * specified permissions.
- *
- * @example
- *   app.get('/data', { preHandler: [authenticate, requireAnyPermission('reports:read', 'deals:read')] }, handler)
+ * Returns a preHandler that enforces API-key permissions when present.
+ * User JWT sessions are allowed without permission checks.
  */
 export function requireAnyPermission(...permissions: Permission[]): preHandlerHookHandler {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const user = request.user as { sub: string; role: UserRole } | undefined;
+    const user = request.user as { sub: string } | undefined;
 
     if (!user) {
       return reply.unauthorized('Authentication required');
     }
 
-    const allowed = ROLE_PERMISSIONS[user.role];
-    const hasAny = permissions.some((p) => allowed.includes(p));
-    if (!hasAny) {
-      return reply.forbidden('Insufficient permissions');
+    const keyPermissions = request.apiKeyPermissions;
+    if (keyPermissions) {
+      const hasAny = permissions.some((permission) => {
+        const [resource, action] = permission.split(':');
+        const hasWrite = keyPermissions.includes(`${resource}:write`);
+        const hasRead = keyPermissions.includes(`${resource}:read`);
+        return action === 'read' ? (hasRead || hasWrite) : hasWrite;
+      });
+
+      if (!hasAny) {
+        return reply.forbidden('API key does not have required permissions');
+      }
     }
   };
-}
-
-/**
- * Helper to check at runtime whether a role has a given permission.
- */
-export function roleHasPermission(role: UserRole, permission: Permission): boolean {
-  return ROLE_PERMISSIONS[role].includes(permission);
-}
-
-/**
- * Returns true if the authenticated user is an agent (not admin or manager).
- * Agents should only see their own resources.
- */
-export function isAgent(request: FastifyRequest): boolean {
-  const user = request.user as { sub: string; role: UserRole } | undefined;
-  return user?.role === 'agent';
 }

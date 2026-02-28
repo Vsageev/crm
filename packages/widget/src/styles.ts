@@ -14,7 +14,7 @@ export const WIDGET_CSS = /* css */ `
     box-sizing: border-box;
   }
 
-  .crm-form {
+  .ws-form {
     max-width: 560px;
     background: #FFFFFF;
     border: 1px solid #E8EAED;
@@ -22,24 +22,24 @@ export const WIDGET_CSS = /* css */ `
     padding: 24px;
   }
 
-  .crm-form__title {
+  .ws-form__title {
     font-size: 20px;
     font-weight: 600;
     margin: 0 0 4px;
     color: #1A1A2E;
   }
 
-  .crm-form__description {
+  .ws-form__description {
     font-size: 15px;
     color: #6B7280;
     margin: 0 0 20px;
   }
 
-  .crm-form__field {
+  .ws-form__field {
     margin-bottom: 16px;
   }
 
-  .crm-form__label {
+  .ws-form__label {
     display: block;
     font-size: 13px;
     font-weight: 500;
@@ -47,14 +47,14 @@ export const WIDGET_CSS = /* css */ `
     color: #1A1A2E;
   }
 
-  .crm-form__label--required::after {
+  .ws-form__label--required::after {
     content: ' *';
     color: #EF4444;
   }
 
-  .crm-form__input,
-  .crm-form__textarea,
-  .crm-form__select {
+  .ws-form__input,
+  .ws-form__textarea,
+  .ws-form__select {
     display: block;
     width: 100%;
     padding: 10px 12px;
@@ -68,30 +68,30 @@ export const WIDGET_CSS = /* css */ `
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
-  .crm-form__input:focus,
-  .crm-form__textarea:focus,
-  .crm-form__select:focus {
+  .ws-form__input:focus,
+  .ws-form__textarea:focus,
+  .ws-form__select:focus {
     border-color: #3B82F6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  .crm-form__input::placeholder,
-  .crm-form__textarea::placeholder {
+  .ws-form__input::placeholder,
+  .ws-form__textarea::placeholder {
     color: #9CA3AF;
   }
 
-  .crm-form__input--error,
-  .crm-form__textarea--error,
-  .crm-form__select--error {
+  .ws-form__input--error,
+  .ws-form__textarea--error,
+  .ws-form__select--error {
     border-color: #EF4444;
   }
 
-  .crm-form__textarea {
+  .ws-form__textarea {
     min-height: 100px;
     resize: vertical;
   }
 
-  .crm-form__select {
+  .ws-form__select {
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
@@ -99,32 +99,32 @@ export const WIDGET_CSS = /* css */ `
     padding-right: 32px;
   }
 
-  .crm-form__checkbox-wrapper {
+  .ws-form__checkbox-wrapper {
     display: flex;
     align-items: flex-start;
     gap: 8px;
   }
 
-  .crm-form__checkbox {
+  .ws-form__checkbox {
     margin-top: 2px;
     width: 16px;
     height: 16px;
     accent-color: #2D2D2D;
   }
 
-  .crm-form__checkbox-label {
+  .ws-form__checkbox-label {
     font-size: 15px;
     color: #1A1A2E;
     cursor: pointer;
   }
 
-  .crm-form__error {
+  .ws-form__error {
     font-size: 13px;
     color: #EF4444;
     margin-top: 4px;
   }
 
-  .crm-form__submit {
+  .ws-form__submit {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -142,21 +142,21 @@ export const WIDGET_CSS = /* css */ `
     transition: background 0.2s ease;
   }
 
-  .crm-form__submit:hover {
+  .ws-form__submit:hover {
     background: #404040;
   }
 
-  .crm-form__submit:disabled {
+  .ws-form__submit:disabled {
     background: #9CA3AF;
     cursor: not-allowed;
   }
 
-  .crm-form__success {
+  .ws-form__success {
     text-align: center;
     padding: 32px 16px;
   }
 
-  .crm-form__success-icon {
+  .ws-form__success-icon {
     width: 48px;
     height: 48px;
     margin: 0 auto 16px;
@@ -167,20 +167,20 @@ export const WIDGET_CSS = /* css */ `
     justify-content: center;
   }
 
-  .crm-form__success-icon svg {
+  .ws-form__success-icon svg {
     width: 24px;
     height: 24px;
     color: #10B981;
   }
 
-  .crm-form__success-message {
+  .ws-form__success-message {
     font-size: 18px;
     font-weight: 500;
     color: #1A1A2E;
     margin: 0;
   }
 
-  .crm-form__global-error {
+  .ws-form__global-error {
     background: rgba(239, 68, 68, 0.08);
     border: 1px solid rgba(239, 68, 68, 0.2);
     border-radius: 8px;
@@ -190,25 +190,25 @@ export const WIDGET_CSS = /* css */ `
     color: #EF4444;
   }
 
-  .crm-form__loading {
+  .ws-form__loading {
     text-align: center;
     padding: 32px 16px;
     color: #6B7280;
     font-size: 15px;
   }
 
-  .crm-form__spinner {
+  .ws-form__spinner {
     display: inline-block;
     width: 24px;
     height: 24px;
     border: 2.5px solid #E8EAED;
     border-top-color: #2D2D2D;
     border-radius: 50%;
-    animation: crm-spin 0.6s linear infinite;
+    animation: ws-spin 0.6s linear infinite;
     margin-bottom: 12px;
   }
 
-  @keyframes crm-spin {
+  @keyframes ws-spin {
     to { transform: rotate(360deg); }
   }
 `;

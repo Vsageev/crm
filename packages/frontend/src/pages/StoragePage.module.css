@@ -1,0 +1,286 @@
+.hiddenInput {
+  display: none;
+}
+
+/* Breadcrumb */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  margin-bottom: var(--space-4);
+  font-size: 14px;
+}
+
+.breadcrumbItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  transition: all var(--transition-fast);
+}
+
+.breadcrumbItem:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.breadcrumbActive {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.breadcrumbSep {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-tertiary);
+}
+
+/* Alerts */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--color-error);
+  font-size: 14px;
+  margin-bottom: var(--space-4);
+  animation: slideIn 0.3s ease-out;
+}
+
+.success {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-card);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--color-success);
+  font-size: 14px;
+  box-shadow: var(--shadow-lg);
+  animation: toastIn 0.3s ease-out;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Loading */
+.loadingState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-10) var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+}
+
+/* Empty state */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-4);
+  color: var(--color-text-tertiary);
+  text-align: center;
+  transition: background var(--transition-fast);
+}
+
+.emptyState p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.emptyStateDragOver {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+/* File list */
+.fileList {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-card);
+}
+
+.fileHeader {
+  display: grid;
+  grid-template-columns: 1fr 100px 180px auto;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  align-items: center;
+}
+
+.fileHeader .colActions {
+  gap: var(--space-1);
+}
+
+.fileRow {
+  display: grid;
+  grid-template-columns: 1fr 100px 180px 120px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: background var(--transition-fast);
+}
+
+.fileRow:last-child {
+  border-bottom: none;
+}
+
+.fileRow:hover {
+  background: var(--color-surface);
+}
+
+.colName {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+  color: var(--color-text);
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* When colName is a button (in file rows) */
+button.colName {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  text-align: left;
+}
+
+button.colName:hover .fileName {
+  color: var(--color-primary-brand);
+}
+
+.fileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--transition-fast);
+}
+
+.colSize {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.colDate {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.colActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.iconFolder {
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.iconFile {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+/* Icon buttons */
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.iconBtn:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.iconBtnDanger:hover {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+/* Inline new folder row */
+.newFolderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface);
+}
+
+.newFolderRow > div:nth-child(2) {
+  flex: 1;
+  max-width: 300px;
+}
+
+.newFolderIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Drop target wrapper — sits around rows, below header */
+.dropTarget {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.dropTargetActive {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+

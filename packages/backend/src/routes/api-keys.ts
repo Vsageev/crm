@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
-import { requireRole } from '../middleware/rbac.js';
 import {
   createApiKey,
   listApiKeys,
@@ -11,7 +10,7 @@ import {
 } from '../services/api-keys.js';
 
 const API_RESOURCES = [
-  'contacts', 'deals', 'tasks', 'pipelines',
+  'contacts', 'cards', 'tasks', 'boards', 'folders',
   'messages', 'activities', 'templates', 'webhooks',
 ] as const;
 
@@ -49,11 +48,11 @@ function auditMeta(request: { user: { sub: string }; ip: string; headers: Record
 export async function apiKeyRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
-  // List API keys — admins see all, managers see their own
+  // List API keys for the authenticated user
   typedApp.get(
     '/api/api-keys',
     {
-      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      onRequest: [app.authenticate],
       schema: {
         tags: ['API Keys'],
         summary: 'List API keys',
@@ -67,10 +66,8 @@ export async function apiKeyRoutes(app: FastifyInstance) {
       const limit = request.query.limit !== undefined ? Math.min(Math.max(request.query.limit || 50, 1), 100) : 50;
       const offset = request.query.offset !== undefined ? Math.max(request.query.offset || 0, 0) : 0;
 
-      const user = request.user as { sub: string; role: string };
-      const createdById = user.role === 'admin' ? undefined : user.sub;
-
-      const { entries, total } = await listApiKeys({ createdById, limit, offset });
+      const user = request.user as { sub: string };
+      const { entries, total } = await listApiKeys({ createdById: user.sub, limit, offset });
       return reply.send({ total, limit, offset, entries });
     },
   );
@@ -79,7 +76,7 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   typedApp.get(
     '/api/api-keys/:id',
     {
-      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      onRequest: [app.authenticate],
       schema: {
         tags: ['API Keys'],
         summary: 'Get API key by ID',
@@ -90,8 +87,8 @@ export async function apiKeyRoutes(app: FastifyInstance) {
       const key = await getApiKeyById(request.params.id) as any;
       if (!key) return reply.notFound('API key not found');
 
-      const user = request.user as { sub: string; role: string };
-      if (user.role !== 'admin' && key.createdById !== user.sub) {
+      const user = request.user as { sub: string };
+      if (key.createdById !== user.sub) {
         return reply.forbidden('Access denied');
       }
 
@@ -103,7 +100,7 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   typedApp.post(
     '/api/api-keys',
     {
-      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      onRequest: [app.authenticate],
       schema: {
         tags: ['API Keys'],
         summary: 'Create an API key',
@@ -141,7 +138,7 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   typedApp.patch(
     '/api/api-keys/:id',
     {
-      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      onRequest: [app.authenticate],
       schema: {
         tags: ['API Keys'],
         summary: 'Update an API key',
@@ -153,8 +150,8 @@ export async function apiKeyRoutes(app: FastifyInstance) {
       const existing = await getApiKeyById(request.params.id) as any;
       if (!existing) return reply.notFound('API key not found');
 
-      const user = request.user as { sub: string; role: string };
-      if (user.role !== 'admin' && existing.createdById !== user.sub) {
+      const user = request.user as { sub: string };
+      if (existing.createdById !== user.sub) {
         return reply.forbidden('Access denied');
       }
 
@@ -174,7 +171,7 @@ export async function apiKeyRoutes(app: FastifyInstance) {
   typedApp.delete(
     '/api/api-keys/:id',
     {
-      onRequest: [app.authenticate, requireRole('admin', 'manager')],
+      onRequest: [app.authenticate],
       schema: {
         tags: ['API Keys'],
         summary: 'Delete (revoke) an API key',
@@ -185,8 +182,8 @@ export async function apiKeyRoutes(app: FastifyInstance) {
       const existing = await getApiKeyById(request.params.id) as any;
       if (!existing) return reply.notFound('API key not found');
 
-      const user = request.user as { sub: string; role: string };
-      if (user.role !== 'admin' && existing.createdById !== user.sub) {
+      const user = request.user as { sub: string };
+      if (existing.createdById !== user.sub) {
         return reply.forbidden('Access denied');
       }
 

@@ -7,8 +7,8 @@ const CHAT_ICON = `<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4
 const CLOSE_ICON = `<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
 const SEND_ICON = `<svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
 
-const SESSION_KEY = 'crm_chat_session';
-const VISITOR_KEY = 'crm_chat_visitor';
+const SESSION_KEY = 'ws_chat_session';
+const VISITOR_KEY = 'ws_chat_visitor';
 const POLL_INTERVAL = 4000;
 
 function getOrCreateSessionId(): string {
@@ -63,54 +63,54 @@ export function renderChatWidget(
 
   // --- Launcher button ---
   const launcher = document.createElement('button');
-  launcher.className = `crm-chat-launcher crm-chat-launcher--${posClass}`;
+  launcher.className = `ws-chat-launcher ws-chat-launcher--${posClass}`;
   launcher.innerHTML = CHAT_ICON;
   launcher.setAttribute('aria-label', 'Open chat');
   shadow.appendChild(launcher);
 
   // --- Chat window ---
   const chatWindow = document.createElement('div');
-  chatWindow.className = `crm-chat-window crm-chat-window--${posClass}`;
+  chatWindow.className = `ws-chat-window ws-chat-window--${posClass}`;
   shadow.appendChild(chatWindow);
 
   // Header
   const header = document.createElement('div');
-  header.className = 'crm-chat-header';
+  header.className = 'ws-chat-header';
   header.innerHTML = `
     <div>
-      <div class="crm-chat-header-title">${escapeHtml(config.name)}</div>
-      <div class="crm-chat-header-subtitle">We typically reply in a few minutes</div>
+      <div class="ws-chat-header-title">${escapeHtml(config.name)}</div>
+      <div class="ws-chat-header-subtitle">We typically reply in a few minutes</div>
     </div>
-    <button class="crm-chat-close" aria-label="Close chat">${CLOSE_ICON}</button>
+    <button class="ws-chat-close" aria-label="Close chat">${CLOSE_ICON}</button>
   `;
   chatWindow.appendChild(header);
 
-  const closeBtn = header.querySelector('.crm-chat-close')!;
+  const closeBtn = header.querySelector('.ws-chat-close')!;
 
   // Pre-chat form (shown if requireName or requireEmail and no stored visitor)
   const preChatForm = document.createElement('div');
-  preChatForm.className = 'crm-chat-prechat';
+  preChatForm.className = 'ws-chat-prechat';
   preChatForm.style.display = 'none';
   chatWindow.appendChild(preChatForm);
 
   // Messages area
   const messagesArea = document.createElement('div');
-  messagesArea.className = 'crm-chat-messages';
+  messagesArea.className = 'ws-chat-messages';
   chatWindow.appendChild(messagesArea);
 
   // Composer
   const composer = document.createElement('div');
-  composer.className = 'crm-chat-composer';
+  composer.className = 'ws-chat-composer';
   chatWindow.appendChild(composer);
 
   const input = document.createElement('textarea');
-  input.className = 'crm-chat-input';
+  input.className = 'ws-chat-input';
   input.placeholder = config.placeholderText || 'Type a message...';
   input.rows = 1;
   composer.appendChild(input);
 
   const sendBtn = document.createElement('button');
-  sendBtn.className = 'crm-chat-send';
+  sendBtn.className = 'ws-chat-send';
   sendBtn.innerHTML = SEND_ICON;
   sendBtn.setAttribute('aria-label', 'Send message');
   sendBtn.disabled = true;
@@ -118,15 +118,15 @@ export function renderChatWidget(
 
   // Powered by
   const powered = document.createElement('div');
-  powered.className = 'crm-chat-powered';
-  powered.textContent = 'Powered by CRM';
+  powered.className = 'ws-chat-powered';
+  powered.textContent = 'Powered by Workspace';
   chatWindow.appendChild(powered);
 
   // --- Pre-chat form setup ---
   function setupPreChat(): void {
     preChatForm.innerHTML = '';
     const text = document.createElement('p');
-    text.className = 'crm-chat-prechat-text';
+    text.className = 'ws-chat-prechat-text';
     text.textContent = 'Before we start, please tell us a bit about yourself:';
     preChatForm.appendChild(text);
 
@@ -135,7 +135,7 @@ export function renderChatWidget(
 
     if (config.requireName) {
       nameInput = document.createElement('input');
-      nameInput.className = 'crm-chat-prechat-input';
+      nameInput.className = 'ws-chat-prechat-input';
       nameInput.placeholder = 'Your name';
       nameInput.type = 'text';
       preChatForm.appendChild(nameInput);
@@ -143,14 +143,14 @@ export function renderChatWidget(
 
     if (config.requireEmail) {
       emailInput = document.createElement('input');
-      emailInput.className = 'crm-chat-prechat-input';
+      emailInput.className = 'ws-chat-prechat-input';
       emailInput.placeholder = 'Your email';
       emailInput.type = 'email';
       preChatForm.appendChild(emailInput);
     }
 
     const submit = document.createElement('button');
-    submit.className = 'crm-chat-prechat-submit';
+    submit.className = 'ws-chat-prechat-submit';
     submit.textContent = 'Start Chat';
     preChatForm.appendChild(submit);
 
@@ -179,7 +179,7 @@ export function renderChatWidget(
 
     if (messages.length === 0) {
       const welcome = document.createElement('div');
-      welcome.className = 'crm-chat-welcome';
+      welcome.className = 'ws-chat-welcome';
       welcome.textContent = config.welcomeMessage;
       messagesArea.appendChild(welcome);
       return;
@@ -187,14 +187,14 @@ export function renderChatWidget(
 
     for (const msg of messages) {
       const msgEl = document.createElement('div');
-      msgEl.className = `crm-chat-msg crm-chat-msg--${msg.direction === 'inbound' ? 'inbound' : 'outbound'}`;
+      msgEl.className = `ws-chat-msg ws-chat-msg--${msg.direction === 'inbound' ? 'inbound' : 'outbound'}`;
 
       let html = '';
       if (msg.direction === 'outbound' && msg.sender) {
-        html += `<div class="crm-chat-msg-sender">${escapeHtml(msg.sender.firstName || 'Agent')}</div>`;
+        html += `<div class="ws-chat-msg-sender">${escapeHtml(msg.sender.firstName || 'Agent')}</div>`;
       }
       html += `<div>${escapeHtml(msg.content ?? '')}</div>`;
-      html += `<span class="crm-chat-msg-time">${formatTime(msg.createdAt)}</span>`;
+      html += `<span class="ws-chat-msg-time">${formatTime(msg.createdAt)}</span>`;
       msgEl.innerHTML = html;
       messagesArea.appendChild(msgEl);
     }
@@ -314,7 +314,7 @@ export function renderChatWidget(
     isOpen = !isOpen;
 
     if (isOpen) {
-      chatWindow.classList.add('crm-chat-window--open');
+      chatWindow.classList.add('ws-chat-window--open');
       launcher.innerHTML = CLOSE_ICON;
 
       if (needsPreChat && !chatStarted) {
@@ -328,7 +328,7 @@ export function renderChatWidget(
         if (chatStarted) input.focus();
       }, 300);
     } else {
-      chatWindow.classList.remove('crm-chat-window--open');
+      chatWindow.classList.remove('ws-chat-window--open');
       launcher.innerHTML = CHAT_ICON;
       stopPolling();
     }
@@ -366,7 +366,7 @@ export function renderChatError(container: HTMLElement, message: string): void {
   shadow.appendChild(style);
 
   const wrapper = document.createElement('div');
-  wrapper.className = 'crm-chat-error';
+  wrapper.className = 'ws-chat-error';
   wrapper.textContent = message;
   shadow.appendChild(wrapper);
 }

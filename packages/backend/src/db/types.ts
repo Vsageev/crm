@@ -7,7 +7,6 @@ export interface User {
   passwordHash: string;
   firstName: string;
   lastName: string;
-  role: 'admin' | 'manager' | 'agent';
   isActive: boolean;
   totpSecret: string | null;
   totpEnabled: boolean;
@@ -47,44 +46,6 @@ export interface RefreshToken {
   createdAt: string;
 }
 
-export interface Company {
-  id: string;
-  name: string;
-  website: string | null;
-  phone: string | null;
-  address: string | null;
-  industry: string | null;
-  size: string | null;
-  notes: string | null;
-  ownerId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Contact {
-  id: string;
-  firstName: string;
-  lastName: string | null;
-  email: string | null;
-  phone: string | null;
-  position: string | null;
-  companyId: string | null;
-  ownerId: string | null;
-  source: 'manual' | 'csv_import' | 'web_form' | 'quiz' | 'telegram' | 'email' | 'api' | 'other';
-  telegramId: string | null;
-  whatsappPhoneId: string | null;
-  instagramScopedId: string | null;
-  notes: string | null;
-  utmSource: string | null;
-  utmMedium: string | null;
-  utmCampaign: string | null;
-  utmTerm: string | null;
-  utmContent: string | null;
-  referrerUrl: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface Tag {
   id: string;
   name: string;
@@ -92,34 +53,68 @@ export interface Tag {
   createdAt: string;
 }
 
-export interface ContactTag {
-  contactId: string;
-  tagId: string;
-}
-
-export interface CompanyTag {
-  companyId: string;
-  tagId: string;
-}
-
-export interface CustomFieldDefinition {
+export interface Folder {
   id: string;
   name: string;
-  fieldType: 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multi_select' | 'url' | 'email' | 'phone';
-  entityType: 'contact' | 'company';
-  options: string[] | null;
-  required: boolean;
-  sortOrder: number;
+  description: string | null;
+  isGeneral?: boolean;
+  createdById: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CustomFieldValue {
+export interface Card {
   id: string;
-  definitionId: string;
-  entityType: 'contact' | 'company';
-  entityId: string;
-  value: string | null;
+  folderId: string;
+  name: string;
+  description: string | null;
+  customFields: Record<string, unknown>;
+  createdById: string;
+  assigneeId: string | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CardTag {
+  cardId: string;
+  tagId: string;
+}
+
+export interface CardLink {
+  id: string;
+  sourceCardId: string;
+  targetCardId: string;
+  createdAt: string;
+}
+
+export interface Board {
+  id: string;
+  name: string;
+  description: string | null;
+  folderId: string | null;
+  isGeneral?: boolean;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BoardColumn {
+  id: string;
+  boardId: string;
+  name: string;
+  color: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BoardCard {
+  id: string;
+  boardId: string;
+  cardId: string;
+  columnId: string;
+  position: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -128,7 +123,7 @@ export interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'email' | 'web_chat' | 'whatsapp' | 'instagram' | 'other';
+  channelType: 'telegram' | 'internal' | 'other';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -158,60 +153,6 @@ export interface Message {
   updatedAt: string;
 }
 
-export interface Deal {
-  id: string;
-  title: string;
-  value: string | null;
-  currency: string;
-  stage: 'new' | 'qualification' | 'proposal' | 'negotiation' | 'won' | 'lost';
-  pipelineId: string | null;
-  pipelineStageId: string | null;
-  stageOrder: number;
-  contactId: string | null;
-  companyId: string | null;
-  ownerId: string | null;
-  expectedCloseDate: string | null;
-  closedAt: string | null;
-  lostReason: string | null;
-  notes: string | null;
-  leadSource: string | null;
-  utmSource: string | null;
-  utmMedium: string | null;
-  utmCampaign: string | null;
-  utmTerm: string | null;
-  utmContent: string | null;
-  referrerUrl: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DealTag {
-  dealId: string;
-  tagId: string;
-}
-
-export interface Pipeline {
-  id: string;
-  name: string;
-  description: string | null;
-  isDefault: boolean;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PipelineStage {
-  id: string;
-  pipelineId: string;
-  name: string;
-  color: string;
-  position: number;
-  isWinStage: boolean;
-  isLossStage: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface TelegramBot {
   id: string;
   token: string;
@@ -229,190 +170,6 @@ export interface TelegramBot {
   updatedAt: string;
 }
 
-export interface Task {
-  id: string;
-  title: string;
-  description: string | null;
-  type: 'call' | 'meeting' | 'email' | 'follow_up' | 'other';
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
-  priority: 'low' | 'medium' | 'high';
-  dueDate: string | null;
-  completedAt: string | null;
-  contactId: string | null;
-  dealId: string | null;
-  assigneeId: string | null;
-  createdById: string | null;
-  isOverdue: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QuickReplyTemplate {
-  id: string;
-  name: string;
-  content: string;
-  category: string | null;
-  shortcut: string | null;
-  isGlobal: boolean;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ActivityLog {
-  id: string;
-  type: 'call' | 'meeting' | 'note';
-  title: string;
-  description: string | null;
-  contactId: string | null;
-  dealId: string | null;
-  duration: number | null;
-  occurredAt: string;
-  createdById: string | null;
-  meta: Record<string, string> | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Notification {
-  id: string;
-  userId: string;
-  type: 'task_due_soon' | 'task_overdue' | 'deal_update' | 'lead_assigned' | 'mention' | 'system';
-  title: string;
-  message: string | null;
-  entityType: string | null;
-  entityId: string | null;
-  isRead: boolean;
-  readAt: string | null;
-  createdAt: string;
-}
-
-export interface TelegramNotificationSettings {
-  id: string;
-  userId: string;
-  telegramChatId: string;
-  telegramUsername: string | null;
-  enabled: boolean;
-  notifyNewLead: boolean;
-  notifyTaskDueSoon: boolean;
-  notifyTaskOverdue: boolean;
-  notifyDealStageChange: boolean;
-  notifyLeadAssigned: boolean;
-  linkToken: string | null;
-  linkTokenExpiresAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WebForm {
-  id: string;
-  name: string;
-  description: string | null;
-  status: 'active' | 'inactive' | 'archived';
-  pipelineId: string | null;
-  pipelineStageId: string | null;
-  assigneeId: string | null;
-  submitButtonText: string;
-  successMessage: string;
-  redirectUrl: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WebFormField {
-  id: string;
-  formId: string;
-  label: string;
-  fieldType: 'text' | 'email' | 'phone' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'url' | 'hidden';
-  placeholder: string | null;
-  isRequired: boolean;
-  position: number;
-  options: string[] | null;
-  defaultValue: string | null;
-  contactFieldMapping: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WebFormSubmission {
-  id: string;
-  formId: string;
-  data: Record<string, unknown>;
-  status: 'new' | 'processed' | 'failed';
-  contactId: string | null;
-  dealId: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  referrerUrl: string | null;
-  utmSource: string | null;
-  utmMedium: string | null;
-  utmCampaign: string | null;
-  utmTerm: string | null;
-  utmContent: string | null;
-  createdAt: string;
-}
-
-export interface TelegramMessageTemplate {
-  id: string;
-  name: string;
-  content: string;
-  parseMode: string | null;
-  inlineKeyboard: unknown;
-  category: string | null;
-  isGlobal: boolean;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ChatbotFlow {
-  id: string;
-  botId: string;
-  name: string;
-  description: string | null;
-  status: 'active' | 'inactive' | 'draft';
-  triggerOnNewConversation: boolean;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ChatbotFlowStep {
-  id: string;
-  flowId: string;
-  stepOrder: number;
-  type: 'send_message' | 'ask_question' | 'buttons' | 'condition' | 'assign_agent' | 'add_tag' | 'close_conversation';
-  message: string | null;
-  options: unknown;
-  nextStepId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AutomationRule {
-  id: string;
-  name: string;
-  description: string | null;
-  trigger: 'contact_created' | 'deal_created' | 'deal_stage_changed' | 'message_received' | 'tag_added' | 'task_completed' | 'conversation_created';
-  conditions: unknown[];
-  action: 'assign_agent' | 'create_task' | 'send_message' | 'move_deal' | 'add_tag' | 'send_notification' | 'create_deal';
-  actionParams: Record<string, unknown>;
-  isActive: boolean;
-  priority: number;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface RoundRobinState {
-  id: string;
-  ruleId: string;
-  lastIndex: number;
-  lastAssignedAgentId: string | null;
-  updatedAt: string;
-}
-
 export interface Webhook {
   id: string;
   url: string;
@@ -421,15 +178,6 @@ export interface Webhook {
   secret: string;
   isActive: boolean;
   createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface KnowledgeBaseEntry {
-  id: string;
-  title: string;
-  content: string;
-  createdBy: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -465,100 +213,24 @@ export interface ApiKey {
   updatedAt: string;
 }
 
-export interface PushSubscription {
+export interface Connector {
   id: string;
-  userId: string;
-  endpoint: string;
-  p256dh: string;
-  auth: string;
-  userAgent: string | null;
-  createdAt: string;
-}
-
-export interface EmailAccount {
-  id: string;
-  email: string;
-  name: string | null;
-  imapHost: string;
-  imapPort: number;
-  imapSecure: boolean;
-  imapUsername: string;
-  imapPassword: string;
-  smtpHost: string;
-  smtpPort: number;
-  smtpSecure: boolean;
-  smtpUsername: string;
-  smtpPassword: string;
-  lastSyncedUid: number | null;
-  lastSyncedAt: string | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WebChatWidget {
-  id: string;
+  type: 'telegram';
   name: string;
-  welcomeMessage: string;
-  placeholderText: string | null;
-  brandColor: string;
-  position: string;
-  autoGreetingEnabled: boolean;
-  autoGreetingDelaySec: string;
-  requireEmail: boolean;
-  requireName: boolean;
-  allowedOrigins: string | null;
-  status: 'active' | 'inactive';
-  createdById: string | null;
+  status: 'active' | 'inactive' | 'error';
+  statusMessage: string | null;
+  capabilities: string[];
+  integrationId: string;
+  config: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface WhatsAppAccount {
+export interface CardComment {
   id: string;
-  phoneNumberId: string;
-  businessAccountId: string;
-  displayPhoneNumber: string;
-  accessToken: string;
-  webhookVerifyToken: string | null;
-  accountName: string;
-  autoGreetingEnabled: boolean;
-  autoGreetingText: string | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface InstagramPage {
-  id: string;
-  pageId: string;
-  pageName: string;
-  pageAccessToken: string;
-  instagramAccountId: string | null;
-  instagramUsername: string | null;
-  webhookVerifyToken: string | null;
-  autoGreetingEnabled: boolean;
-  autoGreetingText: string | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface KommoAccount {
-  id: string;
-  subdomain: string;
-  accessToken: string;
-  accountName: string | null;
-  accountId: number | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  createdById: string | null;
+  cardId: string;
+  authorId: string;
+  content: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -569,104 +241,6 @@ export interface MessageDraft {
   content: string;
   attachments: unknown;
   metadata: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ── Quiz types ──────────────────────────────────────────────────────────
-
-export interface LeadCaptureField {
-  key: string;
-  label: string;
-  isRequired: boolean;
-  contactFieldMapping: string | null;
-}
-
-export interface Quiz {
-  id: string;
-  name: string;
-  description: string | null;
-  status: 'draft' | 'active' | 'inactive' | 'archived';
-  startHeadline: string;
-  startDescription: string | null;
-  startButtonText: string;
-  startImageUrl: string | null;
-  leadCapturePosition: 'before_results' | 'after_results';
-  leadCaptureHeading: string;
-  leadCaptureFields: LeadCaptureField[];
-  pipelineId: string | null;
-  pipelineStageId: string | null;
-  assigneeId: string | null;
-  accentColor: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QuizQuestion {
-  id: string;
-  quizId: string;
-  text: string;
-  description: string | null;
-  questionType: 'single_choice' | 'multiple_choice' | 'image_choice' | 'text_input' | 'number_input' | 'rating';
-  position: number;
-  isRequired: boolean;
-  minValue: number | null;
-  maxValue: number | null;
-  ratingScale: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QuizAnswerOption {
-  id: string;
-  questionId: string;
-  text: string;
-  imageUrl: string | null;
-  points: number;
-  jumpToQuestionId: string | null;
-  jumpToEnd: boolean;
-  position: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QuizResult {
-  id: string;
-  quizId: string;
-  title: string;
-  description: string | null;
-  imageUrl: string | null;
-  ctaText: string | null;
-  ctaUrl: string | null;
-  minScore: number | null;
-  maxScore: number | null;
-  isDefault: boolean;
-  position: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface QuizSession {
-  id: string;
-  quizId: string;
-  status: 'in_progress' | 'completed' | 'abandoned';
-  answers: Record<string, unknown>;
-  totalScore: number;
-  matchedResultId: string | null;
-  leadData: Record<string, string> | null;
-  contactId: string | null;
-  dealId: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  referrerUrl: string | null;
-  utmSource: string | null;
-  utmMedium: string | null;
-  utmCampaign: string | null;
-  utmTerm: string | null;
-  utmContent: string | null;
-  startedAt: string;
-  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

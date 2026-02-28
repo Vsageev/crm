@@ -3,8 +3,8 @@ const API_BASE = '/api';
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
-const TOKEN_KEY = 'crm_access_token';
-const REFRESH_KEY = 'crm_refresh_token';
+const TOKEN_KEY = 'ws_access_token';
+const REFRESH_KEY = 'ws_refresh_token';
 
 function isStoredToken(value: string | null): value is string {
   return Boolean(value && value !== 'undefined' && value !== 'null');

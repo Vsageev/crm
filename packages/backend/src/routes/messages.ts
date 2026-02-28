@@ -9,8 +9,6 @@ import {
   updateMessageStatus,
 } from '../services/messages.js';
 import { sendTelegramMessage } from '../services/telegram-outbound.js';
-import { sendEmailMessage } from '../services/email-outbound.js';
-import { sendInstagramMessage } from '../services/instagram-outbound.js';
 import { eventBus } from '../services/event-bus.js';
 import { getConversationById } from '../services/conversations.js';
 
@@ -154,7 +152,6 @@ export async function messageRoutes(app: FastifyInstance) {
         const conversation = await getConversationById(request.body.conversationId) as any;
 
         if (conversation?.channelType === 'telegram') {
-          // Fire-and-forget: send to Telegram in the background
           sendTelegramMessage({
             conversationId: request.body.conversationId,
             messageId: message.id,
@@ -163,24 +160,6 @@ export async function messageRoutes(app: FastifyInstance) {
             inlineKeyboard,
           }).catch((err: unknown) => {
             app.log.error(err, 'Failed to send Telegram message');
-          });
-        } else if (conversation?.channelType === 'email') {
-          // Fire-and-forget: send via SMTP in the background
-          sendEmailMessage({
-            conversationId: request.body.conversationId,
-            messageId: message.id,
-            text: message.content,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send email message');
-          });
-        } else if (conversation?.channelType === 'instagram') {
-          // Fire-and-forget: send via Instagram/Messenger in the background
-          sendInstagramMessage({
-            conversationId: request.body.conversationId,
-            messageId: message.id,
-            text: message.content,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send Instagram message');
           });
         }
       }

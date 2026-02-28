@@ -22,7 +22,7 @@ function ensureUploadDir(): string {
   return uploadDir;
 }
 
-// Map MIME types to CRM message types
+// Map MIME types to message types
 function mimeToMessageType(mime: string): 'image' | 'video' | 'document' | 'voice' {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
