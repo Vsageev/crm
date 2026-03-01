@@ -31,12 +31,18 @@ import { messageDraftRoutes } from './routes/message-drafts.js';
 import { connectorRoutes } from './routes/connectors.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { registerIdempotency } from './middleware/idempotency.js';
-import { folderRoutes } from './routes/folders.js';
+import { collectionRoutes } from './routes/collections.js';
 import { cardRoutes } from './routes/cards.js';
 import { boardRoutes } from './routes/boards.js';
 import { storageRoutes } from './routes/storage.js';
+import { userRoutes } from './routes/users.js';
 import { agentRoutes } from './routes/agents.js';
 import { agentChatRoutes } from './routes/agent-chat.js';
+import { agentRunRoutes } from './routes/agent-runs.js';
+import { initAllCronJobs } from './services/agent-cron.js';
+import { initAllBoardCronJobs } from './services/board-cron.js';
+import { reconcileStaleRuns } from './services/agent-runs.js';
+import { ensureAgentServiceAccounts } from './services/agents.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
   if (!env.TLS_CERT_PATH || !env.TLS_KEY_PATH) return undefined;
@@ -59,6 +65,7 @@ export async function buildApp() {
 
   // Initialize JSON store before anything else
   await store.init();
+  await ensureAgentServiceAccounts();
 
   await app.register(sensible);
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
@@ -92,12 +99,23 @@ export async function buildApp() {
   await app.register(webhookRoutes);
   await app.register(connectorRoutes);
   await app.register(permissionRoutes);
-  await app.register(folderRoutes);
+  await app.register(collectionRoutes);
   await app.register(cardRoutes);
   await app.register(boardRoutes);
   await app.register(storageRoutes);
+  await app.register(userRoutes);
   await app.register(agentRoutes);
   await app.register(agentChatRoutes);
+  await app.register(agentRunRoutes);
+
+  // Initialize agent cron jobs
+  initAllCronJobs();
+
+  // Initialize board cron template jobs
+  initAllBoardCronJobs();
+
+  // Mark any leftover 'running' agent runs as error (server crashed)
+  reconcileStaleRuns();
 
   return app;
 }

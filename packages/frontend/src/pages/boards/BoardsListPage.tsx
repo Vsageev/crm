@@ -4,6 +4,8 @@ import { Plus, Kanban, Trash2 } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { Button } from '../../ui';
 import { api, ApiError } from '../../lib/api';
+import { toast } from '../../stores/toast';
+import { useConfirm } from '../../hooks/useConfirm';
 import {
   clearPreferredBoardId,
   getPreferredBoardId,
@@ -33,6 +35,7 @@ function isGeneralBoard(board: Board): boolean {
 export function BoardsListPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -127,7 +130,7 @@ export function BoardsListPage() {
       setCreateDesc('');
       fetchBoards();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.message);
+      if (err instanceof ApiError) toast.error(err.message);
     } finally {
       setCreating(false);
     }
@@ -136,7 +139,12 @@ export function BoardsListPage() {
   async function handleDeleteBoard(board: Board) {
     if (isGeneralBoard(board)) return;
 
-    const confirmed = window.confirm(`Delete board "${board.name}"? This cannot be undone.`);
+    const confirmed = await confirm({
+      title: 'Delete board',
+      message: `Delete board "${board.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
     setDeletingBoardId(board.id);
@@ -152,9 +160,9 @@ export function BoardsListPage() {
       });
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.message);
+        toast.error(err.message);
       } else {
-        alert('Failed to delete board');
+        toast.error('Failed to delete board');
       }
     } finally {
       setDeletingBoardId(null);
@@ -163,6 +171,7 @@ export function BoardsListPage() {
 
   return (
     <div className={styles.page}>
+      {confirmDialog}
       <PageHeader
         title="Boards"
         description="Kanban boards for visual workflow"

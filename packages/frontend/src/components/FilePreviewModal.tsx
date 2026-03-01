@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Download, X } from 'lucide-react';
-import { Tooltip } from '../ui';
-import { isImagePreviewable } from '../lib/file-utils';
+import { MarkdownContent, Tooltip } from '../ui';
+import { getFileExt, isImagePreviewable } from '../lib/file-utils';
 import styles from './FilePreviewModal.module.css';
+
+const MD_EXTS = new Set(['.md', '.markdown']);
 
 interface FilePreviewModalProps {
   fileName: string;
@@ -15,6 +17,8 @@ export function FilePreviewModal({ fileName, downloadUrl, onClose, onDownload }:
   const [textContent, setTextContent] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const isMarkdown = MD_EXTS.has(getFileExt(fileName));
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +100,10 @@ export function FilePreviewModal({ fileName, downloadUrl, onClose, onDownload }:
               alt={fileName}
               className={styles.previewImage}
             />
+          ) : isMarkdown && textContent ? (
+            <div className={styles.previewMarkdown}>
+              <MarkdownContent>{textContent}</MarkdownContent>
+            </div>
           ) : (
             <pre className={styles.previewText}>{textContent}</pre>
           )}

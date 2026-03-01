@@ -2,6 +2,7 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Copy, Check, AlertTriangle } from 'lucide-react';
 import { Button, Card, Badge, ApiKeyFormFields, Tooltip, type ApiKeyFormData } from '../../ui';
 import { api, ApiError } from '../../lib/api';
+import { scrollToFirstError } from '../../lib/scroll-to-error';
 import styles from './SettingsPage.module.css';
 
 interface ApiKey {
@@ -139,6 +140,7 @@ export function ApiKeysTab() {
       }
     }
     setFormErrors(errors);
+    if (Object.keys(errors).length > 0) scrollToFirstError();
     return Object.keys(errors).length === 0;
   }
 
@@ -315,6 +317,7 @@ export function ApiKeysTab() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="danger"
                           onClick={() => handleDelete(key.id)}
                           disabled={deleteLoading}
                         >

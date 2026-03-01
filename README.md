@@ -1,8 +1,8 @@
-# CRM System
+# Workspace
 
-A full-featured CRM with contacts, deals pipeline, tasks, unified inbox, Telegram integration, automation engine, and reporting.
+A workspace platform with boards, cards, folders, unified inbox, Telegram integration, AI agents, and webhook automation.
 
-**Tech stack:** Fastify, Drizzle ORM, PostgreSQL, Redis, React 19, Vite, TypeScript, pnpm workspaces.
+**Tech stack:** Fastify 5, JSON file store, React 19, Vite, TypeScript, Zod v4, pnpm workspaces.
 
 ## Quick Start
 
@@ -10,34 +10,22 @@ A full-featured CRM with contacts, deals pipeline, tasks, unified inbox, Telegra
 
 - Node.js 20+
 - pnpm 9+
-- Docker & Docker Compose
 
 ### 1. Clone and install
 
 ```bash
-git clone <repo-url> && cd replace
+git clone <repo-url> && cd replace_prototype
 pnpm install
 ```
 
-### 2. Start infrastructure
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 cp packages/backend/.env.example packages/backend/.env
-pnpm docker:infra
 ```
 
-This starts PostgreSQL and Redis in Docker.
-
-### 3. Set up the database
-
-```bash
-cd packages/backend
-pnpm db:push
-cd ../..
-```
-
-### 4. Seed the database (optional)
+### 3. Seed the database (optional)
 
 ```bash
 cd packages/backend
@@ -45,15 +33,15 @@ pnpm db:seed
 cd ../..
 ```
 
-This populates the database with sample data: users, companies, contacts, deals, tasks, conversations, and more. See [Seed Data](#seed-data) for details.
+Populates the JSON store with sample data: users, tags, folders, cards, boards, conversations, and more. See [Seed Data](#seed-data) for details.
 
-### 5. Generate HTTPS certs (optional)
+### 4. Generate HTTPS certs (optional)
 
 ```bash
 pnpm certs:generate
 ```
 
-### 6. Start dev servers
+### 5. Start dev servers
 
 ```bash
 pnpm dev
@@ -67,23 +55,25 @@ pnpm dev
 
 ```
 packages/
-  backend/     Fastify API server, Drizzle ORM, PostgreSQL
+  backend/     Fastify API server, JSON file store
   frontend/    React 19 SPA, Vite, React Router
   shared/      Shared TypeScript types
   widget/      Embeddable lead capture form & chat widgets
+  ngrok/       ngrok tunnel utility for local webhook testing
 scripts/       Dev utility scripts (cert generation)
+docs/          Design system, API guidelines
 ```
 
 ### `packages/backend`
 
-REST API server handling all CRM business logic. Built with Fastify 5, uses a JSON-based data store (Drizzle schema defined for reference/migrations but not used at runtime).
+REST API server handling all workspace logic. Built with Fastify 5 and fastify-type-provider-zod, uses a JSON file-based data store.
 
 Key areas:
 
-- **29 route files** — auth, contacts, companies, deals, tasks, conversations, messages, automation rules, webhooks, public API, reports, web forms, settings, and channel-specific routes (Telegram, WhatsApp, Instagram, email)
-- **50+ services** — automation engine, channel webhooks, email sync (IMAP/SMTP), chatbot flows, CSV import/export, duplicate detection, round-robin assignment, GDPR export, webhook delivery with retry
-- **34 DB tables** — users, contacts, companies, deals, pipelines, tasks, conversations, messages, automation rules, web forms, webhooks, API keys, and integration tables for each channel
-- **Security** — JWT auth with refresh tokens, API key scoped permissions, 2FA (TOTP), rate limiting, input sanitization, audit logging
+- **21 route files** — auth, cards, boards, folders, tags, conversations, messages, agents, agent chat, connectors, Telegram, webhooks, media, storage, API keys, permissions, audit logs, backups, message drafts, health, and widget
+- **23 services** — agents & agent chat, Telegram bot/webhook/outbound, webhook delivery, event bus, backup, storage, connectors, audit logging, TOTP 2FA, and core CRUD for cards, boards, folders, conversations, messages, tags
+- **20 data collections** — users, cards, boards, folders, tags, conversations, messages, connectors, Telegram bots, webhooks, API keys, audit logs, message drafts, and more
+- **Security** — JWT auth with refresh tokens, API key scoped permissions, 2FA (TOTP), rate limiting, audit logging
 
 ### `packages/frontend`
 
@@ -91,17 +81,17 @@ React 19 single-page application. All pages are lazy-loaded via React Router for
 
 Key areas:
 
-- **Pages** — Dashboard, Contacts (list/detail/form), Companies, Deals (Kanban), Tasks (list/detail/form), Inbox (unified conversations), Automation Rules, Reports, Settings, Auth (login/register/2FA)
-- **State** — React Context for auth, custom `useQuery` hook for data fetching
+- **Pages** — Dashboard, Boards (list/detail), Cards (detail), Folders (list/detail), Inbox, Agents, Connectors, Storage, Settings (API keys, backups), Auth (login/register/2FA)
+- **State** — React Context for auth, custom hooks for data fetching
 - **API client** (`src/lib/api.ts`) — centralized fetch wrapper with JWT auto-refresh on 401
 
 ### `packages/shared`
 
-TypeScript type definitions shared between backend and frontend: permission types and auth interfaces. Keeps both sides in sync without runtime dependencies.
+TypeScript type definitions shared between backend and frontend: permission types and auth interfaces.
 
 ### `packages/widget`
 
-Standalone JavaScript widgets embedded on **external** (third-party) websites via a `<script>` tag. Built as IIFE bundles with no dependencies, rendered inside Shadow DOM for style isolation.
+Standalone JavaScript widgets embedded on external websites via a `<script>` tag. Built as IIFE bundles with no dependencies, rendered inside Shadow DOM for style isolation.
 
 Two widgets:
 
@@ -115,56 +105,48 @@ Usage example:
 <script src="https://your-cdn.example.com/crm-form.js"></script>
 ```
 
+### `packages/ngrok`
+
+Utility package that runs an ngrok tunnel to expose the local backend (port 3000) for webhook testing during development.
+
 ### `scripts/`
 
 - **`generate-certs.sh`** — generates local HTTPS certificates via [mkcert](https://github.com/FiloSottile/mkcert) into `certs/`. Run with `pnpm certs:generate`.
 
 ## Key Commands
 
-| Command                  | Description                                  |
-| ------------------------ | -------------------------------------------- |
-| `pnpm dev`               | Start all dev servers in parallel (+ ngrok)  |
-| `pnpm dev:backend:ngrok` | Start backend + reserved ngrok tunnel        |
-| `pnpm dev:ngrok`         | Start ngrok tunnel to local backend (3000)   |
-| `pnpm build`             | Build all packages                           |
-| `pnpm lint`              | Lint all packages                            |
-| `pnpm typecheck`         | Type-check all packages                      |
-| `pnpm docker:infra`      | Start Postgres + Redis                       |
-| `pnpm docker:infra:stop` | Stop infrastructure                          |
-| `pnpm docker:full`       | Start everything in Docker                   |
-| `pnpm db:generate`       | Generate Drizzle migrations (in backend/)    |
-| `pnpm db:push`           | Push schema to database (in backend/)        |
-| `pnpm db:seed`           | Seed database with sample data (in backend/) |
-| `pnpm db:studio`         | Open Drizzle Studio (in backend/)            |
+| Command                  | Description                                |
+| ------------------------ | ------------------------------------------ |
+| `pnpm dev`               | Start all dev servers in parallel           |
+| `pnpm dev:backend`       | Start backend only                          |
+| `pnpm dev:frontend`      | Start frontend only                         |
+| `pnpm dev:backend:ngrok` | Start backend + ngrok tunnel                |
+| `pnpm dev:ngrok`         | Start ngrok tunnel to local backend (3000)  |
+| `pnpm build`             | Build all packages                          |
+| `pnpm lint`              | Lint all packages                           |
+| `pnpm typecheck`         | Type-check all packages                     |
+| `pnpm docker:full`       | Start everything in Docker                  |
+| `pnpm docker:full:stop`  | Stop Docker containers                      |
+| `pnpm docker:down`       | Stop and remove Docker containers           |
+| `pnpm db:seed`           | Seed JSON store with sample data (backend/) |
+| `pnpm certs:generate`    | Generate local HTTPS certs via mkcert       |
 
 ## Features
 
-- **Contacts & Companies** -- custom fields, tags, CSV import/export, duplicate detection
-- **Deals Pipeline** -- Kanban board, customizable stages, ownership scoping
-- **Tasks** -- linked to contacts/deals, due date reminders, calendar view
-- **Unified Inbox** -- all conversations in one place, quick-reply templates
-- **Telegram** -- bot integration, media support, chatbot flows, agent notifications
-- **Lead Capture** -- embeddable web forms, UTM tracking, auto-create contacts + deals
-- **Automation** -- trigger/condition/action rules, round-robin assignment, auto-stage moves
-- **Reporting** -- pipeline summary, user performance, lead source breakdown, CSV export
-- **API & Webhooks** -- public REST API, API key auth, webhook subscriptions with retry
-- **Security** -- API key scoped permissions, 2FA (TOTP), rate limiting, audit logging, daily backups, GDPR export
+- **Cards & Folders** — organize work items with tags and links
+- **Boards** — Kanban-style boards with customizable columns
+- **Unified Inbox** — all conversations in one place
+- **Telegram** — bot integration, media support, webhook handling
+- **AI Agents** — configurable agents with preset system, file workspaces, and chat interface
+- **Connectors** — external service integrations
+- **Lead Capture** — embeddable web forms and chat widgets
+- **Webhooks** — webhook subscriptions with delivery tracking
+- **Storage** — file upload and media management
+- **Security** — JWT auth, API key scoped permissions, 2FA (TOTP), rate limiting, audit logging, backups
 
 ## Seed Data
 
-Run `pnpm db:seed` from `packages/backend/` to populate the database with realistic sample data:
-
-| Entity        | Count | Details                                         |
-| ------------- | ----- | ----------------------------------------------- |
-| Users         | 4     | Sample active users                             |
-| Tags          | 5     | VIP, Partner, Lead, Hot, Cold                   |
-| Companies     | 5     | Various industries and sizes                    |
-| Contacts      | 8     | Linked to companies, with UTM tracking          |
-| Pipelines     | 2     | Sales (6 stages), Partner Onboarding (5 stages) |
-| Deals         | 6     | Across pipeline stages, $5K–$120K               |
-| Tasks         | 5     | Calls, emails, meetings linked to deals         |
-| Activity Logs | 4     | Calls, meetings, notes with timestamps          |
-| Conversations | 2     | Email and web chat channels with 5 messages     |
+Run `pnpm db:seed` from `packages/backend/` to populate the JSON store with sample data.
 
 **Test accounts:**
 
@@ -175,8 +157,6 @@ Run `pnpm db:seed` from `packages/backend/` to populate the database with realis
 | `agent1@workspace.local`  | `agent123`   |
 | `agent2@workspace.local`  | `agent123`   |
 
-> **Note:** The seed script inserts data directly — run it on a fresh database after `pnpm db:push`. Running it twice will fail due to unique constraints.
-
 ## Docker (full stack)
 
 ```bash
@@ -186,7 +166,7 @@ pnpm docker:full
 
 ## Environment Variables
 
-See `packages/backend/.env.example` for all backend config including database, Redis, Telegram, and backup settings.
+See `packages/backend/.env.example` for all backend config.
 
 ## Guidelines
 

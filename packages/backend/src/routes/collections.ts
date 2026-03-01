@@ -4,36 +4,36 @@ import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import { ApiError } from '../utils/api-errors.js';
 import {
-  listFolders,
-  getFolderById,
-  isGeneralFolder,
-  createFolder,
-  updateFolder,
-  deleteFolder,
-} from '../services/folders.js';
+  listCollections,
+  getCollectionById,
+  isGeneralCollection,
+  createCollection,
+  updateCollection,
+  deleteCollection,
+} from '../services/collections.js';
 import { listCards } from '../services/cards.js';
 
-const createFolderBody = z.object({
+const createCollectionBody = z.object({
   name: z.string().min(1).max(255),
   description: z.string().nullable().optional(),
 });
 
-const updateFolderBody = z.object({
+const updateCollectionBody = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().nullable().optional(),
 });
 
-export async function folderRoutes(app: FastifyInstance) {
+export async function collectionRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
 
-  // List folders
+  // List collections
   typedApp.get(
-    '/api/folders',
+    '/api/collections',
     {
-      onRequest: [app.authenticate, requirePermission('folders:read')],
+      onRequest: [app.authenticate, requirePermission('collections:read')],
       schema: {
-        tags: ['Folders'],
-        summary: 'List folders',
+        tags: ['Collections'],
+        summary: 'List collections',
         querystring: z.object({
           search: z.string().optional(),
           limit: z.coerce.number().optional(),
@@ -42,7 +42,7 @@ export async function folderRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { entries, total } = await listFolders({
+      const { entries, total } = await listCollections({
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
@@ -57,34 +57,34 @@ export async function folderRoutes(app: FastifyInstance) {
     },
   );
 
-  // Get single folder
+  // Get single collection
   typedApp.get(
-    '/api/folders/:id',
+    '/api/collections/:id',
     {
-      onRequest: [app.authenticate, requirePermission('folders:read')],
+      onRequest: [app.authenticate, requirePermission('collections:read')],
       schema: {
-        tags: ['Folders'],
-        summary: 'Get a single folder by ID',
+        tags: ['Collections'],
+        summary: 'Get a single collection by ID',
         params: z.object({ id: z.uuid() }),
       },
     },
     async (request, reply) => {
-      const folder = await getFolderById(request.params.id);
-      if (!folder) {
-        return reply.notFound('Folder not found');
+      const collection = await getCollectionById(request.params.id);
+      if (!collection) {
+        return reply.notFound('Collection not found');
       }
-      return reply.send(folder);
+      return reply.send(collection);
     },
   );
 
-  // Get cards in folder
+  // Get cards in collection
   typedApp.get(
-    '/api/folders/:id/cards',
+    '/api/collections/:id/cards',
     {
       onRequest: [app.authenticate, requirePermission('cards:read')],
       schema: {
-        tags: ['Folders'],
-        summary: 'List cards in a folder',
+        tags: ['Collections'],
+        summary: 'List cards in a collection',
         params: z.object({ id: z.uuid() }),
         querystring: z.object({
           search: z.string().optional(),
@@ -94,13 +94,13 @@ export async function folderRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const folder = await getFolderById(request.params.id);
-      if (!folder) {
-        return reply.notFound('Folder not found');
+      const collection = await getCollectionById(request.params.id);
+      if (!collection) {
+        return reply.notFound('Collection not found');
       }
 
       const { entries, total } = await listCards({
-        folderId: request.params.id,
+        collectionId: request.params.id,
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
@@ -115,73 +115,73 @@ export async function folderRoutes(app: FastifyInstance) {
     },
   );
 
-  // Create folder
+  // Create collection
   typedApp.post(
-    '/api/folders',
+    '/api/collections',
     {
-      onRequest: [app.authenticate, requirePermission('folders:create')],
+      onRequest: [app.authenticate, requirePermission('collections:create')],
       schema: {
-        tags: ['Folders'],
-        summary: 'Create a new folder',
-        body: createFolderBody,
+        tags: ['Collections'],
+        summary: 'Create a new collection',
+        body: createCollectionBody,
       },
     },
     async (request, reply) => {
-      const folder = await createFolder(request.body, {
+      const collection = await createCollection(request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
       });
 
-      return reply.status(201).send(folder);
+      return reply.status(201).send(collection);
     },
   );
 
-  // Update folder
+  // Update collection
   typedApp.patch(
-    '/api/folders/:id',
+    '/api/collections/:id',
     {
-      onRequest: [app.authenticate, requirePermission('folders:update')],
+      onRequest: [app.authenticate, requirePermission('collections:update')],
       schema: {
-        tags: ['Folders'],
-        summary: 'Update an existing folder',
+        tags: ['Collections'],
+        summary: 'Update an existing collection',
         params: z.object({ id: z.uuid() }),
-        body: updateFolderBody,
+        body: updateCollectionBody,
       },
     },
     async (request, reply) => {
-      const updated = await updateFolder(request.params.id, request.body, {
+      const updated = await updateCollection(request.params.id, request.body, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
       });
 
       if (!updated) {
-        return reply.notFound('Folder not found');
+        return reply.notFound('Collection not found');
       }
 
       return reply.send(updated);
     },
   );
 
-  // Delete folder
+  // Delete collection
   typedApp.delete(
-    '/api/folders/:id',
+    '/api/collections/:id',
     {
-      onRequest: [app.authenticate, requirePermission('folders:delete')],
+      onRequest: [app.authenticate, requirePermission('collections:delete')],
       schema: {
-        tags: ['Folders'],
-        summary: 'Delete a folder',
+        tags: ['Collections'],
+        summary: 'Delete a collection',
         params: z.object({ id: z.uuid() }),
       },
     },
     async (request, reply) => {
-      const folder = await getFolderById(request.params.id);
-      if (!folder) {
-        return reply.notFound('Folder not found');
+      const collection = await getCollectionById(request.params.id);
+      if (!collection) {
+        return reply.notFound('Collection not found');
       }
 
-      if (isGeneralFolder(folder)) {
+      if (isGeneralCollection(collection)) {
         throw ApiError.conflict(
           'general_collection_protected',
           'General collections cannot be deleted',
@@ -189,14 +189,14 @@ export async function folderRoutes(app: FastifyInstance) {
         );
       }
 
-      const deleted = await deleteFolder(request.params.id, {
+      const deleted = await deleteCollection(request.params.id, {
         userId: request.user.sub,
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
       });
 
       if (!deleted) {
-        return reply.notFound('Folder not found');
+        return reply.notFound('Collection not found');
       }
 
       return reply.status(204).send();

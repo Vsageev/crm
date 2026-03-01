@@ -1,23 +1,30 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Trash2, Plus, X, Link2,
-  FileText, User, Send, Check, Pencil,
+  ArrowLeft, Trash2, Plus, X, Link2, Columns3,
+  FileText, User, Send, Check, Pencil, Loader2,
 } from 'lucide-react';
-import Markdown from 'react-markdown';
-import { Button, PageLoader, Tooltip } from '../../ui';
+import { Button, MarkdownContent, PageLoader, Tooltip } from '../../ui';
+import { AgentAvatar } from '../../components/AgentAvatar';
 import { api, ApiError } from '../../lib/api';
+import { toast } from '../../stores/toast';
+import { useConfirm } from '../../hooks/useConfirm';
 import styles from './CardDetailPage.module.css';
 
 /* ── Types ────────────────────────────────────────────── */
 
 interface Tag { id: string; name: string; color: string }
-interface Assignee { id: string; firstName: string; lastName: string }
-interface LinkedCard { linkId: string; id: string; name: string; folderId: string }
+interface Assignee {
+  id: string; firstName: string; lastName: string; type?: 'user' | 'agent';
+  avatarIcon?: string | null; avatarBgColor?: string | null; avatarLogoColor?: string | null;
+}
+interface LinkedCard { linkId: string; id: string; name: string; collectionId: string }
+interface BoardPlacement { boardId: string; boardName: string; columnId: string; columnName: string | null; columnColor: string | null }
 
 interface CardDetail {
   id: string;
-  folderId: string;
+  collectionId: string;
   name: string;
   description: string | null;
   customFields: Record<string, unknown>;
@@ -26,6 +33,7 @@ interface CardDetail {
   position: number;
   tags: Tag[];
   linkedCards: LinkedCard[];
+  boards: BoardPlacement[];
   createdAt: string;
   updatedAt: string;
 }
@@ -35,22 +43,127 @@ interface CardComment {
   cardId: string;
   authorId: string;
   content: string;
-  author: { id: string; firstName: string; lastName: string } | null;
+  author: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    type?: 'user' | 'agent';
+    avatarIcon?: string | null;
+    avatarBgColor?: string | null;
+    avatarLogoColor?: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
 
 interface UserEntry { id: string; firstName: string; lastName: string }
+interface AgentEntry {
+  id: string; name: string; status: string;
+  avatarIcon?: string; avatarBgColor?: string; avatarLogoColor?: string;
+}
 
 function ini(f: string, l: string) {
   return `${f[0] ?? ''}${l[0] ?? ''}`.toUpperCase();
 }
+
+/* ── Assignee picker (portal) ─────────────────────────── */
+
+import { forwardRef } from 'react';
+
+interface AssigneePickerProps {
+  triggerRef: React.RefObject<HTMLDivElement | null>;
+  loading: boolean;
+  users: UserEntry[];
+  agents: AgentEntry[];
+  assigneeId: string | null;
+  hasAssignee: boolean;
+  onAssign: (id: string | null) => void;
+}
+
+const AssigneePicker = forwardRef<HTMLDivElement, AssigneePickerProps>(
+  function AssigneePicker({ triggerRef, loading, users, agents, assigneeId, hasAssignee, onAssign }, ref) {
+    const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+    useEffect(() => {
+      function update() {
+        const el = triggerRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        setPos({ top: rect.bottom + 4, left: rect.right });
+      }
+      update();
+      window.addEventListener('scroll', update, true);
+      window.addEventListener('resize', update);
+      return () => {
+        window.removeEventListener('scroll', update, true);
+        window.removeEventListener('resize', update);
+      };
+    }, [triggerRef]);
+
+    if (!pos) return null;
+
+    return (
+      <div
+        ref={ref}
+        className={styles.assigneeOverlay}
+        style={{ top: pos.top, left: pos.left }}
+      >
+        {loading ? (
+          <div className={styles.pickerLoading}>
+            <Loader2 size={14} className={styles.spinner} /> Loading…
+          </div>
+        ) : users.length === 0 && agents.length === 0 ? (
+          <div className={styles.pickerEmpty}>No users or agents available</div>
+        ) : (
+          <>
+            {hasAssignee && (
+              <button className={styles.resultItem} onClick={() => onAssign(null)}>
+                <X size={12} /> Unassign
+              </button>
+            )}
+            {agents.length > 0 && (
+              <>
+                <div className={styles.pickerDivider}>Agents</div>
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`${styles.resultItem}${assigneeId === a.id ? ` ${styles.resultItemActive}` : ''}`}
+                    onClick={() => onAssign(a.id)}
+                  >
+                    <AgentAvatar icon={a.avatarIcon || 'spark'} bgColor={a.avatarBgColor || '#1a1a2e'} logoColor={a.avatarLogoColor || '#e94560'} size={16} /> {a.name}
+                    {assigneeId === a.id && <Check size={12} className={styles.checkIcon} />}
+                  </button>
+                ))}
+              </>
+            )}
+            {users.length > 0 && (
+              <>
+                <div className={styles.pickerDivider}>Users</div>
+                {users.map((u) => (
+                  <button
+                    key={u.id}
+                    className={`${styles.resultItem}${assigneeId === u.id ? ` ${styles.resultItemActive}` : ''}`}
+                    onClick={() => onAssign(u.id)}
+                  >
+                    <User size={12} /> {u.firstName} {u.lastName}
+                    {assigneeId === u.id && <Check size={12} className={styles.checkIcon} />}
+                  </button>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    );
+  },
+);
 
 /* ── Component ────────────────────────────────────────── */
 
 export function CardDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [card, setCard] = useState<CardDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,6 +195,10 @@ export function CardDetailPage() {
   // Assignee
   const [showAssignee, setShowAssignee] = useState(false);
   const [users, setUsers] = useState<UserEntry[]>([]);
+  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [loadingAssignees, setLoadingAssignees] = useState(false);
+  const assigneeTriggerRef = useRef<HTMLDivElement>(null);
+  const assigneeDropdownRef = useRef<HTMLDivElement>(null);
 
   /* ── Fetch ──────────────────────────────────────────── */
 
@@ -110,6 +227,21 @@ export function CardDetailPage() {
 
   useEffect(() => { fetchCard(); fetchComments(); }, [fetchCard, fetchComments]);
 
+  // Close assignee picker on outside click
+  useEffect(() => {
+    if (!showAssignee) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        assigneeTriggerRef.current?.contains(target) ||
+        assigneeDropdownRef.current?.contains(target)
+      ) return;
+      setShowAssignee(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showAssignee]);
+
   /* ── Inline editing ─────────────────────────────────── */
 
   function startEditName() {
@@ -127,7 +259,7 @@ export function CardDetailPage() {
       await api(`/cards/${card.id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
       setEditingName(false);
       fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   function startEditDesc() {
@@ -145,17 +277,24 @@ export function CardDetailPage() {
       await api(`/cards/${card.id}`, { method: 'PATCH', body: JSON.stringify({ description }) });
       setEditingDesc(false);
       fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   /* ── Card actions ───────────────────────────────────── */
 
   async function handleDelete() {
-    if (!card || !confirm('Delete this card?')) return;
+    if (!card) return;
+    const confirmed = await confirm({
+      title: 'Delete card',
+      message: 'Delete this card? This cannot be undone.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await api(`/cards/${card.id}`, { method: 'DELETE' });
-      navigate(`/folders/${card.folderId}`);
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+      navigate(`/collections/${card.collectionId}`);
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   /* ── Tag actions ────────────────────────────────────── */
@@ -167,7 +306,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/tags`, { method: 'POST', body: JSON.stringify({ tagId }) });
       fetchCard(); fetchTags();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   async function removeTag(tagId: string) {
@@ -175,7 +314,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/tags/${tagId}`, { method: 'DELETE' });
       fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   async function createTag() {
@@ -186,17 +325,23 @@ export function CardDetailPage() {
       const t = await api<Tag>('/tags', { method: 'POST', body: JSON.stringify({ name, color: newTagColor }) });
       setNewTagName('');
       await addTag(t.id);
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
     finally { setCreatingTag(false); }
   }
 
   async function deleteTag(tagId: string) {
-    if (!confirm('Delete this tag from the workspace?')) return;
+    const confirmed = await confirm({
+      title: 'Delete tag',
+      message: 'Delete this tag from the workspace?',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     setDeletingTagId(tagId);
     try {
       await api(`/tags/${tagId}`, { method: 'DELETE' });
       fetchCard(); fetchTags();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
     finally { setDeletingTagId(null); }
   }
 
@@ -219,7 +364,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/links`, { method: 'POST', body: JSON.stringify({ targetCardId }) });
       setShowLinkSearch(false); setLinkTerm(''); setLinkResults([]); fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   async function unlinkCard(linkId: string) {
@@ -227,7 +372,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/links/${linkId}`, { method: 'DELETE' });
       fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   /* ── Comment actions ────────────────────────────────── */
@@ -238,7 +383,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/comments`, { method: 'POST', body: JSON.stringify({ content: newComment.trim() }) });
       setNewComment(''); fetchComments();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
     finally { setSubmittingComment(false); }
   }
 
@@ -247,17 +392,28 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}/comments/${cid}`, { method: 'DELETE' });
       fetchComments();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   /* ── Assignee actions ───────────────────────────────── */
 
   async function openAssignee() {
+    if (showAssignee) { setShowAssignee(false); return; }
     setShowAssignee(true);
+    setLoadingAssignees(true);
     try {
-      const d = await api<{ entries: UserEntry[] }>('/users');
-      setUsers(d.entries);
+      const [usersRes, agentsRes] = await Promise.allSettled([
+        api<{ entries: UserEntry[] }>('/users'),
+        api<{ entries: AgentEntry[] }>('/agents'),
+      ]);
+      setUsers(usersRes.status === 'fulfilled' ? usersRes.value.entries : []);
+      setAgents(
+        agentsRes.status === 'fulfilled'
+          ? agentsRes.value.entries.filter(a => a.status === 'active')
+          : [],
+      );
     } catch { /* ignore */ }
+    finally { setLoadingAssignees(false); }
   }
 
   async function assign(uid: string | null) {
@@ -265,7 +421,7 @@ export function CardDetailPage() {
     try {
       await api(`/cards/${card.id}`, { method: 'PATCH', body: JSON.stringify({ assigneeId: uid }) });
       setShowAssignee(false); fetchCard();
-    } catch (e) { if (e instanceof ApiError) alert(e.message); }
+    } catch (e) { if (e instanceof ApiError) toast.error(e.message); }
   }
 
   /* ── Render ─────────────────────────────────────────── */
@@ -278,12 +434,20 @@ export function CardDetailPage() {
 
   return (
     <div className={styles.page}>
+      {confirmDialog}
       {/* Top bar */}
       <div className={styles.topBar}>
-        <Link to={`/folders/${card.folderId}`} className={styles.backLink}>
+        <button
+          type="button"
+          className={styles.backLink}
+          onClick={() => {
+            if (window.history.length > 1) navigate(-1);
+            else navigate(`/collections/${card.collectionId}`);
+          }}
+        >
           <ArrowLeft size={14} />
-          Back to Collection
-        </Link>
+          Back
+        </button>
         <Button variant="ghost" size="sm" onClick={handleDelete}>
           <Trash2 size={14} />
           Delete
@@ -341,8 +505,8 @@ export function CardDetailPage() {
                   </div>
                 </>
               ) : card.description ? (
-                <div className={`${styles.descriptionDisplay} ${styles.markdown}`} onClick={startEditDesc}>
-                  <Markdown>{card.description}</Markdown>
+                <div className={styles.descriptionDisplay} onClick={startEditDesc}>
+                  <MarkdownContent>{card.description}</MarkdownContent>
                   <Pencil size={12} className={styles.editHint} />
                 </div>
               ) : (
@@ -368,19 +532,34 @@ export function CardDetailPage() {
                 <div className={styles.commentsList}>
                   {comments.map((c) => (
                     <div key={c.id} className={styles.comment}>
-                      <div className={`${styles.avatar} ${styles.avatarLg}`}>
-                        {c.author ? ini(c.author.firstName, c.author.lastName) : '??'}
+                      <div className={`${styles.avatar} ${styles.avatarLg}${c.author?.type === 'agent' ? ` ${styles.avatarAgent}` : ''}`}>
+                        {c.author?.type === 'agent' ? (
+                          <AgentAvatar
+                            icon={c.author.avatarIcon || 'spark'}
+                            bgColor={c.author.avatarBgColor || '#1a1a2e'}
+                            logoColor={c.author.avatarLogoColor || '#e94560'}
+                            size={30}
+                          />
+                        ) : (
+                          c.author ? ini(c.author.firstName, c.author.lastName) : '??'
+                        )}
                       </div>
                       <div className={styles.commentBody}>
                         <div className={styles.commentMeta}>
                           <span className={styles.commentAuthor}>
-                            {c.author ? `${c.author.firstName} ${c.author.lastName}` : 'Unknown'}
+                            {c.author
+                              ? c.author.type === 'agent'
+                                ? c.author.firstName
+                                : `${c.author.firstName} ${c.author.lastName}`.trim()
+                              : 'Unknown'}
                           </span>
                           <span className={styles.commentTime}>
                             {new Date(c.createdAt).toLocaleString()}
                           </span>
                         </div>
-                        <div className={styles.commentText}>{c.content}</div>
+                        <div className={styles.commentText}>
+                          <MarkdownContent compact>{c.content}</MarkdownContent>
+                        </div>
                       </div>
                       <Tooltip label="Delete">
                         <button className={styles.commentX} onClick={() => deleteComment(c.id)} aria-label="Delete">
@@ -427,15 +606,17 @@ export function CardDetailPage() {
             </div>
             <div className={styles.sidePanelBody}>
               {/* Assignee */}
-              <div className={styles.detailRow}>
+              <div className={styles.detailRow} ref={assigneeTriggerRef}>
                 <span className={styles.detailLabel}>Assignee</span>
                 {card.assignee ? (
                   <div className={styles.assigneeRow} onClick={openAssignee} style={{ cursor: 'pointer' }}>
-                    <div className={styles.avatar}>
-                      {ini(card.assignee.firstName, card.assignee.lastName)}
+                    <div className={`${styles.avatar}${card.assignee.type === 'agent' ? ` ${styles.avatarAgent}` : ''}`}>
+                      {card.assignee.type === 'agent'
+                        ? <AgentAvatar icon={card.assignee.avatarIcon || 'spark'} bgColor={card.assignee.avatarBgColor || '#1a1a2e'} logoColor={card.assignee.avatarLogoColor || '#e94560'} size={24} />
+                        : ini(card.assignee.firstName, card.assignee.lastName)}
                     </div>
                     <span className={styles.detailValue}>
-                      {card.assignee.firstName} {card.assignee.lastName}
+                      {card.assignee.firstName} {card.assignee.type !== 'agent' ? card.assignee.lastName : ''}
                     </span>
                   </div>
                 ) : (
@@ -443,21 +624,20 @@ export function CardDetailPage() {
                     <User size={11} /> Assign
                   </button>
                 )}
-                {showAssignee && (
-                  <div className={styles.assigneePicker}>
-                    {card.assignee && (
-                      <button className={styles.resultItem} onClick={() => assign(null)}>
-                        Unassign
-                      </button>
-                    )}
-                    {users.map((u) => (
-                      <button key={u.id} className={styles.resultItem} onClick={() => assign(u.id)}>
-                        {u.firstName} {u.lastName}
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
+              {showAssignee && createPortal(
+                <AssigneePicker
+                  ref={assigneeDropdownRef}
+                  triggerRef={assigneeTriggerRef}
+                  loading={loadingAssignees}
+                  users={users}
+                  agents={agents}
+                  assigneeId={card.assigneeId}
+                  hasAssignee={!!card.assignee}
+                  onAssign={assign}
+                />,
+                document.body,
+              )}
 
               {/* Created */}
               <div className={styles.detailRow}>
@@ -476,6 +656,30 @@ export function CardDetailPage() {
               </div>
             </div>
           </div>
+
+          {/* Boards */}
+          {card.boards && card.boards.length > 0 && (
+            <div className={styles.sidePanel}>
+              <div className={styles.sidePanelHeader}>
+                <span className={styles.sidePanelTitle}>Boards</span>
+              </div>
+              <div className={styles.sidePanelBody}>
+                {card.boards.map((bp) => (
+                  <div key={bp.boardId} className={styles.linkRow}>
+                    <Columns3 size={13} className={styles.linkIcon} />
+                    <Link to={`/boards/${bp.boardId}`} className={styles.linkName}>
+                      {bp.boardName}
+                    </Link>
+                    {bp.columnName && (
+                      <span className={styles.boardColumn} style={bp.columnColor ? { background: bp.columnColor } : undefined}>
+                        {bp.columnName}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Tags */}
           <div className={styles.sidePanel}>

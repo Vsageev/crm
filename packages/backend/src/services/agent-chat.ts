@@ -3,6 +3,7 @@ import path from 'node:path';
 import { store } from '../db/index.js';
 import { env } from '../config/env.js';
 import { getAgent } from './agents.js';
+import { createAgentRun, completeAgentRun } from './agent-runs.js';
 
 const AGENTS_DIR = path.resolve(env.DATA_DIR, 'agents');
 
@@ -21,37 +22,38 @@ const CHAT_MODE_SYSTEM_PROMPT =
   'Do not claim you are only a software engineering assistant. ' +
   'If a request cannot be fully completed due to tool or permission limits, explain the limitation briefly and provide the best actionable alternative.';
 
-function buildCliCommand(model: string, prompt: string, skipPermissions: boolean): CliCommand {
-  const modelLower = model.toLowerCase();
+const TASK_MODE_SYSTEM_PROMPT =
+  'You are a task execution agent. Complete the assigned task and report results. ' +
+  'Refer to CHANNELS.MD for response instructions.';
 
-  if (modelLower === 'claude') {
+function buildCliCommand(model: string, prompt: string, systemPrompt?: string): CliCommand {
+  const modelLower = model.trim().toLowerCase();
+  const sysPrompt = systemPrompt ?? CHAT_MODE_SYSTEM_PROMPT;
+
+  if (modelLower.includes('claude')) {
     const args = [
       '-p',
       prompt,
       '--output-format',
       'text',
       '--append-system-prompt',
-      CHAT_MODE_SYSTEM_PROMPT,
+      sysPrompt,
     ];
-    if (skipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    }
+    // Always run without interactive permission prompts.
+    args.push('--dangerously-skip-permissions');
     return { bin: 'claude', args };
   }
-  if (modelLower === 'codex') {
+  if (modelLower.includes('codex')) {
     // Run codex in regular exec mode for conversational responses.
-    const args = ['exec'];
-    if (skipPermissions) {
-      args.push('--dangerously-bypass-approvals-and-sandbox');
-    }
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', '--'];
     args.push(prompt);
     return { bin: 'codex', args };
   }
-  if (modelLower === 'qwen') {
+  if (modelLower.includes('qwen')) {
     const args = ['--output-format', 'text'];
-    if (skipPermissions) {
-      args.push('--approval-mode', 'yolo');
-    }
+    // Always run without interactive approvals.
+    args.push('--approval-mode', 'yolo');
+    args.push('--');
     args.push(prompt);
     return { bin: 'qwen', args };
   }
@@ -73,6 +75,22 @@ function parseMetadata(raw: unknown): Record<string, unknown> | null {
   }
 }
 
+function isBackgroundTriggerConversationRecord(r: Record<string, unknown>): boolean {
+  const meta = parseMetadata(r.metadata);
+  if (!meta) return false;
+
+  if (typeof meta.cronJobId === 'string' && meta.cronJobId.length > 0) return true;
+  if (typeof meta.cardId === 'string' && meta.cardId.length > 0) return true;
+
+  const trigger = typeof meta.trigger === 'string'
+    ? meta.trigger
+    : typeof meta.triggerType === 'string'
+      ? meta.triggerType
+      : null;
+
+  return trigger === 'cron_job' || trigger === 'card_assignment' || trigger === 'cron' || trigger === 'card';
+}
+
 function isAgentConversation(r: Record<string, unknown>, agentId: string): boolean {
   if (r.channelType !== 'agent' && r.channelType !== 'other') return false;
   const meta = parseMetadata(r.metadata);
@@ -84,8 +102,10 @@ function isAgentConversation(r: Record<string, unknown>, agentId: string): boole
  * Lazy-backfills subject from first outbound message for legacy conversations.
  */
 export function listAgentConversations(agentId: string, limit = 50, offset = 0) {
-  const all = store.find('conversations', (r: Record<string, unknown>) =>
-    isAgentConversation(r, agentId),
+  const all = store.find(
+    'conversations',
+    (r: Record<string, unknown>) =>
+      isAgentConversation(r, agentId) && !isBackgroundTriggerConversationRecord(r),
   );
 
   // Migrate legacy 'other' → 'agent' and backfill subject
@@ -161,6 +181,7 @@ export function validateConversationOwnership(
 ): Record<string, unknown> | null {
   const conv = store.getById('conversations', conversationId);
   if (!conv) return null;
+  if (isBackgroundTriggerConversationRecord(conv)) return null;
   const meta = parseMetadata(conv.metadata);
   if (meta?.agentId !== agentId) return null;
   return conv;
@@ -258,20 +279,19 @@ function buildPromptWithHistory(
         new Date(a.createdAt as string).getTime() - new Date(b.createdAt as string).getTime(),
     );
 
+  const triggerContext = buildTriggerContext('chat', { agentId, conversationId });
+
   const promptPreamble =
     'You are in a direct chat with a user. Respond to the latest User message clearly and directly. ' +
     'Non-coding requests are valid and should be handled directly when possible. ' +
     'Do not ask project-setup questions unless the user explicitly asks for coding/project help. ' +
     `You have workspace API access via $WORKSPACE_API_URL and $WORKSPACE_API_KEY env vars. ` +
-    `Use API message updates instead of relying on stream output for progress. ` +
     `Do not use /api/messages for this chat thread. ` +
-    `For this run, send progress updates to POST $WORKSPACE_API_URL/api/agents/${agentId}/chat/messages ` +
-    `with body {"conversationId":"${conversationId}","content":"<short update>","isFinal":false}. ` +
-    `When done, send the final user-facing answer to the same endpoint with isFinal:true so the app receives it as the last message. ` +
+    'See CHANNELS.MD for how to send progress updates and final answers. ' +
     'See CLAUDE.MD for endpoint examples.';
 
   if (history.length === 0) {
-    return `${promptPreamble}\n\nUser: ${currentPrompt}`;
+    return `${triggerContext}${promptPreamble}\n\nUser: ${currentPrompt}`;
   }
 
   const lines: string[] = [];
@@ -285,14 +305,163 @@ function buildPromptWithHistory(
   }
   lines.push(`User: ${currentPrompt}`);
 
-  return `${promptPreamble}\n\nContinue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
+  return `${triggerContext}${promptPreamble}\n\nContinue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
 }
 
 // ---------------------------------------------------------------------------
-// Execute prompt
+// Shared subprocess environment builder
 // ---------------------------------------------------------------------------
 
-// Track running processes per (agent, conversation) so parallel chats can run.
+type TriggerType = 'chat' | 'cron_job' | 'card_assignment';
+
+interface AgentProcessResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  runStartedAt: number;
+}
+
+interface AgentProcessOptions {
+  agentId: string;
+  agent: { name: string; model: string; apiKeyId: string; workspaceApiKey: string | null };
+  runKey: string;
+  prompt: string;
+  systemPrompt: string;
+  triggerType: 'chat' | 'cron' | 'card';
+  triggerRef?: { conversationId?: string; cardId?: string; cronJobId?: string };
+  onStdoutChunk?: (text: string) => void;
+  onExit: (result: AgentProcessResult) => void;
+  onSpawnError: (error: Error) => void;
+}
+
+function buildTriggerContext(
+  trigger: TriggerType,
+  fields: Record<string, string | undefined>,
+): string {
+  const lines = ['Trigger Context', `trigger: ${trigger}`];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value) lines.push(`${key}: ${value}`);
+  }
+  lines.push('End Trigger Context', '');
+  return `${lines.join('\n')}\n`;
+}
+
+function buildChildEnv(agent: { apiKeyId: string; workspaceApiKey: string | null }): Record<string, string | undefined> {
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+
+  if (agent.apiKeyId) {
+    const apiKey = store.getById('apiKeys', agent.apiKeyId);
+    if (apiKey) {
+      childEnv.ANTHROPIC_API_KEY = childEnv.ANTHROPIC_API_KEY || '';
+      childEnv.OPENAI_API_KEY = childEnv.OPENAI_API_KEY || '';
+    }
+  }
+
+  if (agent.workspaceApiKey) {
+    const protocol = env.TLS_CERT_PATH ? 'https' : 'http';
+    const host = env.HOST === '0.0.0.0' ? 'localhost' : env.HOST;
+    childEnv.WORKSPACE_API_URL = `${protocol}://${host}:${env.PORT}`;
+    childEnv.WORKSPACE_API_KEY = agent.workspaceApiKey;
+  }
+
+  return childEnv;
+}
+
+function markAgentLastActivity(agentId: string) {
+  store.update('agents', agentId, {
+    lastActivity: new Date().toISOString(),
+  });
+}
+
+function listAgentApiUpdates(conversationId: string, runStartedAt: number) {
+  return store
+    .find(
+      'messages',
+      (r: Record<string, unknown>) =>
+        r.conversationId === conversationId &&
+        r.direction === 'inbound' &&
+        new Date(r.createdAt as string).getTime() >= runStartedAt &&
+        parseMetadata(r.metadata)?.agentChatUpdate === true,
+    )
+    .sort(
+      (a: Record<string, unknown>, b: Record<string, unknown>) =>
+        new Date(a.createdAt as string).getTime() - new Date(b.createdAt as string).getTime(),
+    );
+}
+
+function findFinalAgentApiMessage(messages: Record<string, unknown>[]) {
+  return [...messages].reverse().find((msg) => parseMetadata(msg.metadata)?.isFinal === true) ?? null;
+}
+
+function runAgentProcess(options: AgentProcessOptions) {
+  const workDir = path.join(AGENTS_DIR, options.agentId);
+  const { bin, args } = buildCliCommand(options.agent.model, options.prompt, options.systemPrompt);
+  const childEnv = buildChildEnv(options.agent);
+
+  const child = spawn(bin, args, {
+    cwd: workDir,
+    env: childEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  runningProcesses.set(options.runKey, child);
+
+  // Record the agent run
+  const agentRun = createAgentRun({
+    agentId: options.agentId,
+    agentName: options.agent.name,
+    triggerType: options.triggerType,
+    conversationId: options.triggerRef?.conversationId,
+    cardId: options.triggerRef?.cardId,
+    cronJobId: options.triggerRef?.cronJobId,
+  });
+  const runId = agentRun.id as string;
+
+  let stdout = '';
+  let stderr = '';
+  const runStartedAt = Date.now();
+  let settled = false;
+
+  const settle = (callback: () => void) => {
+    if (settled) return;
+    settled = true;
+    runningProcesses.delete(options.runKey);
+    callback();
+  };
+
+  child.stdout!.on('data', (chunk: Buffer) => {
+    const text = chunk.toString();
+    stdout += text;
+    options.onStdoutChunk?.(text);
+  });
+
+  child.stderr!.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+
+  child.on('close', (code) => {
+    settle(() => {
+      markAgentLastActivity(options.agentId);
+      const hasError = (code ?? 1) !== 0 && !stdout.trim();
+      const errorMsg = hasError ? (stderr.trim() || `Process exited with code ${code}`) : null;
+      completeAgentRun(runId, errorMsg, { stdout, stderr });
+      options.onExit({ code, stdout, stderr, runStartedAt });
+    });
+  });
+
+  child.on('error', (err) => {
+    settle(() => {
+      completeAgentRun(runId, err.message, { stderr: err.message });
+      options.onSpawnError(err);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Execute prompt (chat)
+// ---------------------------------------------------------------------------
+
+// Track running processes per run key so parallel chats/tasks can run.
 const runningProcesses = new Map<string, ChildProcess>();
 
 function processKey(agentId: string, conversationId: string): string {
@@ -331,107 +500,164 @@ export function executePrompt(
 
   // Auto-title conversation on first message
   autoTitleIfNeeded(conversationId, prompt);
-  const runStartedAt = Date.now();
 
-  const workDir = path.join(AGENTS_DIR, agentId);
-  const { bin, args } = buildCliCommand(agent.model, fullPrompt, Boolean(agent.skipPermissions));
+  runAgentProcess({
+    agentId,
+    agent,
 
-  // Build env with API key if available
-  const childEnv = { ...process.env };
-  if (agent.apiKeyId) {
-    const apiKey = store.getById('apiKeys', agent.apiKeyId);
-    if (apiKey) {
-      // Pass common env vars that CLI tools use
-      childEnv.ANTHROPIC_API_KEY = childEnv.ANTHROPIC_API_KEY || '';
-      childEnv.OPENAI_API_KEY = childEnv.OPENAI_API_KEY || '';
-    }
-  }
+    runKey: key,
+    prompt: fullPrompt,
+    systemPrompt: CHAT_MODE_SYSTEM_PROMPT,
+    triggerType: 'chat',
+    triggerRef: { conversationId },
+    onStdoutChunk: (text) => {
+      callbacks.onChunk(text);
+    },
+    onExit: ({ code, stdout, stderr, runStartedAt }) => {
+      if ((code ?? 1) !== 0 && !stdout.trim()) {
+        const errMsg = stderr.trim() || `Process exited with code ${code}`;
+        callbacks.onError(errMsg);
+        return;
+      }
 
-  // Pass workspace API credentials so the agent can call workspace endpoints
-  if (agent.workspaceApiKey) {
-    const protocol = env.TLS_CERT_PATH ? 'https' : 'http';
-    const host = env.HOST === '0.0.0.0' ? 'localhost' : env.HOST;
-    childEnv.WORKSPACE_API_URL = `${protocol}://${host}:${env.PORT}`;
-    childEnv.WORKSPACE_API_KEY = agent.workspaceApiKey;
-  }
+      const updatesFromApi = listAgentApiUpdates(conversationId, runStartedAt);
+      const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
+      const stdoutText = stdout.trim();
 
-  const child = spawn(bin, args, {
-    cwd: workDir,
-    env: childEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+      let msg: Record<string, unknown>;
+      if (finalApiMessage) {
+        // Agent already posted a final API message; avoid duplicating stdout.
+        msg = finalApiMessage;
+      } else if (stdoutText) {
+        // Fallback for agents that still return output only through stdout.
+        msg = saveMessage(conversationId, 'inbound', stdoutText);
+      } else if (updatesFromApi.length > 0) {
+        // No stdout and no explicit final marker; use latest API update.
+        msg = updatesFromApi[updatesFromApi.length - 1];
+      } else {
+        msg = saveMessage(conversationId, 'inbound', '(empty response)');
+      }
 
-  runningProcesses.set(key, child);
-
-  let fullResponse = '';
-  let stderrOutput = '';
-
-  child.stdout!.on('data', (chunk: Buffer) => {
-    const text = chunk.toString();
-    fullResponse += text;
-    callbacks.onChunk(text);
-  });
-
-  child.stderr!.on('data', (chunk: Buffer) => {
-    stderrOutput += chunk.toString();
-  });
-
-  child.on('close', (code) => {
-    runningProcesses.delete(key);
-
-    if (code !== 0 && !fullResponse.trim()) {
-      const errMsg = stderrOutput.trim() || `Process exited with code ${code}`;
-      callbacks.onError(errMsg);
-      return;
-    }
-
-    const updatesFromApi = store
-      .find(
-        'messages',
-        (r: Record<string, unknown>) =>
-          r.conversationId === conversationId &&
-          r.direction === 'inbound' &&
-          new Date(r.createdAt as string).getTime() >= runStartedAt &&
-          parseMetadata(r.metadata)?.agentChatUpdate === true,
-      )
-      .sort(
-        (a: Record<string, unknown>, b: Record<string, unknown>) =>
-          new Date(a.createdAt as string).getTime() - new Date(b.createdAt as string).getTime(),
-      );
-
-    const finalApiMessage =
-      [...updatesFromApi].reverse().find((msg) => parseMetadata(msg.metadata)?.isFinal === true) ?? null;
-
-    const stdoutText = fullResponse.trim();
-    let msg: Record<string, unknown>;
-
-    if (finalApiMessage) {
-      // Agent already posted a final API message; avoid duplicating stdout.
-      msg = finalApiMessage;
-    } else if (stdoutText) {
-      // Fallback for agents that still return output only through stdout.
-      msg = saveMessage(conversationId, 'inbound', stdoutText);
-    } else if (updatesFromApi.length > 0) {
-      // No stdout and no explicit final marker; use latest API update.
-      msg = updatesFromApi[updatesFromApi.length - 1];
-    } else {
-      msg = saveMessage(conversationId, 'inbound', '(empty response)');
-    }
-
-    // Update agent lastActivity
-    store.update('agents', agentId, {
-      lastActivity: new Date().toISOString(),
-    });
-
-    callbacks.onDone(msg);
-  });
-
-  child.on('error', (err) => {
-    runningProcesses.delete(key);
-    callbacks.onError(`Failed to start CLI: ${err.message}`);
+      callbacks.onDone(msg);
+    },
+    onSpawnError: (err) => {
+      callbacks.onError(`Failed to start CLI: ${err.message}`);
+    },
   });
 }
 
 export function isAgentBusy(agentId: string, conversationId: string): boolean {
   return runningProcesses.has(processKey(agentId, conversationId));
+}
+
+// ---------------------------------------------------------------------------
+// Execute cron task (cron job trigger)
+// ---------------------------------------------------------------------------
+
+export function executeCronTask(
+  agentId: string,
+  job: { id: string; prompt: string },
+) {
+  const agent = getAgent(agentId);
+  if (!agent) return;
+
+  const key = `${agentId}:cron:${job.id}`;
+  if (runningProcesses.has(key)) {
+    // Previous run still in progress — skip this invocation
+    return;
+  }
+
+  const triggerContext = buildTriggerContext('cron_job', {
+    agentId,
+    cronJobId: job.id,
+  });
+
+  const prompt =
+    `${triggerContext}` +
+    `You have been triggered by a scheduled cron job. See CHANNELS.MD for how to respond.\n` +
+    `This is a background automation run, not a chat conversation. Do not call /api/agents/:id/chat/messages.\n\n` +
+    `**Task:** ${job.prompt}\n\n` +
+    `Complete this task.`;
+
+  runAgentProcess({
+    agentId,
+    agent,
+
+    runKey: key,
+    prompt,
+    systemPrompt: TASK_MODE_SYSTEM_PROMPT,
+    triggerType: 'cron',
+    triggerRef: { cronJobId: job.id },
+    onExit: ({ code, stderr }) => {
+      if ((code ?? 1) !== 0) {
+        const errMsg = stderr.trim() || `Process exited with code ${code}`;
+        console.error(`Agent cron task error for job ${job.id}:`, errMsg);
+      }
+    },
+    onSpawnError: (err) => {
+      console.error(`Agent cron task failed to start for job ${job.id}:`, err.message);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Execute card task (card assignment trigger)
+// ---------------------------------------------------------------------------
+
+export function executeCardTask(
+  agentId: string,
+  card: { id: string; name: string; description: string | null; collectionId: string },
+  callbacks: { onDone: () => void; onError: (err: string) => void },
+) {
+  const agent = getAgent(agentId);
+  if (!agent) {
+    callbacks.onError('Agent not found');
+    return;
+  }
+
+  const key = `${agentId}:card:${card.id}`;
+  if (runningProcesses.has(key)) {
+    callbacks.onError('Agent is already processing this card');
+    return;
+  }
+
+  const triggerContext = buildTriggerContext('card_assignment', {
+    agentId,
+    cardId: card.id,
+  });
+
+  const descriptionLine = card.description
+    ? `**Description:** ${card.description}`
+    : '**Description:** (none)';
+
+  const prompt =
+    `${triggerContext}` +
+    `You have been assigned the following card. See CHANNELS.MD for how to respond.\n` +
+    `This is a task assignment run, not a chat conversation. Do not call /api/agents/:id/chat/messages.\n\n` +
+    `**Card:** ${card.name}\n` +
+    `${descriptionLine}\n\n` +
+    `Complete this task.`;
+
+  runAgentProcess({
+    agentId,
+    agent,
+
+    runKey: key,
+    prompt,
+    systemPrompt: TASK_MODE_SYSTEM_PROMPT,
+    triggerType: 'card',
+    triggerRef: { cardId: card.id },
+    onExit: ({ code, stderr }) => {
+      if ((code ?? 1) !== 0) {
+        const errMsg = stderr.trim() || `Process exited with code ${code}`;
+        callbacks.onError(errMsg);
+        return;
+      }
+
+      callbacks.onDone();
+    },
+    onSpawnError: (err) => {
+      callbacks.onError(`Failed to start CLI: ${err.message}`);
+    },
+  });
 }

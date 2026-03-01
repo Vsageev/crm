@@ -1,4 +1,4 @@
-const PREFERRED_FOLDER_ID_KEY = 'ws_preferred_folder_id';
+const PREFERRED_COLLECTION_ID_KEY = 'ws_preferred_collection_id';
 const PREFERRED_BOARD_ID_KEY = 'ws_preferred_board_id';
 
 function getStoredId(key: string): string | null {
@@ -27,16 +27,16 @@ function clearStoredId(key: string): void {
   }
 }
 
-export function getPreferredFolderId(): string | null {
-  return getStoredId(PREFERRED_FOLDER_ID_KEY);
+export function getPreferredCollectionId(): string | null {
+  return getStoredId(PREFERRED_COLLECTION_ID_KEY);
 }
 
-export function setPreferredFolderId(folderId: string): void {
-  setStoredId(PREFERRED_FOLDER_ID_KEY, folderId);
+export function setPreferredCollectionId(collectionId: string): void {
+  setStoredId(PREFERRED_COLLECTION_ID_KEY, collectionId);
 }
 
-export function clearPreferredFolderId(): void {
-  clearStoredId(PREFERRED_FOLDER_ID_KEY);
+export function clearPreferredCollectionId(): void {
+  clearStoredId(PREFERRED_COLLECTION_ID_KEY);
 }
 
 export function getPreferredBoardId(): string | null {

@@ -109,6 +109,7 @@ Communicate value visually. Prioritize scannability, clear hierarchy, and real-f
 - **No hover movement:** Never use `transform: translateY()` or `translate()` on hover. Elements must not shift position on interaction.
 - **No fake link styling:** Only true inline text links get underline effects. Navigation elements, cards, list items, and action buttons must never gain underlines on hover.
 - **Link Blue is for links only:** Reserve `var(--color-link)` for actual hyperlinks and form focus rings. Do not use it for card borders, button hovers, or list item highlights.
+- **No glow effects:** Never use `box-shadow` for decorative glows or blurs on elements like dots, badges, or indicators. Keep the interface flat and crisp.
 
 ### Transitions
 

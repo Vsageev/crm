@@ -55,9 +55,6 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v !== 'false'),
-
-  // Dev auth bypass — skip JWT verification and inject a mock admin user
-  DEV_SKIP_AUTH: z.string().default('false').transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -150,6 +150,12 @@
   flex-shrink: 0;
 }
 
+.cardAssigneeAgent {
+  background: transparent;
+  border: none;
+  overflow: hidden;
+}
+
 .cardAssigneeEmpty {
   width: 24px;
   height: 24px;
@@ -220,84 +226,6 @@
   font-size: 15px;
 }
 
-/* Create card modal */
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  background: var(--color-card);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-  width: 100%;
-  max-width: 420px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.modalTitle {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-}
-
-.input {
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  color: var(--color-text);
-  background: var(--color-surface);
-}
-
-.input:focus {
-  outline: none;
-  border-color: var(--color-link);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.textarea {
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  color: var(--color-text);
-  background: var(--color-surface);
-  resize: vertical;
-  min-height: 80px;
-  font-family: inherit;
-}
-
-.textarea:focus {
-  outline: none;
-  border-color: var(--color-link);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.modalActions {
-  display: flex;
-  gap: var(--space-2);
-  justify-content: flex-end;
-}
 
 .backLink {
   display: inline-flex;

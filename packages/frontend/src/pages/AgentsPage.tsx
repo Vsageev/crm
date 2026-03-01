@@ -1,8 +1,4 @@
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
   Plus,
   Trash2,
@@ -31,10 +27,17 @@ import {
   Eye,
   Copy,
   Check,
+  Clock,
+  ToggleLeft,
+  ToggleRight,
+  ChevronDown,
+  Layers,
+  Pencil,
 } from 'lucide-react';
-import { Button, Badge, Input, Textarea, Select, ApiKeyFormFields, Tooltip } from '../ui';
+import { Button, Badge, Input, Textarea, Select, CronEditor, ApiKeyFormFields, MarkdownContent, Tooltip } from '../ui';
 import { api, apiUpload, ApiError } from '../lib/api';
 import { formatFileSize, formatFileDate, isTextPreviewable, isImagePreviewable, isPreviewable } from '../lib/file-utils';
+import { scrollToFirstError } from '../lib/scroll-to-error';
 import { FilePreviewModal } from '../components/FilePreviewModal';
 import { AgentAvatar, AgentAvatarPicker, randomPalette, randomIcon, type AvatarConfig } from '../components/AgentAvatar';
 import {
@@ -72,6 +75,21 @@ interface ApiKeysResponse {
   entries: ApiKey[];
 }
 
+interface CronJob {
+  id: string;
+  cron: string;
+  prompt: string;
+  enabled: boolean;
+}
+
+interface AgentGroup {
+  id: string;
+  name: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface Agent {
   id: string;
   name: string;
@@ -85,6 +103,8 @@ interface Agent {
   lastActivity: string | null;
   capabilities: string[];
   skipPermissions?: boolean;
+  cronJobs?: CronJob[];
+  groupId: string | null;
   avatarIcon: string;
   avatarBgColor: string;
   avatarLogoColor: string;
@@ -162,6 +182,7 @@ interface CreateAgentForm {
   preset: string;
   apiKeyId: string;
   skipPermissions: boolean;
+  groupId: string;
   newKey: boolean;
   newKeyPermissions: string[];
   avatar: AvatarConfig;
@@ -176,6 +197,7 @@ function makeEmptyForm(): CreateAgentForm {
     preset: 'basic',
     apiKeyId: '',
     skipPermissions: false,
+    groupId: '',
     newKey: false,
     newKeyPermissions: [],
     avatar: { icon: randomIcon(), bgColor, logoColor },
@@ -202,6 +224,34 @@ function getSkipPermissionsFlag(model: string): string {
   if (normalized === 'codex') return '--dangerously-bypass-approvals-and-sandbox';
   if (normalized === 'qwen') return '--approval-mode yolo';
   return 'not supported';
+}
+function describeCron(expr: string): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return expr;
+  const [min, hour, dom, mon, dow] = parts;
+  if (min === '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every minute';
+  if (min !== '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return `Every hour at minute ${min}`;
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow === '*') {
+    const h = parseInt(hour, 10);
+    const m = parseInt(min, 10);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `Every day at ${h12}:${String(m).padStart(2, '0')} ${period}`;
+  }
+  if (min !== '*' && hour !== '*' && dom === '*' && mon === '*' && dow !== '*') {
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayName = dayNames[parseInt(dow, 10)] ?? dow;
+    const h = parseInt(hour, 10);
+    const m = parseInt(min, 10);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `Every ${dayName} at ${h12}:${String(m).padStart(2, '0')} ${period}`;
+  }
+  return expr;
+}
+
+function generateId(): string {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 /* ── Agent file entry type ── */
@@ -596,6 +646,18 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
+  // ── Agent groups ──
+  const [groups, setGroups] = useState<AgentGroup[]>([]);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedAgents, setCollapsedAgents] = useState<Set<string> | 'all'>(
+    'all',
+  );
+  const [manageGroupsOpen, setManageGroupsOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState('');
+  const [contextMenu, setContextMenu] = useState<{ agentId: string; x: number; y: number } | null>(null);
+
   // ── Selection state ──
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -636,6 +698,13 @@ export function AgentsPage() {
   const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // ── Cron jobs (settings modal) ──
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
+  const [cronFormOpen, setCronFormOpen] = useState(false);
+  const [cronFormCron, setCronFormCron] = useState('');
+  const [cronFormPrompt, setCronFormPrompt] = useState('');
+  const [cronSaving, setCronSaving] = useState(false);
+
   // Keep ref in sync for closure access
   activeAgentIdRef.current = activeAgentId;
   activeConvIdRef.current = activeConvId;
@@ -657,6 +726,22 @@ export function AgentsPage() {
   const streaming = Boolean(activeStream);
   const streamText = activeStream?.text ?? '';
   const unreadConvIds = useMemo(() => new Set(unreadConversationIds), [unreadConversationIds]);
+
+  /* ── Close context menu on outside click ── */
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [contextMenu]);
+
+  /* ── Fetch groups ── */
+  const fetchGroups = useCallback(async () => {
+    try {
+      const data = await api<{ entries: AgentGroup[] }>('/agent-groups');
+      setGroups(data.entries);
+    } catch { /* silently fail */ }
+  }, []);
 
   /* ── Fetch agents ── */
   const fetchAgents = useCallback(async () => {
@@ -703,6 +788,7 @@ export function AgentsPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      fetchGroups();
       const entries = await fetchAgents();
       if (cancelled || entries.length === 0) return;
 
@@ -827,6 +913,62 @@ export function AgentsPage() {
     markAgentChatConversationRead(activeConvId);
   }, [activeConvId]);
 
+  // Sync cron jobs state when settings modal opens
+  useEffect(() => {
+    if (settingsAgent) {
+      setCronJobs(settingsAgent.cronJobs ?? []);
+      setCronFormOpen(false);
+      setCronFormCron('');
+      setCronFormPrompt('');
+    }
+  }, [settingsAgent?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Cron job handlers ── */
+
+  async function saveCronJobs(agentId: string, jobs: CronJob[]) {
+    setCronSaving(true);
+    try {
+      const updated = await api<Agent>(`/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cronJobs: jobs }),
+      });
+      setAgents((prev) => prev.map((a) => (a.id === agentId ? updated : a)));
+      if (settingsAgent?.id === agentId) setSettingsAgent(updated);
+      setCronJobs(updated.cronJobs ?? []);
+    } catch {
+      // silently fail
+    } finally {
+      setCronSaving(false);
+    }
+  }
+
+  function handleAddCronJob() {
+    if (!settingsAgent || !cronFormCron.trim() || !cronFormPrompt.trim()) return;
+    const newJob: CronJob = {
+      id: generateId(),
+      cron: cronFormCron.trim(),
+      prompt: cronFormPrompt.trim(),
+      enabled: true,
+    };
+    const updated = [...cronJobs, newJob];
+    setCronFormOpen(false);
+    setCronFormCron('');
+    setCronFormPrompt('');
+    saveCronJobs(settingsAgent.id, updated);
+  }
+
+  function handleToggleCronJob(jobId: string) {
+    if (!settingsAgent) return;
+    const updated = cronJobs.map((j) => (j.id === jobId ? { ...j, enabled: !j.enabled } : j));
+    saveCronJobs(settingsAgent.id, updated);
+  }
+
+  function handleDeleteCronJob(jobId: string) {
+    if (!settingsAgent) return;
+    const updated = cronJobs.filter((j) => j.id !== jobId);
+    saveCronJobs(settingsAgent.id, updated);
+  }
+
   /* ── Select conversation ── */
   async function selectConversation(agentId: string, convId: string) {
     if (agentId === activeAgentId && convId === activeConvId) return;
@@ -850,6 +992,18 @@ export function AgentsPage() {
         ...prev,
         [agentId]: [conv, ...(prev[agentId] || [])],
       }));
+      // Expand the agent so the new conversation is visible
+      setCollapsedAgents((prev) => {
+        if (prev === 'all') {
+          const next = new Set(agents.map((a) => a.id));
+          next.delete(agentId);
+          return next;
+        }
+        if (!prev.has(agentId)) return prev;
+        const next = new Set(prev);
+        next.delete(agentId);
+        return next;
+      });
       setActiveAgentId(agentId);
       setActiveConvId(conv.id);
       setMessages([]);
@@ -970,6 +1124,79 @@ export function AgentsPage() {
     setFormErrors({});
   }
 
+  /* ── Group management ── */
+  async function handleCreateGroup() {
+    if (!newGroupName.trim()) return;
+    try {
+      const group = await api<AgentGroup>('/agent-groups', {
+        method: 'POST',
+        body: JSON.stringify({ name: newGroupName.trim() }),
+      });
+      setGroups((prev) => [...prev, group]);
+      setNewGroupName('');
+    } catch { /* silently fail */ }
+  }
+
+  async function handleRenameGroup(id: string) {
+    if (!editingGroupName.trim()) return;
+    try {
+      const updated = await api<AgentGroup>(`/agent-groups/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: editingGroupName.trim() }),
+      });
+      setGroups((prev) => prev.map((g) => (g.id === id ? updated : g)));
+      setEditingGroupId(null);
+    } catch { /* silently fail */ }
+  }
+
+  async function handleDeleteGroup(id: string) {
+    try {
+      await api(`/agent-groups/${id}`, { method: 'DELETE' });
+      setGroups((prev) => prev.filter((g) => g.id !== id));
+      // Move agents in this group to ungrouped
+      setAgents((prev) => prev.map((a) => (a.groupId === id ? { ...a, groupId: null } : a)));
+    } catch { /* silently fail */ }
+  }
+
+  async function handleChangeAgentGroup(agentId: string, groupId: string | null) {
+    try {
+      const updated = await api<Agent>(`/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ groupId }),
+      });
+      setAgents((prev) => prev.map((a) => (a.id === agentId ? updated : a)));
+      if (settingsAgent?.id === agentId) setSettingsAgent(updated);
+    } catch { /* silently fail */ }
+  }
+
+  function toggleGroupCollapse(id: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function isAgentCollapsed(id: string) {
+    return collapsedAgents === 'all' || collapsedAgents.has(id);
+  }
+
+  function toggleAgentCollapse(id: string) {
+    setCollapsedAgents((prev) => {
+      if (prev === 'all') {
+        // Expand this one agent, collapse the rest
+        const next = new Set(agents.map((a) => a.id));
+        next.delete(id);
+        return next;
+      }
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   async function handleCreate(e: FormEvent) {
     e.preventDefault();
     const errors: Record<string, string> = {};
@@ -980,7 +1207,10 @@ export function AgentsPage() {
       if (!form.apiKeyId) errors.apiKeyId = 'Select an API key';
     }
     setFormErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    if (Object.keys(errors).length > 0) {
+      scrollToFirstError();
+      return;
+    }
 
     const model = MODELS.find((m) => m.id === form.model)!;
     let keyId: string;
@@ -1019,6 +1249,7 @@ export function AgentsPage() {
           preset: form.preset,
           apiKeyId: keyId,
           skipPermissions: form.skipPermissions,
+          groupId: form.groupId || null,
           avatarIcon: form.avatar.icon,
           avatarBgColor: form.avatar.bgColor,
           avatarLogoColor: form.avatar.logoColor,
@@ -1103,6 +1334,127 @@ export function AgentsPage() {
     ? agents.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()))
     : agents;
 
+  // Group agents by groupId
+  const groupedAgents = useMemo(() => {
+    const byGroup: Record<string, Agent[]> = {};
+    for (const agent of filteredAgents) {
+      const key = agent.groupId || '__ungrouped__';
+      if (!byGroup[key]) byGroup[key] = [];
+      byGroup[key].push(agent);
+    }
+    return byGroup;
+  }, [filteredAgents]);
+
+  /* ── Render a single agent item in sidebar ── */
+  function renderAgentItem(agent: Agent) {
+    const convs = convsByAgent[agent.id] || [];
+    const collapsed = isAgentCollapsed(agent.id);
+    return (
+      <div key={agent.id} className={styles.agentGroup}>
+        <div
+          className={styles.agentGroupHeader}
+          onClick={() => {
+            toggleAgentCollapse(agent.id);
+          }}
+          onContextMenu={(e) => {
+            if (groups.length === 0) return;
+            e.preventDefault();
+            setContextMenu({ agentId: agent.id, x: e.clientX, y: e.clientY });
+          }}
+        >
+          <ChevronRight
+            size={14}
+            className={`${styles.agentGroupChevron} ${!collapsed ? styles.agentGroupChevronOpen : ''}`}
+          />
+          <AgentAvatar
+            icon={agent.avatarIcon || 'spark'}
+            bgColor={agent.avatarBgColor || '#1a1a2e'}
+            logoColor={agent.avatarLogoColor || '#e94560'}
+            size={36}
+          />
+          <div className={styles.agentGroupInfo}>
+            <div className={styles.agentGroupName}>{agent.name}</div>
+            <div className={styles.agentGroupMeta}>
+              {agent.model} · {convs.length} chat{convs.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+          <div className={styles.agentGroupActions}>
+            <Tooltip label="Settings">
+              <button
+                className={styles.agentGroupIconBtn}
+                onClick={(e) => { e.stopPropagation(); setSettingsAgent(agent); }}
+                aria-label="Agent settings"
+              >
+                <Settings size={14} />
+              </button>
+            </Tooltip>
+            <Tooltip label="New chat">
+              <button
+                className={styles.agentGroupIconBtn}
+                onClick={(e) => { e.stopPropagation(); createConversation(agent.id); }}
+                aria-label="New chat"
+              >
+                <Plus size={14} />
+              </button>
+            </Tooltip>
+          </div>
+        </div>
+
+        {!collapsed && convs.length > 0 && (
+          <div className={styles.convList}>
+            {convs.map((conv) => {
+              const isStreaming = streamingConversationIds.has(conv.id);
+              const isUnread = unreadConvIds.has(conv.id);
+              return (
+                <div
+                  key={conv.id}
+                  className={`${styles.convItem} ${
+                    activeAgentId === agent.id && activeConvId === conv.id
+                      ? styles.convItemActive
+                      : ''
+                  }`}
+                  onClick={() => selectConversation(agent.id, conv.id)}
+                >
+                  {isStreaming && (
+                    <span className={styles.convStreamingDot} title="Agent is responding..." />
+                  )}
+                  {!isStreaming && isUnread && (
+                    <span className={styles.convUnreadDot} title="New response" />
+                  )}
+                  <div className={styles.convItemInfo}>
+                    <div className={styles.convItemTitle}>
+                      {conv.subject || 'New conversation'}
+                    </div>
+                  </div>
+                  <span className={styles.convItemTime}>
+                    {relativeTime(conv.lastMessageAt || conv.createdAt)}
+                  </span>
+                  <button
+                    className={styles.convItemDelete}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteConversation(agent.id, conv.id);
+                    }}
+                    aria-label="Delete conversation"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              className={styles.newConvBtn}
+              onClick={() => createConversation(agent.id)}
+            >
+              <Plus size={13} />
+              New chat
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   /* ══════════════════════════════════════════════════════════
      Render
      ══════════════════════════════════════════════════════════ */
@@ -1114,12 +1466,80 @@ export function AgentsPage() {
         <div className={styles.sidebar}>
           <div className={styles.sidebarHeader}>
             <span className={styles.sidebarTitle}>Agents</span>
-            <Tooltip label="Add agent">
-              <button className={styles.addAgentBtn} onClick={openCreate} aria-label="Add agent">
-                <Plus size={16} />
-              </button>
-            </Tooltip>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <Tooltip label="Manage groups">
+                <button className={styles.addAgentBtn} onClick={() => setManageGroupsOpen(!manageGroupsOpen)} aria-label="Manage groups">
+                  <Layers size={16} />
+                </button>
+              </Tooltip>
+              <Tooltip label="Add agent">
+                <button className={styles.addAgentBtn} onClick={openCreate} aria-label="Add agent">
+                  <Plus size={16} />
+                </button>
+              </Tooltip>
+            </div>
           </div>
+
+          {/* Manage groups popover */}
+          {manageGroupsOpen && (
+            <div className={styles.manageGroupsPanel}>
+              <div className={styles.manageGroupsHeader}>
+                <span className={styles.manageGroupsTitle}>Groups</span>
+                <button className={styles.modalCloseBtn} onClick={() => setManageGroupsOpen(false)} style={{ width: 24, height: 24 }}>
+                  <X size={14} />
+                </button>
+              </div>
+              <div className={styles.manageGroupsList}>
+                {groups.map((group) => (
+                  <div key={group.id} className={styles.manageGroupItem}>
+                    {editingGroupId === group.id ? (
+                      <input
+                        className={styles.manageGroupInput}
+                        value={editingGroupName}
+                        onChange={(e) => setEditingGroupName(e.target.value)}
+                        onBlur={() => handleRenameGroup(group.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleRenameGroup(group.id);
+                          if (e.key === 'Escape') setEditingGroupId(null);
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <span className={styles.manageGroupName}>{group.name}</span>
+                    )}
+                    <div className={styles.manageGroupActions}>
+                      <button
+                        className={styles.agentGroupIconBtn}
+                        onClick={() => { setEditingGroupId(group.id); setEditingGroupName(group.name); }}
+                        title="Rename"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        className={`${styles.agentGroupIconBtn} ${styles.iconBtnDanger}`}
+                        onClick={() => handleDeleteGroup(group.id)}
+                        title="Delete group"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className={styles.manageGroupAddRow}>
+                <input
+                  className={styles.manageGroupInput}
+                  placeholder="New group name..."
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreateGroup(); }}
+                />
+                <Button size="sm" onClick={handleCreateGroup} disabled={!newGroupName.trim()}>
+                  Add
+                </Button>
+              </div>
+            </div>
+          )}
 
           <div className={styles.searchRow}>
             <div className={styles.searchWrap}>
@@ -1141,113 +1561,55 @@ export function AgentsPage() {
                 {search ? 'No agents match your search' : 'No agents yet'}
               </div>
             ) : (
-              filteredAgents.map((agent) => {
-                const convs = convsByAgent[agent.id] || [];
-                return (
-                  <div key={agent.id} className={styles.agentGroup}>
-                    {/* Agent header row */}
-                    <div
-                      className={styles.agentGroupHeader}
-                      onClick={() => {
-                        // Select agent — pick first conv or just select the agent
-                        if (convs.length > 0) {
-                          selectConversation(agent.id, convs[0].id);
-                        } else {
-                          setActiveAgentId(agent.id);
-                          setActiveConvId(null);
-                          setMessages([]);
-                        }
-                      }}
-                    >
-                      <AgentAvatar
-                        icon={agent.avatarIcon || 'spark'}
-                        bgColor={agent.avatarBgColor || '#1a1a2e'}
-                        logoColor={agent.avatarLogoColor || '#e94560'}
-                        size={36}
-                      />
-                      <div className={styles.agentGroupInfo}>
-                        <div className={styles.agentGroupName}>{agent.name}</div>
-                        <div className={styles.agentGroupMeta}>
-                          {agent.model} · {convs.length} chat{convs.length !== 1 ? 's' : ''}
-                        </div>
+              <>
+                {/* Render grouped agents */}
+                {groups.map((group) => {
+                  const groupAgents = groupedAgents[group.id] || [];
+                  if (groupAgents.length === 0 && search.trim()) return null;
+                  const isCollapsed = collapsedGroups.has(group.id);
+                  return (
+                    <div key={group.id} className={styles.sidebarGroup}>
+                      <div
+                        className={styles.sidebarGroupHeader}
+                        onClick={() => toggleGroupCollapse(group.id)}
+                      >
+                        <ChevronRight
+                          size={14}
+                          className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
+                        />
+                        <span className={styles.sidebarGroupName}>{group.name}</span>
+                        <span className={styles.sidebarGroupCount}>{groupAgents.length}</span>
                       </div>
-                      <div className={styles.agentGroupActions}>
-                        <Tooltip label="Settings">
-                          <button
-                            className={styles.agentGroupIconBtn}
-                            onClick={(e) => { e.stopPropagation(); setSettingsAgent(agent); }}
-                            aria-label="Agent settings"
-                          >
-                            <Settings size={14} />
-                          </button>
-                        </Tooltip>
-                        <Tooltip label="New chat">
-                          <button
-                            className={styles.agentGroupIconBtn}
-                            onClick={(e) => { e.stopPropagation(); createConversation(agent.id); }}
-                            aria-label="New chat"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </Tooltip>
-                      </div>
+                      {!isCollapsed && groupAgents.map((agent) => renderAgentItem(agent))}
                     </div>
-
-                    {/* Conversations */}
-                    {convs.length > 0 && (
-                      <div className={styles.convList}>
-                        {convs.map((conv) => {
-                          const isStreaming = streamingConversationIds.has(conv.id);
-                          const isUnread = unreadConvIds.has(conv.id);
-                          return (
-                          <div
-                            key={conv.id}
-                            className={`${styles.convItem} ${
-                              activeAgentId === agent.id && activeConvId === conv.id
-                                ? styles.convItemActive
-                                : ''
-                            }`}
-                            onClick={() => selectConversation(agent.id, conv.id)}
-                          >
-                            {isStreaming && (
-                              <span className={styles.convStreamingDot} title="Agent is responding..." />
-                            )}
-                            {!isStreaming && isUnread && (
-                              <span className={styles.convUnreadDot} title="New response" />
-                            )}
-                            <div className={styles.convItemInfo}>
-                              <div className={styles.convItemTitle}>
-                                {conv.subject || 'New conversation'}
-                              </div>
-                            </div>
-                            <span className={styles.convItemTime}>
-                              {relativeTime(conv.lastMessageAt || conv.createdAt)}
-                            </span>
-                            <button
-                              className={styles.convItemDelete}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteConversation(agent.id, conv.id);
-                              }}
-                              aria-label="Delete conversation"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                          );
-                        })}
-                        <button
-                          className={styles.newConvBtn}
-                          onClick={() => createConversation(agent.id)}
+                  );
+                })}
+                {/* Ungrouped agents */}
+                {(() => {
+                  const ungrouped = groupedAgents['__ungrouped__'] || [];
+                  if (ungrouped.length === 0) return null;
+                  const showHeader = groups.length > 0;
+                  const isCollapsed = collapsedGroups.has('__ungrouped__');
+                  return (
+                    <div className={styles.sidebarGroup}>
+                      {showHeader && (
+                        <div
+                          className={styles.sidebarGroupHeader}
+                          onClick={() => toggleGroupCollapse('__ungrouped__')}
                         >
-                          <Plus size={13} />
-                          New chat
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+                          <ChevronRight
+                            size={14}
+                            className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
+                          />
+                          <span className={styles.sidebarGroupName}>Ungrouped</span>
+                          <span className={styles.sidebarGroupCount}>{ungrouped.length}</span>
+                        </div>
+                      )}
+                      {(!showHeader || !isCollapsed) && ungrouped.map((agent) => renderAgentItem(agent))}
+                    </div>
+                  );
+                })()}
+              </>
             )}
           </div>
         </div>
@@ -1331,24 +1693,7 @@ export function AgentsPage() {
                           }`}
                         >
                           {msg.direction === 'inbound' ? (
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                code({ className, children, ...props }) {
-                                  const match = /language-(\w+)/.exec(className || '');
-                                  const code = String(children).replace(/\n$/, '');
-                                  return match ? (
-                                    <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
-                                      {code}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code className={className} {...props}>{children}</code>
-                                  );
-                                },
-                              }}
-                            >
-                              {msg.content}
-                            </ReactMarkdown>
+                            <MarkdownContent>{msg.content}</MarkdownContent>
                           ) : (
                             msg.content
                           )}
@@ -1385,24 +1730,7 @@ export function AgentsPage() {
                     <div className={`${styles.messageRow} ${styles.messageRowAgent}`}>
                       <div className={styles.messageContent}>
                         <div className={`${styles.messageBubble} ${styles.messageBubbleAgent} ${styles.streamingCursor}`}>
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              code({ className, children, ...props }) {
-                                const match = /language-(\w+)/.exec(className || '');
-                                const code = String(children).replace(/\n$/, '');
-                                return match ? (
-                                  <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
-                                    {code}
-                                  </SyntaxHighlighter>
-                                ) : (
-                                  <code className={className} {...props}>{children}</code>
-                                );
-                              },
-                            }}
-                          >
-                            {streamText}
-                          </ReactMarkdown>
+                          <MarkdownContent>{streamText}</MarkdownContent>
                         </div>
                       </div>
                     </div>
@@ -1480,6 +1808,36 @@ export function AgentsPage() {
         </div>
       </div>
 
+      {/* ── Agent context menu (right-click → Move to group) ── */}
+      {contextMenu && (
+        <div
+          className={styles.contextMenu}
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className={styles.contextMenuLabel}>Move to group</div>
+          <button
+            className={`${styles.contextMenuItem} ${
+              !agents.find((a) => a.id === contextMenu.agentId)?.groupId ? styles.contextMenuItemActive : ''
+            }`}
+            onClick={() => { handleChangeAgentGroup(contextMenu.agentId, null); setContextMenu(null); }}
+          >
+            No group
+          </button>
+          {groups.map((g) => (
+            <button
+              key={g.id}
+              className={`${styles.contextMenuItem} ${
+                agents.find((a) => a.id === contextMenu.agentId)?.groupId === g.id ? styles.contextMenuItemActive : ''
+              }`}
+              onClick={() => { handleChangeAgentGroup(contextMenu.agentId, g.id); setContextMenu(null); }}
+            >
+              {g.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* ── Create Agent Modal ── */}
       {createOpen && (
         <div className={styles.modalOverlay} onClick={closeCreate}>
@@ -1516,6 +1874,19 @@ export function AgentsPage() {
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                   rows={2}
                 />
+
+                {groups.length > 0 && (
+                  <Select
+                    label="Group"
+                    value={form.groupId}
+                    onChange={(e) => setForm((f) => ({ ...f, groupId: e.target.value }))}
+                  >
+                    <option value="">No group</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </Select>
+                )}
 
                 {presets.length > 0 && (
                   <div>
@@ -1753,6 +2124,24 @@ export function AgentsPage() {
                       <code className={styles.settingsCode}>{getSkipPermissionsFlag(settingsAgent.model)}</code>
                     </div>
                   </div>
+                  <div className={styles.settingsGridItem}>
+                    <div className={styles.settingsGridLabel}>
+                      <Layers size={13} />
+                      Group
+                    </div>
+                    <div className={styles.settingsGridValue}>
+                      <select
+                        className={styles.settingsGroupSelect}
+                        value={settingsAgent.groupId || ''}
+                        onChange={(e) => handleChangeAgentGroup(settingsAgent.id, e.target.value || null)}
+                      >
+                        <option value="">No group</option>
+                        {groups.map((g) => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -1767,6 +2156,95 @@ export function AgentsPage() {
                     <span className={styles.settingsEmpty}>No capabilities assigned</span>
                   )}
                 </div>
+              </div>
+
+              {/* Cron Jobs section */}
+              <div className={styles.settingsSection}>
+                <div className={styles.settingsSectionTitle}>Cron Jobs</div>
+
+                {cronJobs.length > 0 && (
+                  <div className={styles.cronJobList}>
+                    {cronJobs.map((job) => (
+                      <div key={job.id} className={styles.cronJobItem}>
+                        <button
+                          type="button"
+                          className={styles.cronToggleBtn}
+                          onClick={() => handleToggleCronJob(job.id)}
+                          disabled={cronSaving}
+                          title={job.enabled ? 'Disable' : 'Enable'}
+                        >
+                          {job.enabled
+                            ? <ToggleRight size={20} className={styles.cronToggleOn} />
+                            : <ToggleLeft size={20} className={styles.cronToggleOff} />
+                          }
+                        </button>
+                        <div className={styles.cronJobInfo}>
+                          <div className={styles.cronJobExpr}>
+                            <code className={styles.settingsCode}>{job.cron}</code>
+                            <span className={styles.cronJobDesc}>{describeCron(job.cron)}</span>
+                          </div>
+                          <div className={styles.cronJobPrompt}>
+                            {job.prompt.length > 80 ? job.prompt.slice(0, 80) + '...' : job.prompt}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className={`${styles.cronDeleteBtn}`}
+                          onClick={() => handleDeleteCronJob(job.id)}
+                          disabled={cronSaving}
+                          title="Delete cron job"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {cronFormOpen ? (
+                  <div className={styles.cronForm}>
+                    <div className={styles.cronFormRow}>
+                      <div>
+                        <div className={styles.fieldLabel}>Schedule</div>
+                        <CronEditor value={cronFormCron} onChange={setCronFormCron} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className={styles.fieldLabel}>Prompt</div>
+                      <Textarea
+                        rows={2}
+                        placeholder="What should the agent do?"
+                        value={cronFormPrompt}
+                        onChange={(e) => setCronFormPrompt(e.target.value)}
+                      />
+                    </div>
+                    <div className={styles.cronFormActions}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => { setCronFormOpen(false); setCronFormCron(''); setCronFormPrompt(''); }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleAddCronJob}
+                        disabled={!cronFormCron.trim() || !cronFormPrompt.trim() || cronSaving}
+                      >
+                        {cronSaving ? 'Saving...' : 'Add Job'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => { setCronFormOpen(true); setCronFormCron('* * * * *'); }}
+                  >
+                    <Plus size={13} />
+                    Add cron job
+                  </Button>
+                )}
               </div>
 
               {/* Activity section */}
@@ -1818,7 +2296,7 @@ export function AgentsPage() {
                     <Button size="sm" variant="secondary" onClick={() => setDeletingId(null)}>
                       Cancel
                     </Button>
-                    <Button size="sm" onClick={() => handleDelete(settingsAgent.id)}>
+                    <Button size="sm" variant="danger" onClick={() => handleDelete(settingsAgent.id)}>
                       Confirm Delete
                     </Button>
                   </>

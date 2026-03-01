@@ -109,7 +109,7 @@ export function ApiKeyFormFields({ form, onChange, errors = {}, permissionsOnly 
       <div>
         <div className={styles.fieldLabel}>Permissions</div>
         {errors.permissions && (
-          <div className={styles.fieldError}>{errors.permissions}</div>
+          <div className={styles.fieldError} data-form-error>{errors.permissions}</div>
         )}
         <div className={styles.permList}>
           {/* Set all row */}

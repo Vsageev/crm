@@ -1,9 +1,10 @@
 {
   "id": "basic",
   "name": "Basic Agent",
-  "description": "A simple agent with CLAUDE.MD and AGENT.MD files",
+  "description": "A simple agent with instructions and channel definitions",
   "files": [
-    { "type": "file", "name": "CLAUDE.MD", "template": "CLAUDE.MD.hbs" },
-    { "type": "symlink", "name": "AGENT.MD", "target": "CLAUDE.MD" }
+    { "type": "file", "name": "CLAUDE.MD", "template": "CLAUDE.MD.hbs", "models": ["Claude"] },
+    { "type": "file", "name": "AGENTS.md", "template": "CLAUDE.MD.hbs", "models": ["Codex", "Qwen"] },
+    { "type": "file", "name": "CHANNELS.MD", "template": "CHANNELS.MD.hbs" }
   ]
 }

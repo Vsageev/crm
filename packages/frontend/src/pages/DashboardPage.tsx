@@ -7,36 +7,48 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { PageHeader } from '../layout';
+import { AgentAvatar } from '../components/AgentAvatar';
 import { useAuth } from '../stores/useAuth';
 import { api } from '../lib/api';
 import styles from './DashboardPage.module.css';
+
+interface CardAssignee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  type?: 'user' | 'agent';
+  avatarIcon?: string | null;
+  avatarBgColor?: string | null;
+  avatarLogoColor?: string | null;
+}
 
 interface CardItem {
   id: string;
   name: string;
   description: string | null;
-  folderId: string;
+  collectionId: string;
+  assignee: CardAssignee | null;
   createdAt: string;
 }
 
 export function DashboardPage() {
   const { user } = useAuth();
-  const [stats, setStats] = useState({ folders: 0, boards: 0, cards: 0 });
+  const [stats, setStats] = useState({ collections: 0, boards: 0, cards: 0 });
   const [recentCards, setRecentCards] = useState<CardItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [foldersRes, boardsRes, cardsRes] =
+      const [collectionsRes, boardsRes, cardsRes] =
         await Promise.all([
-          api<{ total: number }>('/folders?limit=0'),
+          api<{ total: number }>('/collections?limit=0'),
           api<{ total: number }>('/boards?limit=0'),
           api<{ entries: CardItem[]; total: number }>('/cards?limit=8'),
         ]);
 
       setStats({
-        folders: foldersRes.total,
+        collections: collectionsRes.total,
         boards: boardsRes.total,
         cards: cardsRes.total,
       });
@@ -71,7 +83,7 @@ export function DashboardPage() {
                 <FolderOpen size={20} />
               </div>
               <div className={styles.statContent}>
-                <div className={styles.statValue}>{stats.folders}</div>
+                <div className={styles.statValue}>{stats.collections}</div>
                 <div className={styles.statLabel}>Collections</div>
               </div>
             </div>
@@ -105,7 +117,7 @@ export function DashboardPage() {
             <div className={styles.card}>
               <div className={styles.cardHeader}>
                 <h2 className={styles.cardTitle}>Recent Cards</h2>
-                <Link to="/folders" className={styles.viewAllLink}>
+                <Link to="/collections" className={styles.viewAllLink}>
                   View all <ArrowRight size={14} />
                 </Link>
               </div>
@@ -125,9 +137,29 @@ export function DashboardPage() {
                           <div className={styles.taskDue}>{card.description}</div>
                         )}
                       </div>
-                      <span className={styles.taskStatus}>
-                        {new Date(card.createdAt).toLocaleDateString()}
-                      </span>
+                      <div className={styles.taskRight}>
+                        {card.assignee && (
+                          card.assignee.type === 'agent' ? (
+                            <div className={styles.taskAssignee} title={card.assignee.firstName}>
+                              <AgentAvatar
+                                icon={card.assignee.avatarIcon || 'spark'}
+                                bgColor={card.assignee.avatarBgColor || '#1a1a2e'}
+                                logoColor={card.assignee.avatarLogoColor || '#e94560'}
+                                size={20}
+                              />
+                            </div>
+                          ) : (
+                            <div className={styles.taskAssignee} title={`${card.assignee.firstName} ${card.assignee.lastName}`}>
+                              <span className={styles.taskAvatar}>
+                                {card.assignee.firstName[0]}{card.assignee.lastName[0]}
+                              </span>
+                            </div>
+                          )
+                        )}
+                        <span className={styles.taskStatus}>
+                          {new Date(card.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
                     </Link>
                   ))}
                 </div>

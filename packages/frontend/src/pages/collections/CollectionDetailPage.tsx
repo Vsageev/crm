@@ -1,11 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { Plus, ArrowLeft, FileText, Trash2, User } from 'lucide-react';
+import { Plus, FileText, Trash2, User } from 'lucide-react';
 import { PageHeader } from '../../layout';
-import { Button } from '../../ui';
+import { Button, EntitySwitcher, CreateCardModal } from '../../ui';
+import { AgentAvatar } from '../../components/AgentAvatar';
 import { api, ApiError } from '../../lib/api';
-import { clearPreferredFolderId, setPreferredFolderId } from '../../lib/navigation-preferences';
-import styles from './FolderDetailPage.module.css';
+import { toast } from '../../stores/toast';
+import { useConfirm } from '../../hooks/useConfirm';
+import { clearPreferredCollectionId, setPreferredCollectionId } from '../../lib/navigation-preferences';
+import styles from './CollectionDetailPage.module.css';
 
 interface CardTag {
   id: string;
@@ -18,13 +21,16 @@ interface Card {
   name: string;
   description: string | null;
   assigneeId: string | null;
-  assignee: { id: string; firstName: string; lastName: string } | null;
+  assignee: {
+    id: string; firstName: string; lastName: string; type?: 'user' | 'agent';
+    avatarIcon?: string | null; avatarBgColor?: string | null; avatarLogoColor?: string | null;
+  } | null;
   tags: CardTag[];
   createdAt: string;
   updatedAt: string;
 }
 
-interface Folder {
+interface Collection {
   id: string;
   name: string;
   description: string | null;
@@ -50,36 +56,34 @@ function formatTimeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function isGeneralCollection(folder: Folder): boolean {
-  if (folder.isGeneral === true) return true;
-  return folder.name.trim().toLowerCase() === 'general';
+function isGeneralCollection(collection: Collection): boolean {
+  if (collection.isGeneral === true) return true;
+  return collection.name.trim().toLowerCase() === 'general';
 }
 
-export function FolderDetailPage() {
+export function CollectionDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [folder, setFolder] = useState<Folder | null>(null);
+  const [collection, setCollection] = useState<Collection | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [createName, setCreateName] = useState('');
-  const [createDesc, setCreateDesc] = useState('');
-  const [creating, setCreating] = useState(false);
   const [deletingCollection, setDeletingCollection] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const [folderData, cardsData] = await Promise.all([
-        api<Folder>(`/folders/${id}`),
+      const [collectionData, cardsData] = await Promise.all([
+        api<Collection>(`/collections/${id}`),
         api<CardsResponse>(
-          `/folders/${id}/cards${search ? `?search=${encodeURIComponent(search)}` : ''}`,
+          `/collections/${id}/cards${search ? `?search=${encodeURIComponent(search)}` : ''}`,
         ),
       ]);
-      setFolder(folderData);
+      setCollection(collectionData);
       setCards(cardsData.entries);
     } catch {
       // best-effort
@@ -94,7 +98,7 @@ export function FolderDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    setPreferredFolderId(id);
+    setPreferredCollectionId(id);
   }, [id]);
 
   const shouldOpenCreateCard = searchParams.get('newCard') === '1';
@@ -107,45 +111,53 @@ export function FolderDetailPage() {
     setSearchParams(nextParams, { replace: true });
   }, [shouldOpenCreateCard, searchParams, setSearchParams]);
 
-  async function handleCreateCard() {
-    if (!createName.trim() || !id) return;
-    setCreating(true);
-    try {
-      await api('/cards', {
-        method: 'POST',
-        body: JSON.stringify({
-          folderId: id,
-          name: createName.trim(),
-          description: createDesc.trim() || null,
-        }),
-      });
-      setShowCreate(false);
-      setCreateName('');
-      setCreateDesc('');
-      fetchData();
-    } catch (err) {
-      if (err instanceof ApiError) alert(err.message);
-    } finally {
-      setCreating(false);
-    }
+  async function handleCreateCard(data: { name: string; description: string | null; assigneeId: string | null; tagIds: string[]; linkedCardIds: string[] }) {
+    if (!id) return;
+    const card = await api<{ id: string }>('/cards', {
+      method: 'POST',
+      body: JSON.stringify({
+        collectionId: id,
+        name: data.name,
+        description: data.description,
+        assigneeId: data.assigneeId,
+      }),
+    });
+
+    // Attach tags and links in parallel
+    await Promise.all([
+      ...data.tagIds.map((tagId) =>
+        api(`/cards/${card.id}/tags`, { method: 'POST', body: JSON.stringify({ tagId }) }),
+      ),
+      ...data.linkedCardIds.map((targetCardId) =>
+        api(`/cards/${card.id}/links`, { method: 'POST', body: JSON.stringify({ targetCardId }) }),
+      ),
+    ]);
+
+    setShowCreate(false);
+    fetchData();
   }
 
   async function handleDeleteCollection() {
-    if (!folder || isGeneralCollection(folder)) return;
+    if (!collection || isGeneralCollection(collection)) return;
 
-    const confirmed = window.confirm(`Delete collection "${folder.name}"? This cannot be undone.`);
+    const confirmed = await confirm({
+      title: 'Delete collection',
+      message: `Delete collection "${collection.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
     setDeletingCollection(true);
     try {
-      await api(`/folders/${folder.id}`, { method: 'DELETE' });
-      clearPreferredFolderId();
-      navigate('/folders?list=1', { replace: true });
+      await api(`/collections/${collection.id}`, { method: 'DELETE' });
+      clearPreferredCollectionId();
+      navigate('/collections?list=1', { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.message);
+        toast.error(err.message);
       } else {
-        alert('Failed to delete collection');
+        toast.error('Failed to delete collection');
       }
     } finally {
       setDeletingCollection(false);
@@ -156,23 +168,30 @@ export function FolderDetailPage() {
     return <div className={styles.loadingState}>Loading...</div>;
   }
 
-  if (!folder) {
+  if (!collection) {
     return <div className={styles.emptyState}>Collection not found</div>;
   }
 
   return (
     <div className={styles.page}>
-      <Link to="/folders?list=1" className={styles.backLink}>
-        <ArrowLeft size={14} />
-        All Collections
-      </Link>
+      {confirmDialog}
+      <EntitySwitcher
+        currentId={id!}
+        currentName={collection.name}
+        fetchEntries={async () => {
+          const res = await api<{ entries: { id: string; name: string }[] }>('/collections?limit=100');
+          return res.entries;
+        }}
+        basePath="/collections"
+        allLabel="All Collections"
+      />
 
       <PageHeader
-        title={folder.name}
-        description={folder.description || 'Cards in this collection'}
+        title={collection.name}
+        description={collection.description || 'Cards in this collection'}
         actions={
           <div className={styles.headerActions}>
-            {!isGeneralCollection(folder) && (
+            {!isGeneralCollection(collection) && (
               <Button
                 variant="secondary"
                 onClick={() => { void handleDeleteCollection(); }}
@@ -257,9 +276,15 @@ export function FolderDetailPage() {
                   <div className={styles.cardFooterRight}>
                     <span className={styles.cardMeta}>{timeAgo}</span>
                     {card.assignee ? (
-                      <div className={styles.cardAssignee} title={`${card.assignee.firstName} ${card.assignee.lastName}`}>
-                        {card.assignee.firstName[0]}{card.assignee.lastName[0]}
-                      </div>
+                      card.assignee.type === 'agent' ? (
+                        <div className={`${styles.cardAssignee} ${styles.cardAssigneeAgent}`} title={card.assignee.firstName}>
+                          <AgentAvatar icon={card.assignee.avatarIcon || 'spark'} bgColor={card.assignee.avatarBgColor || '#1a1a2e'} logoColor={card.assignee.avatarLogoColor || '#e94560'} size={20} />
+                        </div>
+                      ) : (
+                        <div className={styles.cardAssignee} title={`${card.assignee.firstName} ${card.assignee.lastName}`}>
+                          {card.assignee.firstName[0]}{card.assignee.lastName[0]}
+                        </div>
+                      )
                     ) : (
                       <div className={styles.cardAssigneeEmpty} title="Unassigned">
                         <User size={12} />
@@ -274,37 +299,10 @@ export function FolderDetailPage() {
       )}
 
       {showCreate && (
-        <div className={styles.overlay} onClick={() => setShowCreate(false)}>
-          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalTitle}>New Card</div>
-            <div className={styles.field}>
-              <label className={styles.label}>Name</label>
-              <input
-                className={styles.input}
-                value={createName}
-                onChange={(e) => setCreateName(e.target.value)}
-                placeholder="Card name"
-                autoFocus
-                onKeyDown={(e) => e.key === 'Enter' && handleCreateCard()}
-              />
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label}>Description (optional)</label>
-              <textarea
-                className={styles.textarea}
-                value={createDesc}
-                onChange={(e) => setCreateDesc(e.target.value)}
-                placeholder="Card description"
-              />
-            </div>
-            <div className={styles.modalActions}>
-              <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-              <Button onClick={handleCreateCard} disabled={creating || !createName.trim()}>
-                {creating ? 'Creating...' : 'Create'}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <CreateCardModal
+          onClose={() => setShowCreate(false)}
+          onSubmit={handleCreateCard}
+        />
       )}
     </div>
   );

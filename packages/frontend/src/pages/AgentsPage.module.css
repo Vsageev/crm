@@ -105,6 +105,205 @@
   flex-direction: column;
 }
 
+/* ── Sidebar group headers ── */
+.sidebarGroup {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.sidebarGroup:last-child {
+  border-bottom: none;
+}
+
+.sidebarGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+  transition: background var(--transition-fast);
+  user-select: none;
+}
+
+.sidebarGroupHeader:hover {
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.sidebarGroupChevron {
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.sidebarGroupChevronOpen {
+  transform: rotate(90deg);
+}
+
+.sidebarGroupName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarGroupCount {
+  flex-shrink: 0;
+  font-size: 10px;
+  min-width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+/* ── Manage groups panel ── */
+.manageGroupsPanel {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.manageGroupsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.manageGroupsTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.manageGroupsList {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.manageGroupItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.manageGroupItem:last-child {
+  border-bottom: none;
+}
+
+.manageGroupName {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manageGroupInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-card);
+  outline: none;
+}
+
+.manageGroupInput:focus {
+  border-color: var(--color-link);
+}
+
+.manageGroupActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.manageGroupAddRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* ── Agent context menu (right-click) ── */
+.contextMenu {
+  position: fixed;
+  z-index: 200;
+  min-width: 160px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1) 0;
+}
+
+.contextMenuLabel {
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+}
+
+.contextMenuItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  color: var(--color-text);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.contextMenuItem:hover {
+  background: var(--color-surface);
+}
+
+.contextMenuItemActive {
+  color: var(--color-primary-brand);
+  font-weight: 500;
+}
+
+/* Settings modal group select */
+.settingsGroupSelect {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-card);
+  outline: none;
+  cursor: pointer;
+}
+
+.settingsGroupSelect:focus {
+  border-color: var(--color-link);
+}
+
 /* Agent group */
 .agentGroup {
   border-bottom: 1px solid var(--color-border-subtle);
@@ -112,6 +311,16 @@
 
 .agentGroup:last-child {
   border-bottom: none;
+}
+
+.agentGroupChevron {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  transition: transform var(--transition-fast);
+}
+
+.agentGroupChevronOpen {
+  transform: rotate(90deg);
 }
 
 .agentGroupHeader {
@@ -230,8 +439,8 @@
 .convStreamingDot,
 .convUnreadDot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -242,7 +451,7 @@
 }
 
 .convUnreadDot {
-  background: var(--color-primary-brand);
+  background: var(--color-info);
 }
 
 @keyframes conv-pulse {
@@ -379,7 +588,7 @@
 /* ── Messages area ── */
 .messagesArea {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden auto;
   padding: var(--space-5);
   display: flex;
   flex-direction: column;
@@ -389,6 +598,7 @@
 .messageRow {
   display: flex;
   padding: 0;
+  min-width: 0;
 }
 
 .messageRowUser {
@@ -401,6 +611,8 @@
 
 .messageContent {
   max-width: 70%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .messageBubble {
@@ -409,6 +621,8 @@
   font-size: 15px;
   line-height: 1.5;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .messageBubbleUser {
@@ -422,85 +636,6 @@
   border: 1px solid var(--color-border);
   color: var(--color-text);
   border-bottom-left-radius: var(--radius-sm);
-}
-
-/* Markdown inside agent bubbles */
-.messageBubbleAgent p {
-  margin: 0 0 var(--space-2) 0;
-}
-
-.messageBubbleAgent p:last-child {
-  margin-bottom: 0;
-}
-
-.messageBubbleAgent pre {
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  overflow-x: auto;
-  font-size: 13px;
-  margin: var(--space-2) 0;
-}
-
-.messageBubbleAgent code {
-  font-size: 13px;
-  background: var(--color-card);
-  padding: 1px 4px;
-  border-radius: var(--radius-sm);
-}
-
-.messageBubbleAgent pre code {
-  background: none;
-  padding: 0;
-}
-
-.messageBubbleAgent div[class*="prism"] {
-  border-radius: var(--radius-md) !important;
-  margin: var(--space-2) 0 !important;
-  font-size: 13px !important;
-}
-
-.messageBubbleAgent ul,
-.messageBubbleAgent ol {
-  margin: var(--space-2) 0;
-  padding-left: var(--space-5);
-}
-
-.messageBubbleAgent li {
-  margin-bottom: var(--space-1);
-}
-
-.messageBubbleAgent a {
-  color: var(--color-link);
-  text-decoration: underline;
-}
-
-.messageBubbleAgent table {
-  border-collapse: collapse;
-  margin: var(--space-2) 0;
-  width: 100%;
-  font-size: 13px;
-}
-
-.messageBubbleAgent th,
-.messageBubbleAgent td {
-  border: 1px solid var(--color-border);
-  padding: var(--space-1) var(--space-2);
-  text-align: left;
-}
-
-.messageBubbleAgent th {
-  background: var(--color-card);
-  font-weight: 600;
-}
-
-.messageBubbleAgent del {
-  opacity: 0.6;
-}
-
-.messageBubbleAgent input[type="checkbox"] {
-  margin-right: var(--space-1);
 }
 
 .messageMeta {
@@ -1434,6 +1569,115 @@ button.filesColName:hover .filesFileName {
 
 .filesDropTargetActive {
   background: rgba(59, 130, 246, 0.05);
+}
+
+/* ── Cron Jobs ── */
+.cronJobList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.cronJobItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.cronToggleBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.cronToggleOn {
+  color: var(--color-success);
+}
+
+.cronToggleOff {
+  color: var(--color-text-tertiary);
+}
+
+.cronJobInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.cronJobExpr {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+
+.cronJobDesc {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.cronJobPrompt {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cronDeleteBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.cronDeleteBtn:hover {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.cronForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.cronFormRow {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.cronFormHint {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  margin-top: var(--space-1);
+}
+
+.cronFormActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 /* ── Scrollbar ── */

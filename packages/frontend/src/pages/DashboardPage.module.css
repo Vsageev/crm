@@ -138,6 +138,31 @@
   color: var(--color-error);
 }
 
+.taskRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.taskAssignee {
+  display: flex;
+  align-items: center;
+}
+
+.taskAvatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-link);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+}
+
 .taskStatus {
   font-size: 11px;
   padding: 2px 8px;

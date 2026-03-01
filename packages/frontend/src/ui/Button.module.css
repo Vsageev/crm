@@ -49,6 +49,17 @@
   color: var(--color-text);
 }
 
+.danger {
+  background: var(--color-error);
+  color: #fff;
+  border-color: var(--color-error);
+}
+
+.danger:hover:not(:disabled) {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
 /* Sizes */
 .sm {
   padding: 6px 12px;

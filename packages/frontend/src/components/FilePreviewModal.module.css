@@ -112,3 +112,7 @@
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   tab-size: 4;
 }
+
+.previewMarkdown {
+  padding: var(--space-5) var(--space-6);
+}

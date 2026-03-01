@@ -60,7 +60,7 @@ export async function refreshAccessToken(app: FastifyInstance, rawRefreshToken: 
 
   const user = store.findOne('users', (r: any) => r.id === stored.userId);
 
-  if (!user || !(user as any).isActive) return null;
+  if (!user || !(user as any).isActive || (user as any).type === 'agent') return null;
 
   return generateTokens(app, (user as any).id);
 }

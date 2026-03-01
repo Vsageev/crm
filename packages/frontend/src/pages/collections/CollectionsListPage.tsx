@@ -4,14 +4,16 @@ import { Plus, FolderOpen, Trash2 } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { Button } from '../../ui';
 import { api, ApiError } from '../../lib/api';
+import { toast } from '../../stores/toast';
+import { useConfirm } from '../../hooks/useConfirm';
 import {
-  clearPreferredFolderId,
-  getPreferredFolderId,
-  setPreferredFolderId,
+  clearPreferredCollectionId,
+  getPreferredCollectionId,
+  setPreferredCollectionId,
 } from '../../lib/navigation-preferences';
-import styles from './FoldersListPage.module.css';
+import styles from './CollectionsListPage.module.css';
 
-interface Folder {
+interface Collection {
   id: string;
   name: string;
   description: string | null;
@@ -19,20 +21,21 @@ interface Folder {
   createdAt: string;
 }
 
-interface FoldersResponse {
+interface CollectionsResponse {
   total: number;
-  entries: Folder[];
+  entries: Collection[];
 }
 
-function isGeneralCollection(folder: Folder): boolean {
-  if (folder.isGeneral === true) return true;
-  return folder.name.trim().toLowerCase() === 'general';
+function isGeneralCollection(collection: Collection): boolean {
+  if (collection.isGeneral === true) return true;
+  return collection.name.trim().toLowerCase() === 'general';
 }
 
-export function FoldersListPage() {
+export function CollectionsListPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [folders, setFolders] = useState<Folder[]>([]);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -41,17 +44,17 @@ export function FoldersListPage() {
   const [createDesc, setCreateDesc] = useState('');
   const [creating, setCreating] = useState(false);
   const [provisioningStarter, setProvisioningStarter] = useState(false);
-  const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
+  const [deletingCollectionId, setDeletingCollectionId] = useState<string | null>(null);
 
-  const fetchFolders = useCallback(async () => {
+  const fetchCollections = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const params = search ? `?search=${encodeURIComponent(search)}` : '';
-      const data = await api<FoldersResponse>(`/folders${params}`);
-      setFolders(Array.isArray(data.entries) ? data.entries : []);
+      const data = await api<CollectionsResponse>(`/collections${params}`);
+      setCollections(Array.isArray(data.entries) ? data.entries : []);
     } catch (err) {
-      setFolders([]);
+      setCollections([]);
       if (err instanceof ApiError) setError(err.message);
       else setError('Failed to load collections');
     } finally {
@@ -60,51 +63,51 @@ export function FoldersListPage() {
   }, [search]);
 
   useEffect(() => {
-    fetchFolders();
-  }, [fetchFolders]);
+    fetchCollections();
+  }, [fetchCollections]);
 
-  const createDefaultFolder = useCallback(async () => {
+  const createDefaultCollection = useCallback(async () => {
     setProvisioningStarter(true);
     try {
-      await api('/folders', {
+      await api('/collections', {
         method: 'POST',
         body: JSON.stringify({
           name: 'General',
           description: 'Default collection',
         }),
       });
-      await fetchFolders();
+      await fetchCollections();
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError('Failed to prepare starter collection');
     } finally {
       setProvisioningStarter(false);
     }
-  }, [fetchFolders]);
+  }, [fetchCollections]);
 
   useEffect(() => {
-    if (search || loading || provisioningStarter || error || folders.length > 0) return;
-    void createDefaultFolder();
-  }, [search, loading, provisioningStarter, error, folders.length, createDefaultFolder]);
+    if (search || loading || provisioningStarter || error || collections.length > 0) return;
+    void createDefaultCollection();
+  }, [search, loading, provisioningStarter, error, collections.length, createDefaultCollection]);
 
   useEffect(() => {
     const forceList = searchParams.get('list') === '1';
-    if (forceList || search || loading || provisioningStarter || error || folders.length === 0) return;
+    if (forceList || search || loading || provisioningStarter || error || collections.length === 0) return;
 
-    const preferredFolderId = getPreferredFolderId();
-    const targetFolderId =
-      preferredFolderId && folders.some((folder) => folder.id === preferredFolderId)
-        ? preferredFolderId
-        : folders[0].id;
+    const preferredCollectionId = getPreferredCollectionId();
+    const targetCollectionId =
+      preferredCollectionId && collections.some((collection) => collection.id === preferredCollectionId)
+        ? preferredCollectionId
+        : collections[0].id;
 
-    navigate(`/folders/${targetFolderId}`, { replace: true });
-  }, [searchParams, search, loading, provisioningStarter, error, folders, navigate]);
+    navigate(`/collections/${targetCollectionId}`, { replace: true });
+  }, [searchParams, search, loading, provisioningStarter, error, collections, navigate]);
 
   async function handleCreate() {
     if (!createName.trim()) return;
     setCreating(true);
     try {
-      await api('/folders', {
+      await api('/collections', {
         method: 'POST',
         body: JSON.stringify({
           name: createName.trim(),
@@ -114,44 +117,50 @@ export function FoldersListPage() {
       setShowCreate(false);
       setCreateName('');
       setCreateDesc('');
-      fetchFolders();
+      fetchCollections();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.message);
+      if (err instanceof ApiError) toast.error(err.message);
     } finally {
       setCreating(false);
     }
   }
 
-  async function handleDeleteCollection(folder: Folder) {
-    if (isGeneralCollection(folder)) return;
+  async function handleDeleteCollection(collection: Collection) {
+    if (isGeneralCollection(collection)) return;
 
-    const confirmed = window.confirm(`Delete collection "${folder.name}"? This cannot be undone.`);
+    const confirmed = await confirm({
+      title: 'Delete collection',
+      message: `Delete collection "${collection.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
-    setDeletingFolderId(folder.id);
+    setDeletingCollectionId(collection.id);
     try {
-      await api(`/folders/${folder.id}`, { method: 'DELETE' });
-      setFolders((prev) => {
-        const remainingFolders = prev.filter((item) => item.id !== folder.id);
-        if (getPreferredFolderId() === folder.id) {
-          if (remainingFolders.length > 0) setPreferredFolderId(remainingFolders[0].id);
-          else clearPreferredFolderId();
+      await api(`/collections/${collection.id}`, { method: 'DELETE' });
+      setCollections((prev) => {
+        const remainingCollections = prev.filter((item) => item.id !== collection.id);
+        if (getPreferredCollectionId() === collection.id) {
+          if (remainingCollections.length > 0) setPreferredCollectionId(remainingCollections[0].id);
+          else clearPreferredCollectionId();
         }
-        return remainingFolders;
+        return remainingCollections;
       });
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.message);
+        toast.error(err.message);
       } else {
-        alert('Failed to delete collection');
+        toast.error('Failed to delete collection');
       }
     } finally {
-      setDeletingFolderId(null);
+      setDeletingCollectionId(null);
     }
   }
 
   return (
     <div className={styles.page}>
+      {confirmDialog}
       <PageHeader
         title="Collections"
         description="Organize your cards into collections"
@@ -183,9 +192,9 @@ export function FoldersListPage() {
           </div>
           <h3 className={styles.emptyTitle}>Unable to load collections</h3>
           <p className={styles.emptyDescription}>{error}</p>
-          <Button variant="ghost" onClick={fetchFolders}>Try again</Button>
+          <Button variant="ghost" onClick={fetchCollections}>Try again</Button>
         </div>
-      ) : folders.length === 0 && search ? (
+      ) : collections.length === 0 && search ? (
         <div className={styles.emptyState}>
           <div className={styles.emptyIcon}>
             <FolderOpen size={48} strokeWidth={1.2} />
@@ -197,30 +206,30 @@ export function FoldersListPage() {
         </div>
       ) : (
         <div className={styles.grid}>
-          {folders.map((folder) => (
-            <article key={folder.id} className={styles.folderCard}>
-              <Link to={`/folders/${folder.id}`} className={styles.folderLink}>
-                <div className={styles.folderName}>{folder.name}</div>
-                {folder.description && (
-                  <div className={styles.folderDescription}>{folder.description}</div>
+          {collections.map((collection) => (
+            <article key={collection.id} className={styles.folderCard}>
+              <Link to={`/collections/${collection.id}`} className={styles.folderLink}>
+                <div className={styles.folderName}>{collection.name}</div>
+                {collection.description && (
+                  <div className={styles.folderDescription}>{collection.description}</div>
                 )}
                 <div className={styles.folderMeta}>
-                  Created {new Date(folder.createdAt).toLocaleDateString()}
+                  Created {new Date(collection.createdAt).toLocaleDateString()}
                 </div>
               </Link>
               <div className={styles.cardActions}>
-                {isGeneralCollection(folder) ? (
+                {isGeneralCollection(collection) ? (
                   <span className={styles.generalBadge}>General</span>
                 ) : (
                   <button
                     type="button"
                     className={styles.deleteButton}
-                    onClick={() => { void handleDeleteCollection(folder); }}
-                    disabled={deletingFolderId === folder.id}
-                    aria-label={`Delete ${folder.name}`}
+                    onClick={() => { void handleDeleteCollection(collection); }}
+                    disabled={deletingCollectionId === collection.id}
+                    aria-label={`Delete ${collection.name}`}
                   >
                     <Trash2 size={14} />
-                    {deletingFolderId === folder.id ? 'Deleting...' : 'Delete'}
+                    {deletingCollectionId === collection.id ? 'Deleting...' : 'Delete'}
                   </button>
                 )}
               </div>

@@ -2,7 +2,6 @@ import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastif
 import type { Permission } from 'shared';
 import { validateApiKey } from '../services/api-keys.js';
 import { store } from '../db/index.js';
-import { env } from '../config/env.js';
 
 /**
  * Middleware that accepts either a JWT token or an API key in the
@@ -19,13 +18,6 @@ export async function authenticateApiKeyOrJwt(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
-  if (env.DEV_SKIP_AUTH) {
-    const activeUser = store.findOne('users', (r) => r.isActive === true);
-    request.user = activeUser ? { sub: activeUser.id as string } : { sub: 'dev-user' };
-    request.apiKeyPermissions = undefined;
-    return;
-  }
-
   const authHeader = request.headers.authorization;
   if (!authHeader) {
     return reply.unauthorized('Missing Authorization header');

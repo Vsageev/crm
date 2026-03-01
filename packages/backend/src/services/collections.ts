@@ -1,42 +1,42 @@
 import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
 
-const GENERAL_FOLDER_NAMES = new Set(['general']);
+const GENERAL_COLLECTION_NAMES = new Set(['general']);
 
 function normalizeName(name: unknown): string {
   return typeof name === 'string' ? name.trim().toLowerCase() : '';
 }
 
-export function isGeneralFolder(folder: unknown): boolean {
-  if (!folder || typeof folder !== 'object') return false;
+export function isGeneralCollection(record: unknown): boolean {
+  if (!record || typeof record !== 'object') return false;
 
-  const candidate = folder as { isGeneral?: unknown; name?: unknown };
+  const candidate = record as { isGeneral?: unknown; name?: unknown };
   if (candidate.isGeneral === true) return true;
 
-  return GENERAL_FOLDER_NAMES.has(normalizeName(candidate.name));
+  return GENERAL_COLLECTION_NAMES.has(normalizeName(candidate.name));
 }
 
-export interface FolderListQuery {
+export interface CollectionListQuery {
   search?: string;
   limit?: number;
   offset?: number;
 }
 
-export interface CreateFolderData {
+export interface CreateCollectionData {
   name: string;
   description?: string | null;
 }
 
-export interface UpdateFolderData {
+export interface UpdateCollectionData {
   name?: string;
   description?: string | null;
 }
 
-export async function listFolders(query: FolderListQuery) {
+export async function listCollections(query: CollectionListQuery) {
   const limit = query.limit ?? 50;
   const offset = query.offset ?? 0;
 
-  let all = store.getAll('folders') as any[];
+  let all = store.getAll('collections') as any[];
 
   if (query.search) {
     const term = query.search.toLowerCase();
@@ -58,17 +58,17 @@ export async function listFolders(query: FolderListQuery) {
   return { entries, total };
 }
 
-export async function getFolderById(id: string) {
-  return store.getById('folders', id) ?? null;
+export async function getCollectionById(id: string) {
+  return store.getById('collections', id) ?? null;
 }
 
-export async function createFolder(
-  data: CreateFolderData,
+export async function createCollection(
+  data: CreateCollectionData,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const isGeneral = GENERAL_FOLDER_NAMES.has(normalizeName(data.name));
+  const isGeneral = GENERAL_COLLECTION_NAMES.has(normalizeName(data.name));
 
-  const folder = store.insert('folders', {
+  const collection = store.insert('collections', {
     name: data.name,
     description: data.description ?? null,
     isGeneral,
@@ -79,20 +79,20 @@ export async function createFolder(
     await createAuditLog({
       userId: audit.userId,
       action: 'create',
-      entityType: 'folder',
-      entityId: folder.id,
+      entityType: 'collection',
+      entityId: collection.id,
       changes: data as unknown as Record<string, unknown>,
       ipAddress: audit.ipAddress,
       userAgent: audit.userAgent,
     });
   }
 
-  return folder;
+  return collection;
 }
 
-export async function updateFolder(
+export async function updateCollection(
   id: string,
-  data: UpdateFolderData,
+  data: UpdateCollectionData,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
   const setData: Record<string, unknown> = {};
@@ -103,14 +103,14 @@ export async function updateFolder(
   }
   setData.updatedAt = new Date().toISOString();
 
-  const updated = store.update('folders', id, setData);
+  const updated = store.update('collections', id, setData);
   if (!updated) return null;
 
   if (audit) {
     await createAuditLog({
       userId: audit.userId,
       action: 'update',
-      entityType: 'folder',
+      entityType: 'collection',
       entityId: id,
       changes: data as unknown as Record<string, unknown>,
       ipAddress: audit.ipAddress,
@@ -121,17 +121,27 @@ export async function updateFolder(
   return updated;
 }
 
-export async function deleteFolder(
+export async function getOrCreateGeneralCollection(
+  audit?: { userId: string; ipAddress?: string; userAgent?: string },
+) {
+  const all = store.getAll('collections') as any[];
+  const general = all.find((f: any) => f.isGeneral === true || normalizeName(f.name) === 'general');
+  if (general) return general;
+
+  return createCollection({ name: 'General' }, audit);
+}
+
+export async function deleteCollection(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const deleted = store.delete('folders', id);
+  const deleted = store.delete('collections', id);
 
   if (deleted && audit) {
     await createAuditLog({
       userId: audit.userId,
       action: 'delete',
-      entityType: 'folder',
+      entityType: 'collection',
       entityId: id,
       ipAddress: audit.ipAddress,
       userAgent: audit.userAgent,

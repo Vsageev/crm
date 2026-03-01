@@ -7,6 +7,8 @@ export interface User {
   passwordHash: string;
   firstName: string;
   lastName: string;
+  type?: 'human' | 'agent';
+  agentId?: string | null;
   isActive: boolean;
   totpSecret: string | null;
   totpEnabled: boolean;
@@ -53,7 +55,7 @@ export interface Tag {
   createdAt: string;
 }
 
-export interface Folder {
+export interface Collection {
   id: string;
   name: string;
   description: string | null;
@@ -65,7 +67,7 @@ export interface Folder {
 
 export interface Card {
   id: string;
-  folderId: string;
+  collectionId: string;
   name: string;
   description: string | null;
   customFields: Record<string, unknown>;
@@ -92,7 +94,8 @@ export interface Board {
   id: string;
   name: string;
   description: string | null;
-  folderId: string | null;
+  collectionId: string | null;
+  defaultCollectionId: string | null;
   isGeneral?: boolean;
   createdById: string;
   createdAt: string;
@@ -105,6 +108,7 @@ export interface BoardColumn {
   name: string;
   color: string;
   position: number;
+  assignAgentId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -241,6 +245,38 @@ export interface MessageDraft {
   content: string;
   attachments: unknown;
   metadata: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BoardCronTemplate {
+  id: string;
+  boardId: string;
+  columnId: string;
+  name: string;
+  description: string | null;
+  assigneeId: string | null;
+  tagIds: string[];
+  cron: string;
+  enabled: boolean;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentRun {
+  id: string;
+  agentId: string;
+  agentName: string;
+  triggerType: 'chat' | 'cron' | 'card';
+  status: 'running' | 'completed' | 'error';
+  conversationId: string | null;
+  cardId: string | null;
+  cronJobId: string | null;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
   createdAt: string;
   updatedAt: string;
 }

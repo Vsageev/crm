@@ -24,15 +24,18 @@
   align-items: center;
   gap: var(--space-1);
   color: var(--color-text-secondary);
-  text-decoration: none;
   font-size: 13px;
   font-weight: 500;
+  font-family: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
   transition: color var(--transition-fast);
 }
 
 .backLink:hover {
   color: var(--color-text);
-  text-decoration: none;
 }
 
 /* ── Main grid ────────────────────────────────────────── */
@@ -170,97 +173,6 @@
   border-color: var(--color-text-tertiary);
 }
 
-/* Markdown rendered content */
-.markdown {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  line-height: 1.7;
-}
-
-.markdown h1,
-.markdown h2,
-.markdown h3 {
-  color: var(--color-text);
-  margin: var(--space-4) 0 var(--space-2);
-  line-height: 1.3;
-}
-
-.markdown h1 { font-size: 20px; }
-.markdown h2 { font-size: 17px; }
-.markdown h3 { font-size: 15px; }
-
-.markdown h1:first-child,
-.markdown h2:first-child,
-.markdown h3:first-child {
-  margin-top: 0;
-}
-
-.markdown p {
-  margin: 0 0 var(--space-3);
-}
-
-.markdown p:last-child {
-  margin-bottom: 0;
-}
-
-.markdown ul,
-.markdown ol {
-  margin: 0 0 var(--space-3);
-  padding-left: var(--space-5);
-}
-
-.markdown li {
-  margin-bottom: var(--space-1);
-}
-
-.markdown code {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 0.9em;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-subtle);
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-}
-
-.markdown pre {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-3);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  overflow-x: auto;
-}
-
-.markdown pre code {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: 13px;
-}
-
-.markdown blockquote {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  border-left: 3px solid var(--color-border);
-  color: var(--color-text-tertiary);
-}
-
-.markdown a {
-  color: var(--color-link);
-}
-
-.markdown strong {
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.markdown hr {
-  border: none;
-  border-top: 1px solid var(--color-border-subtle);
-  margin: var(--space-4) 0;
-}
-
 /* Description edit mode */
 .descriptionTextarea {
   width: 100%;
@@ -359,7 +271,6 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-2) 0;
-  position: relative;
 }
 
 .detailRow + .detailRow {
@@ -424,18 +335,71 @@
   color: var(--color-link);
 }
 
-.assigneePicker {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 50;
-  margin-top: var(--space-1);
-  min-width: 180px;
+.assigneeOverlay {
+  position: fixed;
+  z-index: 9999;
+  transform: translateX(-100%);
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
+}
+
+.avatarAgent {
+  background: transparent;
   overflow: hidden;
+}
+
+.pickerDivider {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  border-top: 1px solid var(--color-border);
+}
+
+.pickerDivider:first-child {
+  border-top: none;
+}
+
+.pickerLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.pickerEmpty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+.resultItemActive {
+  background: var(--color-surface);
+  font-weight: 500;
+}
+
+.checkIcon {
+  margin-left: auto;
+  color: var(--color-link);
 }
 
 /* ── Tags ─────────────────────────────────────────────── */
@@ -673,6 +637,21 @@
   background: rgba(239, 68, 68, 0.08);
 }
 
+/* ── Board column badge ───────────────────────────────── */
+
+.boardColumn {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.6;
+}
+
 .panelEmpty {
   font-size: 13px;
   color: var(--color-text-tertiary);
@@ -747,6 +726,9 @@
 }
 
 .resultItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
   font-size: 13px;
   color: var(--color-text);
@@ -754,6 +736,7 @@
   border: none;
   background: none;
   text-align: left;
+  width: 100%;
   transition: background var(--transition-fast);
 }
 
@@ -846,10 +829,7 @@
 }
 
 .commentText {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  line-height: 1.55;
-  white-space: pre-wrap;
+  min-width: 0;
 }
 
 .commentX {

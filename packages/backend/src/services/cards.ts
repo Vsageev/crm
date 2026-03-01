@@ -1,8 +1,10 @@
 import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
+import { getAgent } from './agents.js';
+import { executeCardTask } from './agent-chat.js';
 
 export interface CardListQuery {
-  folderId?: string;
+  collectionId?: string;
   assigneeId?: string;
   search?: string;
   limit?: number;
@@ -10,7 +12,7 @@ export interface CardListQuery {
 }
 
 export interface CreateCardData {
-  folderId: string;
+  collectionId: string;
   name: string;
   description?: string | null;
   customFields?: Record<string, unknown>;
@@ -23,7 +25,7 @@ export interface UpdateCardData {
   description?: string | null;
   customFields?: Record<string, unknown>;
   assigneeId?: string | null;
-  folderId?: string;
+  collectionId?: string;
   position?: number;
 }
 
@@ -33,8 +35,8 @@ export async function listCards(query: CardListQuery) {
 
   let all = store.getAll('cards') as any[];
 
-  if (query.folderId) {
-    all = all.filter((c: any) => c.folderId === query.folderId);
+  if (query.collectionId) {
+    all = all.filter((c: any) => c.collectionId === query.collectionId);
   }
 
   if (query.assigneeId) {
@@ -61,7 +63,15 @@ export async function listCards(query: CardListQuery) {
     if (card.assigneeId) {
       const user = store.getById('users', card.assigneeId) as any;
       if (user) {
-        assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName };
+        assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName, type: 'user' as const };
+      } else {
+        const agent = store.getById('agents', card.assigneeId) as any;
+        if (agent) {
+          assignee = {
+            id: agent.id, firstName: agent.name, lastName: '', type: 'agent' as const,
+            avatarIcon: agent.avatarIcon ?? null, avatarBgColor: agent.avatarBgColor ?? null, avatarLogoColor: agent.avatarLogoColor ?? null,
+          };
+        }
       }
     }
 
@@ -93,7 +103,15 @@ export async function getCardById(id: string) {
   if ((card as any).assigneeId) {
     const user = store.getById('users', (card as any).assigneeId) as any;
     if (user) {
-      assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName };
+      assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName, type: 'user' as const };
+    } else {
+      const agentRec = store.getById('agents', (card as any).assigneeId) as any;
+      if (agentRec) {
+        assignee = {
+          id: agentRec.id, firstName: agentRec.name, lastName: '', type: 'agent' as const,
+          avatarIcon: agentRec.avatarIcon ?? null, avatarBgColor: agentRec.avatarBgColor ?? null, avatarLogoColor: agentRec.avatarLogoColor ?? null,
+        };
+      }
     }
   }
 
@@ -105,7 +123,7 @@ export async function getCardById(id: string) {
   for (const link of outgoing) {
     const target = store.getById('cards', link.targetCardId) as any;
     if (target) {
-      linkedCards.push({ linkId: link.id, id: target.id, name: target.name, folderId: target.folderId });
+      linkedCards.push({ linkId: link.id, id: target.id, name: target.name, collectionId: target.collectionId });
     }
   }
   for (const link of incoming) {
@@ -113,12 +131,28 @@ export async function getCardById(id: string) {
     if (source) {
       // Avoid duplicates if link exists both ways
       if (!linkedCards.some((lc) => lc.id === source.id)) {
-        linkedCards.push({ linkId: link.id, id: source.id, name: source.name, folderId: source.folderId });
+        linkedCards.push({ linkId: link.id, id: source.id, name: source.name, collectionId: source.collectionId });
       }
     }
   }
 
-  return { ...(card as any), tags, assignee, linkedCards };
+  // Load board placements
+  const boardCards = store.find('boardCards', (r: any) => r.cardId === id) as any[];
+  const boards: any[] = [];
+  for (const bc of boardCards) {
+    const board = store.getById('boards', bc.boardId) as any;
+    if (!board) continue;
+    const column = store.getById('boardColumns', bc.columnId) as any;
+    boards.push({
+      boardId: board.id,
+      boardName: board.name,
+      columnId: bc.columnId,
+      columnName: column?.name ?? null,
+      columnColor: column?.color ?? null,
+    });
+  }
+
+  return { ...(card as any), tags, assignee, linkedCards, boards };
 }
 
 export async function createCard(
@@ -128,12 +162,12 @@ export async function createCard(
   // Auto-calculate position if not provided
   let position = data.position;
   if (position === undefined) {
-    const existing = store.find('cards', (r: any) => r.folderId === data.folderId) as any[];
+    const existing = store.find('cards', (r: any) => r.collectionId === data.collectionId) as any[];
     position = existing.length;
   }
 
   const card = store.insert('cards', {
-    folderId: data.folderId,
+    collectionId: data.collectionId,
     name: data.name,
     description: data.description ?? null,
     customFields: data.customFields ?? {},
@@ -154,6 +188,22 @@ export async function createCard(
     });
   }
 
+  // Trigger agent if assigned to an active agent at creation time
+  if (data.assigneeId) {
+    const agent = getAgent(data.assigneeId);
+    if (agent && agent.status === 'active') {
+      executeCardTask(agent.id, {
+        id: card.id,
+        name: card.name,
+        description: card.description,
+        collectionId: card.collectionId,
+      }, {
+        onDone: () => {},
+        onError: (err) => console.error(`Agent task error for card ${card.id}:`, err),
+      });
+    }
+  }
+
   return card;
 }
 
@@ -162,6 +212,11 @@ export async function updateCard(
   data: UpdateCardData,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
+  // Capture current assignee before updating so we can detect changes
+  const current = store.getById('cards', id) as any;
+  if (!current) return null;
+  const prevAssigneeId = current.assigneeId as string | null;
+
   const setData: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value !== undefined) {
@@ -183,6 +238,23 @@ export async function updateCard(
       ipAddress: audit.ipAddress,
       userAgent: audit.userAgent,
     });
+  }
+
+  // Trigger agent if assignee changed to an active agent
+  if (data.assigneeId !== undefined && data.assigneeId && data.assigneeId !== prevAssigneeId) {
+    const agent = getAgent(data.assigneeId);
+    if (agent && agent.status === 'active') {
+      const refreshed = updated as any;
+      executeCardTask(agent.id, {
+        id,
+        name: refreshed.name,
+        description: refreshed.description,
+        collectionId: refreshed.collectionId,
+      }, {
+        onDone: () => {},
+        onError: (err) => console.error(`Agent task error for card ${id}:`, err),
+      });
+    }
   }
 
   return getCardById(id);
@@ -256,7 +328,38 @@ export async function listCardComments(
     let author = null;
     const user = store.getById('users', comment.authorId) as any;
     if (user) {
-      author = { id: user.id, firstName: user.firstName, lastName: user.lastName };
+      if (user.type === 'agent') {
+        const agent = user.agentId ? (store.getById('agents', user.agentId) as any) : null;
+        author = {
+          id: agent?.id ?? user.id,
+          firstName: agent?.name ?? user.firstName,
+          lastName: '',
+          type: 'agent' as const,
+          avatarIcon: agent?.avatarIcon ?? null,
+          avatarBgColor: agent?.avatarBgColor ?? null,
+          avatarLogoColor: agent?.avatarLogoColor ?? null,
+        };
+      } else {
+        author = {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          type: 'user' as const,
+        };
+      }
+    } else {
+      const agent = store.getById('agents', comment.authorId) as any;
+      if (agent) {
+        author = {
+          id: agent.id,
+          firstName: agent.name,
+          lastName: '',
+          type: 'agent' as const,
+          avatarIcon: agent.avatarIcon ?? null,
+          avatarBgColor: agent.avatarBgColor ?? null,
+          avatarLogoColor: agent.avatarLogoColor ?? null,
+        };
+      }
     }
     return { ...comment, author };
   });

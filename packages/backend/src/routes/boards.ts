@@ -18,24 +18,33 @@ import {
   moveCardOnBoard,
   removeCardFromBoard,
 } from '../services/boards.js';
+import {
+  listBoardCronTemplates,
+  createBoardCronTemplate,
+  updateBoardCronTemplate,
+  deleteBoardCronTemplate,
+} from '../services/board-cron.js';
 
 const columnSchema = z.object({
   name: z.string().min(1).max(255),
   color: z.string().max(7).optional(),
   position: z.number().int().min(0),
+  assignAgentId: z.uuid().nullable().optional(),
 });
 
 const createBoardBody = z.object({
   name: z.string().min(1).max(255),
   description: z.string().nullable().optional(),
-  folderId: z.uuid().nullable().optional(),
+  collectionId: z.uuid().nullable().optional(),
+  defaultCollectionId: z.uuid().nullable().optional(),
   columns: z.array(columnSchema).optional(),
 });
 
 const updateBoardBody = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().nullable().optional(),
-  folderId: z.uuid().nullable().optional(),
+  collectionId: z.uuid().nullable().optional(),
+  defaultCollectionId: z.uuid().nullable().optional(),
 });
 
 export async function boardRoutes(app: FastifyInstance) {
@@ -50,7 +59,7 @@ export async function boardRoutes(app: FastifyInstance) {
         tags: ['Boards'],
         summary: 'List boards',
         querystring: z.object({
-          folderId: z.uuid().optional(),
+          collectionId: z.uuid().optional(),
           search: z.string().optional(),
           limit: z.coerce.number().optional(),
           offset: z.coerce.number().optional(),
@@ -59,7 +68,7 @@ export async function boardRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { entries, total } = await listBoards({
-        folderId: request.query.folderId,
+        collectionId: request.query.collectionId,
         search: request.query.search,
         limit: request.query.limit,
         offset: request.query.offset,
@@ -220,6 +229,7 @@ export async function boardRoutes(app: FastifyInstance) {
           name: z.string().min(1).max(255).optional(),
           color: z.string().max(7).optional(),
           position: z.number().int().min(0).optional(),
+          assignAgentId: z.uuid().nullable().optional(),
         }),
       },
     },
@@ -331,6 +341,106 @@ export async function boardRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       await removeCardFromBoard(request.params.id, request.params.cardId);
+      return reply.status(204).send();
+    },
+  );
+
+  // ── Cron Templates ────────────────────────────────────────────────
+
+  // List cron templates for a board
+  typedApp.get(
+    '/api/boards/:id/cron-templates',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:read')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'List cron templates for a board',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const entries = listBoardCronTemplates(request.params.id);
+      return reply.send({ entries, total: entries.length });
+    },
+  );
+
+  // Create cron template
+  typedApp.post(
+    '/api/boards/:id/cron-templates',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Create a cron template for a board',
+        params: z.object({ id: z.uuid() }),
+        body: z.object({
+          columnId: z.uuid(),
+          name: z.string().min(1).max(255),
+          description: z.string().nullable().optional(),
+          assigneeId: z.uuid().nullable().optional(),
+          tagIds: z.array(z.uuid()).optional(),
+          cron: z.string().min(9).max(100),
+          enabled: z.boolean().optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const template = createBoardCronTemplate(
+        { ...request.body, boardId: request.params.id },
+        request.user.sub,
+      );
+
+      return reply.status(201).send(template);
+    },
+  );
+
+  // Update cron template
+  typedApp.patch(
+    '/api/boards/:id/cron-templates/:templateId',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Update a cron template',
+        params: z.object({ id: z.uuid(), templateId: z.uuid() }),
+        body: z.object({
+          columnId: z.uuid().optional(),
+          name: z.string().min(1).max(255).optional(),
+          description: z.string().nullable().optional(),
+          assigneeId: z.uuid().nullable().optional(),
+          tagIds: z.array(z.uuid()).optional(),
+          cron: z.string().min(9).max(100).optional(),
+          enabled: z.boolean().optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const updated = updateBoardCronTemplate(request.params.templateId, request.body);
+      if (!updated) return reply.notFound('Cron template not found');
+      return reply.send(updated);
+    },
+  );
+
+  // Delete cron template
+  typedApp.delete(
+    '/api/boards/:id/cron-templates/:templateId',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Delete a cron template',
+        params: z.object({ id: z.uuid(), templateId: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const deleted = deleteBoardCronTemplate(request.params.templateId);
+      if (!deleted) return reply.notFound('Cron template not found');
       return reply.status(204).send();
     },
   );

@@ -346,6 +346,7 @@ export function ConnectorsPage() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="danger"
                           onClick={() => handleDelete(connector.id)}
                           disabled={deleteLoading}
                         >

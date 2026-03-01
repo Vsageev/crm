@@ -5,6 +5,7 @@ import {
   Kanban,
   MessageSquare,
   Cpu,
+  Activity,
   Cable,
   HardDrive,
   Settings,
@@ -12,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../stores/useAuth';
 import { Tooltip } from '../ui';
-import { getPreferredBoardId, getPreferredFolderId } from '../lib/navigation-preferences';
+import { getPreferredBoardId, getPreferredCollectionId } from '../lib/navigation-preferences';
 import styles from './Sidebar.module.css';
 
 interface SidebarProps {
@@ -21,15 +22,16 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate }: SidebarProps) {
   const { user, logout } = useAuth();
-  const preferredFolderId = getPreferredFolderId();
+  const preferredCollectionId = getPreferredCollectionId();
   const preferredBoardId = getPreferredBoardId();
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-    { to: preferredFolderId ? `/folders/${preferredFolderId}` : '/folders', icon: FolderOpen, label: 'Collections' },
+    { to: preferredCollectionId ? `/collections/${preferredCollectionId}` : '/collections', icon: FolderOpen, label: 'Collections' },
     { to: preferredBoardId ? `/boards/${preferredBoardId}` : '/boards', icon: Kanban, label: 'Boards' },
     { to: '/inbox', icon: MessageSquare, label: 'Inbox' },
     { to: '/agents', icon: Cpu, label: 'Agents' },
+    { to: '/monitor', icon: Activity, label: 'Monitor' },
     { to: '/connectors', icon: Cable, label: 'Connectors' },
     { to: '/storage', icon: HardDrive, label: 'Storage' },
   ] as const;

@@ -61,7 +61,7 @@ export const tagSchema = z
   })
   .passthrough();
 
-export const folderSchema = z
+export const collectionSchema = z
   .object({
     id: z.string(),
     name: z.string(),
@@ -76,7 +76,7 @@ export const folderSchema = z
 export const cardSchema = z
   .object({
     id: z.string(),
-    folderId: z.string(),
+    collectionId: z.string(),
     name: z.string(),
     description: z.string().nullable(),
     customFields: z.record(z.string(), z.unknown()),
@@ -109,7 +109,7 @@ export const boardSchema = z
     id: z.string(),
     name: z.string(),
     description: z.string().nullable(),
-    folderId: z.string().nullable(),
+    collectionId: z.string().nullable(),
     isGeneral: z.boolean().optional(),
     createdById: z.string(),
     createdAt: z.string(),
@@ -285,6 +285,25 @@ export const messageDraftSchema = z
   })
   .passthrough();
 
+export const agentRunSchema = z
+  .object({
+    id: z.string(),
+    agentId: z.string(),
+    agentName: z.string(),
+    triggerType: z.enum(['chat', 'cron', 'card']),
+    status: z.enum(['running', 'completed', 'error']),
+    conversationId: z.string().nullable(),
+    cardId: z.string().nullable(),
+    cronJobId: z.string().nullable(),
+    errorMessage: z.string().nullable(),
+    startedAt: z.string(),
+    finishedAt: z.string().nullable(),
+    durationMs: z.number().nullable(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .passthrough();
+
 /**
  * Map of collection names to their Zod schemas.
  * Collections not in this map are skipped during validation (forward compat).
@@ -294,7 +313,7 @@ export const collectionSchemas: Record<string, z.ZodType> = {
   audit_logs: auditLogSchema,
   refresh_tokens: refreshTokenSchema,
   tags: tagSchema,
-  folders: folderSchema,
+  collections: collectionSchema,
   cards: cardSchema,
   card_tags: cardTagSchema,
   card_links: cardLinkSchema,
@@ -310,4 +329,5 @@ export const collectionSchemas: Record<string, z.ZodType> = {
   connectors: connectorSchema,
   card_comments: cardCommentSchema,
   message_drafts: messageDraftSchema,
+  agent_runs: agentRunSchema,
 };

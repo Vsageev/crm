@@ -18,7 +18,7 @@ import {
 } from '../services/cards.js';
 
 const createCardBody = z.object({
-  folderId: z.uuid(),
+  collectionId: z.uuid(),
   name: z.string().min(1).max(500),
   description: z.string().nullable().optional(),
   customFields: z.record(z.string(), z.unknown()).optional(),
@@ -31,7 +31,7 @@ const updateCardBody = z.object({
   description: z.string().nullable().optional(),
   customFields: z.record(z.string(), z.unknown()).optional(),
   assigneeId: z.uuid().nullable().optional(),
-  folderId: z.uuid().optional(),
+  collectionId: z.uuid().optional(),
   position: z.number().int().min(0).optional(),
 });
 
@@ -47,7 +47,7 @@ export async function cardRoutes(app: FastifyInstance) {
         tags: ['Cards'],
         summary: 'List cards',
         querystring: z.object({
-          folderId: z.uuid().optional(),
+          collectionId: z.uuid().optional(),
           assigneeId: z.uuid().optional(),
           search: z.string().optional(),
           limit: z.coerce.number().optional(),
@@ -57,7 +57,7 @@ export async function cardRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { entries, total } = await listCards({
-        folderId: request.query.folderId,
+        collectionId: request.query.collectionId,
         assigneeId: request.query.assigneeId,
         search: request.query.search,
         limit: request.query.limit,

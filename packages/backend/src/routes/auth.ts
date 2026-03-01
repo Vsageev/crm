@@ -80,6 +80,7 @@ export async function authRoutes(app: FastifyInstance) {
       firstName,
       lastName,
       isActive: true,
+      type: 'human',
       totpEnabled: false,
     });
 
@@ -91,6 +92,7 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        type: (user.type as string | undefined) ?? 'human',
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -105,6 +107,10 @@ export async function authRoutes(app: FastifyInstance) {
 
     if (!user) {
       throw ApiError.unauthorized('invalid_credentials', 'Invalid email or password');
+    }
+
+    if (user.type === 'agent') {
+      throw ApiError.forbidden('agent_account_login_forbidden', 'Agent users cannot sign in interactively');
     }
 
     if (!user.isActive) {
@@ -157,6 +163,7 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        type: (user.type as string | undefined) ?? 'human',
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -228,6 +235,7 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        type: (user.type as string | undefined) ?? 'human',
         createdAt: user.createdAt,
       },
       ...tokens,
@@ -260,6 +268,7 @@ export async function authRoutes(app: FastifyInstance) {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        type: (user.type as string | undefined) ?? 'human',
         isActive: user.isActive,
         totpEnabled: user.totpEnabled,
         createdAt: user.createdAt,

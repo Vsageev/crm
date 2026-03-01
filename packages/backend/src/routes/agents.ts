@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import { store } from '../db/index.js';
+import cron from 'node-cron';
 import {
   checkCliStatus,
   listPresets,
@@ -19,7 +20,13 @@ import {
   uploadAgentFile,
   createAgentFolder,
   deleteAgentFile,
+  listAgentGroups,
+  createAgentGroup,
+  updateAgentGroup,
+  deleteAgentGroup,
+  reorderAgentGroups,
 } from '../services/agents.js';
+import { syncAgentCronJobs } from '../services/agent-cron.js';
 
 export async function agentRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
@@ -91,6 +98,7 @@ export async function agentRoutes(app: FastifyInstance) {
           preset: z.string().min(1).max(100),
           apiKeyId: z.string().min(1),
           skipPermissions: z.boolean().optional(),
+          groupId: z.string().nullable().optional(),
           avatarIcon: z.string().max(50).optional(),
           avatarBgColor: z.string().max(20).optional(),
           avatarLogoColor: z.string().max(20).optional(),
@@ -105,6 +113,7 @@ export async function agentRoutes(app: FastifyInstance) {
         preset,
         apiKeyId,
         skipPermissions,
+        groupId,
         avatarIcon,
         avatarBgColor,
         avatarLogoColor,
@@ -127,6 +136,7 @@ export async function agentRoutes(app: FastifyInstance) {
           apiKeyPrefix: apiKey.keyPrefix as string,
           capabilities: (apiKey.permissions as string[]) || [],
           skipPermissions,
+          groupId,
           avatarIcon,
           avatarBgColor,
           avatarLogoColor,
@@ -175,12 +185,25 @@ export async function agentRoutes(app: FastifyInstance) {
           model: z.string().min(1).max(100).optional(),
           status: z.enum(['active', 'inactive', 'error']).optional(),
           skipPermissions: z.boolean().optional(),
+          groupId: z.string().nullable().optional(),
+          cronJobs: z.array(z.object({
+            id: z.string().min(1),
+            cron: z.string().min(1).refine((val) => cron.validate(val), { message: 'Invalid cron expression' }),
+            prompt: z.string().min(1).max(5000),
+            enabled: z.boolean(),
+          })).optional(),
         }),
       },
     },
     async (request, reply) => {
       const updated = updateAgent(request.params.id, request.body);
       if (!updated) return reply.notFound('Agent not found');
+
+      // Sync cron jobs if they were updated
+      if (request.body.cronJobs !== undefined) {
+        syncAgentCronJobs(request.params.id);
+      }
+
       return reply.send(updated);
     },
   );
@@ -201,6 +224,80 @@ export async function agentRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const deleted = await deleteAgent(request.params.id);
       if (!deleted) return reply.notFound('Agent not found');
+      return reply.status(204).send();
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Agent Group endpoints
+  // ---------------------------------------------------------------------------
+
+  typedApp.get(
+    '/api/agent-groups',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Agent Groups'],
+        summary: 'List all agent groups',
+      },
+    },
+    async (_request, reply) => {
+      return reply.send({ entries: listAgentGroups() });
+    },
+  );
+
+  typedApp.post(
+    '/api/agent-groups',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Groups'],
+        summary: 'Create an agent group',
+        body: z.object({
+          name: z.string().min(1).max(100),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const group = createAgentGroup(request.body.name);
+      return reply.status(201).send(group);
+    },
+  );
+
+  typedApp.patch(
+    '/api/agent-groups/:id',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Groups'],
+        summary: 'Update an agent group',
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          name: z.string().min(1).max(100).optional(),
+          order: z.number().int().min(0).optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const updated = updateAgentGroup(request.params.id, request.body);
+      if (!updated) return reply.notFound('Agent group not found');
+      return reply.send(updated);
+    },
+  );
+
+  typedApp.delete(
+    '/api/agent-groups/:id',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Groups'],
+        summary: 'Delete an agent group (agents become ungrouped)',
+        params: z.object({ id: z.string() }),
+      },
+    },
+    async (request, reply) => {
+      const deleted = deleteAgentGroup(request.params.id);
+      if (!deleted) return reply.notFound('Agent group not found');
       return reply.status(204).send();
     },
   );

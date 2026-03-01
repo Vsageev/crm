@@ -19,6 +19,7 @@ async function seed() {
     passwordHash: adminPasswordHash,
     firstName: 'Admin',
     lastName: 'User',
+    type: 'human',
     isActive: true,
     totpEnabled: false,
   });
@@ -28,6 +29,7 @@ async function seed() {
     passwordHash: managerPasswordHash,
     firstName: 'Maria',
     lastName: 'Johnson',
+    type: 'human',
     isActive: true,
     totpEnabled: false,
   });
@@ -37,6 +39,7 @@ async function seed() {
     passwordHash: agentPasswordHash,
     firstName: 'Alex',
     lastName: 'Smith',
+    type: 'human',
     isActive: true,
     totpEnabled: false,
   });
@@ -46,6 +49,7 @@ async function seed() {
     passwordHash: agentPasswordHash,
     firstName: 'Sarah',
     lastName: 'Williams',
+    type: 'human',
     isActive: true,
     totpEnabled: false,
   });

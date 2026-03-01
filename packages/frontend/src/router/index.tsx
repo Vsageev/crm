@@ -12,11 +12,11 @@ import { LoginPage, RegisterPage, TwoFactorSetupPage } from '../pages/auth';
 const DashboardPage = lazy(() =>
   import('../pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
 );
-const FoldersListPage = lazy(() =>
-  import('../pages/folders/FoldersListPage').then((m) => ({ default: m.FoldersListPage })),
+const CollectionsListPage = lazy(() =>
+  import('../pages/collections/CollectionsListPage').then((m) => ({ default: m.CollectionsListPage })),
 );
-const FolderDetailPage = lazy(() =>
-  import('../pages/folders/FolderDetailPage').then((m) => ({ default: m.FolderDetailPage })),
+const CollectionDetailPage = lazy(() =>
+  import('../pages/collections/CollectionDetailPage').then((m) => ({ default: m.CollectionDetailPage })),
 );
 const BoardsListPage = lazy(() =>
   import('../pages/boards/BoardsListPage').then((m) => ({ default: m.BoardsListPage })),
@@ -35,6 +35,9 @@ const SettingsPage = lazy(() =>
 );
 const AgentsPage = lazy(() =>
   import('../pages/AgentsPage').then((m) => ({ default: m.AgentsPage })),
+);
+const AgentMonitorPage = lazy(() =>
+  import('../pages/AgentMonitorPage').then((m) => ({ default: m.AgentMonitorPage })),
 );
 const ConnectorsPage = lazy(() =>
   import('../pages/ConnectorsPage').then((m) => ({ default: m.ConnectorsPage })),
@@ -81,13 +84,14 @@ export const router = createBrowserRouter([
             element: <AppLayout />,
             children: [
               { index: true, element: <SuspenseWrapper><DashboardPage /></SuspenseWrapper> },
-              { path: 'folders', element: <SuspenseWrapper><FoldersListPage /></SuspenseWrapper> },
-              { path: 'folders/:id', element: <SuspenseWrapper><FolderDetailPage /></SuspenseWrapper> },
+              { path: 'collections', element: <SuspenseWrapper><CollectionsListPage /></SuspenseWrapper> },
+              { path: 'collections/:id', element: <SuspenseWrapper><CollectionDetailPage /></SuspenseWrapper> },
               { path: 'cards/:id', element: <SuspenseWrapper><CardDetailPage /></SuspenseWrapper> },
               { path: 'boards', element: <SuspenseWrapper><BoardsListPage /></SuspenseWrapper> },
               { path: 'boards/:id', element: <SuspenseWrapper><BoardPage /></SuspenseWrapper> },
               { path: 'inbox', element: <SuspenseWrapper><InboxPage /></SuspenseWrapper> },
               { path: 'agents', element: <SuspenseWrapper><AgentsPage /></SuspenseWrapper> },
+              { path: 'monitor', element: <SuspenseWrapper><AgentMonitorPage /></SuspenseWrapper> },
               { path: 'connectors', element: <SuspenseWrapper><ConnectorsPage /></SuspenseWrapper> },
               { path: 'storage', element: <SuspenseWrapper><StoragePage /></SuspenseWrapper> },
               { path: 'settings', element: <SuspenseWrapper><SettingsPage /></SuspenseWrapper> },

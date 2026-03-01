@@ -25,7 +25,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
         >
           {children}
         </select>
-        {error && <span className={styles.errorText}>{error}</span>}
+        {error && <span className={styles.errorText} data-form-error>{error}</span>}
       </div>
     );
   },

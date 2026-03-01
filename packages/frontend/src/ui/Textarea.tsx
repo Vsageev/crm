@@ -23,7 +23,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           className={[styles.textarea, error && styles.error, className].filter(Boolean).join(' ')}
           {...props}
         />
-        {error && <span className={styles.errorText}>{error}</span>}
+        {error && <span className={styles.errorText} data-form-error>{error}</span>}
       </div>
     );
   },

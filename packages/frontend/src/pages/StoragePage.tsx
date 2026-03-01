@@ -387,6 +387,7 @@ export function StoragePage() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="danger"
                           onClick={() => handleDelete(entry.path)}
                           disabled={deleteLoading}
                         >

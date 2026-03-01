@@ -1,5 +1,8 @@
 import { store } from '../db/index.js';
 import { createAuditLog } from './audit-log.js';
+import { updateCard } from './cards.js';
+import { getOrCreateGeneralCollection } from './collections.js';
+import { stopAllBoardCronJobs } from './board-cron.js';
 
 const GENERAL_BOARD_NAMES = new Set(['general', 'general board']);
 
@@ -17,7 +20,7 @@ export function isGeneralBoard(board: unknown): boolean {
 }
 
 export interface BoardListQuery {
-  folderId?: string;
+  collectionId?: string;
   search?: string;
   limit?: number;
   offset?: number;
@@ -26,26 +29,30 @@ export interface BoardListQuery {
 export interface CreateBoardData {
   name: string;
   description?: string | null;
-  folderId?: string | null;
-  columns?: { name: string; color?: string; position: number }[];
+  collectionId?: string | null;
+  defaultCollectionId?: string | null;
+  columns?: { name: string; color?: string; position: number; assignAgentId?: string | null }[];
 }
 
 export interface UpdateBoardData {
   name?: string;
   description?: string | null;
-  folderId?: string | null;
+  collectionId?: string | null;
+  defaultCollectionId?: string | null;
 }
 
 export interface CreateColumnData {
   name: string;
   color?: string;
   position: number;
+  assignAgentId?: string | null;
 }
 
 export interface UpdateColumnData {
   name?: string;
   color?: string;
   position?: number;
+  assignAgentId?: string | null;
 }
 
 export async function listBoards(query: BoardListQuery) {
@@ -54,8 +61,8 @@ export async function listBoards(query: BoardListQuery) {
 
   let all = store.getAll('boards') as any[];
 
-  if (query.folderId) {
-    all = all.filter((b: any) => b.folderId === query.folderId);
+  if (query.collectionId) {
+    all = all.filter((b: any) => b.collectionId === query.collectionId);
   }
 
   if (query.search) {
@@ -79,13 +86,20 @@ export async function listBoards(query: BoardListQuery) {
 }
 
 export async function getBoardById(id: string) {
-  const board = store.getById('boards', id);
+  const board = store.getById('boards', id) as any;
   if (!board) return null;
+
+  // Lazy backfill: ensure defaultCollectionId is set for pre-existing boards
+  if (!board.defaultCollectionId) {
+    const generalFolder = await getOrCreateGeneralCollection();
+    board.defaultCollectionId = generalFolder.id;
+    store.update('boards', id, { defaultCollectionId: generalFolder.id });
+  }
 
   const columns = store.find('boardColumns', (r: any) => r.boardId === id) as any[];
   columns.sort((a, b) => a.position - b.position);
 
-  return { ...(board as any), columns };
+  return { ...board, columns };
 }
 
 export async function getBoardWithCards(id: string) {
@@ -104,7 +118,15 @@ export async function getBoardWithCards(id: string) {
     if (card.assigneeId) {
       const user = store.getById('users', card.assigneeId) as any;
       if (user) {
-        assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName };
+        assignee = { id: user.id, firstName: user.firstName, lastName: user.lastName, type: 'user' as const };
+      } else {
+        const agent = store.getById('agents', card.assigneeId) as any;
+        if (agent) {
+          assignee = {
+            id: agent.id, firstName: agent.name, lastName: '', type: 'agent' as const,
+            avatarIcon: agent.avatarIcon ?? null, avatarBgColor: agent.avatarBgColor ?? null, avatarLogoColor: agent.avatarLogoColor ?? null,
+          };
+        }
       }
     }
 
@@ -133,10 +155,17 @@ export async function createBoard(
   const { columns, ...boardData } = data;
   const isGeneral = GENERAL_BOARD_NAMES.has(normalizeName(boardData.name));
 
+  let defaultCollectionId = boardData.defaultCollectionId ?? null;
+  if (!defaultCollectionId) {
+    const generalFolder = await getOrCreateGeneralCollection(audit);
+    defaultCollectionId = generalFolder.id;
+  }
+
   const board = store.insert('boards', {
     name: boardData.name,
     description: boardData.description ?? null,
-    folderId: boardData.folderId ?? null,
+    collectionId: boardData.collectionId ?? null,
+    defaultCollectionId,
     isGeneral,
     createdById: audit?.userId,
   }) as any;
@@ -149,6 +178,7 @@ export async function createBoard(
         name: col.name,
         color: col.color ?? '#6B7280',
         position: col.position,
+        assignAgentId: col.assignAgentId ?? null,
       });
     }
   }
@@ -203,6 +233,10 @@ export async function deleteBoard(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
+  // Stop cron jobs and remove cron templates
+  stopAllBoardCronJobs(id);
+  store.deleteWhere('boardCronTemplates', (r: any) => r.boardId === id);
+
   // Remove board columns and board cards
   store.deleteWhere('boardColumns', (r: any) => r.boardId === id);
   store.deleteWhere('boardCards', (r: any) => r.boardId === id);
@@ -231,6 +265,7 @@ export async function createColumn(boardId: string, data: CreateColumnData) {
     name: data.name,
     color: data.color ?? '#6B7280',
     position: data.position,
+    assignAgentId: data.assignAgentId ?? null,
   });
 }
 
@@ -252,6 +287,21 @@ export async function deleteColumn(columnId: string) {
   return store.delete('boardColumns', columnId) ?? null;
 }
 
+// ── Auto-assign agent helper ──────────────────────────────────────────
+
+async function tryAutoAssignAgent(columnId: string, cardId: string) {
+  const column = store.getById('boardColumns', columnId) as any;
+  if (!column?.assignAgentId) return;
+
+  const card = store.getById('cards', cardId) as any;
+  if (!card) return;
+
+  // Skip if card is already assigned to this agent
+  if (card.assigneeId === column.assignAgentId) return;
+
+  await updateCard(cardId, { assigneeId: column.assignAgentId });
+}
+
 // ── Board-Card placement ─────────────────────────────────────────────
 
 export async function addCardToBoard(boardId: string, cardId: string, columnId: string, position?: number) {
@@ -266,17 +316,23 @@ export async function addCardToBoard(boardId: string, cardId: string, columnId: 
     pos = columnCards.length;
   }
 
-  return store.insert('boardCards', {
+  const boardCard = store.insert('boardCards', {
     boardId,
     cardId,
     columnId,
     position: pos,
   });
+
+  await tryAutoAssignAgent(columnId, cardId);
+
+  return boardCard;
 }
 
 export async function moveCardOnBoard(boardId: string, cardId: string, columnId: string, position?: number) {
   const boardCard = store.findOne('boardCards', (r: any) => r.boardId === boardId && r.cardId === cardId) as any;
   if (!boardCard) return null;
+
+  const previousColumnId = boardCard.columnId;
 
   let pos = position;
   if (pos === undefined) {
@@ -284,11 +340,17 @@ export async function moveCardOnBoard(boardId: string, cardId: string, columnId:
     pos = columnCards.length;
   }
 
-  return store.update('boardCards', boardCard.id, {
+  const updated = store.update('boardCards', boardCard.id, {
     columnId,
     position: pos,
     updatedAt: new Date().toISOString(),
   }) ?? null;
+
+  if (updated && previousColumnId !== columnId) {
+    await tryAutoAssignAgent(columnId, cardId);
+  }
+
+  return updated;
 }
 
 export async function removeCardFromBoard(boardId: string, cardId: string) {
