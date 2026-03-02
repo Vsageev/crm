@@ -40,6 +40,7 @@ import { api, apiUpload, ApiError } from '../lib/api';
 import { formatFileSize, formatFileDate, isTextPreviewable, isImagePreviewable, isPreviewable } from '../lib/file-utils';
 import { scrollToFirstError } from '../lib/scroll-to-error';
 import { FilePreviewModal } from '../components/FilePreviewModal';
+import { FileSystemBrowserModal } from '../components/FileSystemBrowserModal';
 import { AgentAvatar, AgentAvatarPicker, randomPalette, randomIcon, type AvatarConfig } from '../components/AgentAvatar';
 import {
   getLatestStreamingAgentChatStream,
@@ -278,10 +279,7 @@ function AgentFiles({ agentId }: { agentId: string }) {
   const [folderName, setFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
 
-  const [showNewRef, setShowNewRef] = useState(false);
-  const [refName, setRefName] = useState('');
-  const [refTarget, setRefTarget] = useState('');
-  const [creatingRef, setCreatingRef] = useState(false);
+  const [showFsBrowser, setShowFsBrowser] = useState(false);
 
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -320,7 +318,6 @@ function AgentFiles({ agentId }: { agentId: string }) {
   function navigateTo(dirPath: string) {
     setCurrentPath(dirPath);
     setShowNewFolder(false);
-    setShowNewRef(false);
     setDeletingPath(null);
   }
 
@@ -347,25 +344,21 @@ function AgentFiles({ agentId }: { agentId: string }) {
     }
   }
 
-  async function handleCreateReference() {
-    if (!refName.trim() || !refTarget.trim()) return;
-    setCreatingRef(true);
+  async function handleCreateReference(targetPath: string) {
+    const name = targetPath.split('/').filter(Boolean).pop();
+    if (!name) return;
+    setShowFsBrowser(false);
     setError('');
     try {
       await api(`/agents/${agentId}/files/references`, {
         method: 'POST',
-        body: JSON.stringify({ path: currentPath, name: refName.trim(), target: refTarget.trim() }),
+        body: JSON.stringify({ path: currentPath, name, target: targetPath }),
       });
-      setShowNewRef(false);
-      setRefName('');
-      setRefTarget('');
       setSuccess('Reference created');
       await fetchEntries(currentPath);
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create reference');
-    } finally {
-      setCreatingRef(false);
     }
   }
 
@@ -527,7 +520,6 @@ function AgentFiles({ agentId }: { agentId: string }) {
                 onClick={() => {
                   setShowNewFolder(!showNewFolder);
                   setFolderName('');
-                  setShowNewRef(false);
                 }}
               >
                 <FolderPlus size={14} />
@@ -536,12 +528,7 @@ function AgentFiles({ agentId }: { agentId: string }) {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => {
-                  setShowNewRef(!showNewRef);
-                  setRefName('');
-                  setRefTarget('');
-                  setShowNewFolder(false);
-                }}
+                onClick={() => setShowFsBrowser(true)}
               >
                 <Link2 size={14} />
                 Reference
@@ -568,39 +555,6 @@ function AgentFiles({ agentId }: { agentId: string }) {
                 {creatingFolder ? 'Creating...' : 'Create'}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
-                Cancel
-              </Button>
-            </div>
-          )}
-
-          {showNewRef && (
-            <div className={styles.filesNewFolderRow}>
-              <div className={styles.filesNewFolderIcon}>
-                <Link2 size={18} className={styles.filesIconReference} />
-              </div>
-              <Input
-                label=""
-                placeholder="Reference name"
-                value={refName}
-                onChange={(e) => setRefName(e.target.value)}
-                onKeyDown={(e: KeyboardEvent) => {
-                  if (e.key === 'Escape') setShowNewRef(false);
-                }}
-              />
-              <Input
-                label=""
-                placeholder="Target path (e.g. /tmp)"
-                value={refTarget}
-                onChange={(e) => setRefTarget(e.target.value)}
-                onKeyDown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') handleCreateReference();
-                  if (e.key === 'Escape') setShowNewRef(false);
-                }}
-              />
-              <Button size="sm" onClick={handleCreateReference} disabled={creatingRef || !refName.trim() || !refTarget.trim()}>
-                {creatingRef ? 'Creating...' : 'Create'}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowNewRef(false)}>
                 Cancel
               </Button>
             </div>
@@ -710,6 +664,13 @@ function AgentFiles({ agentId }: { agentId: string }) {
           downloadUrl={`/api/agents/${agentId}/files/download?path=${encodeURIComponent(previewEntry.path)}`}
           onClose={() => setPreviewEntry(null)}
           onDownload={() => handleDownload(previewEntry.path)}
+        />
+      )}
+
+      {showFsBrowser && (
+        <FileSystemBrowserModal
+          onSelect={handleCreateReference}
+          onClose={() => setShowFsBrowser(false)}
         />
       )}
     </div>

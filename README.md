@@ -59,7 +59,6 @@ packages/
   frontend/    React 19 SPA, Vite, React Router
   shared/      Shared TypeScript types
   widget/      Embeddable lead capture form & chat widgets
-  ngrok/       ngrok tunnel utility for local webhook testing
 scripts/       Dev utility scripts (cert generation)
 docs/          Design system, API guidelines
 ```
@@ -105,10 +104,6 @@ Usage example:
 <script src="https://your-cdn.example.com/crm-form.js"></script>
 ```
 
-### `packages/ngrok`
-
-Utility package that runs an ngrok tunnel to expose the local backend (port 3000) for webhook testing during development.
-
 ### `scripts/`
 
 - **`generate-certs.sh`** — generates local HTTPS certificates via [mkcert](https://github.com/FiloSottile/mkcert) into `certs/`. Run with `pnpm certs:generate`.
@@ -120,8 +115,6 @@ Utility package that runs an ngrok tunnel to expose the local backend (port 3000
 | `pnpm dev`               | Start all dev servers in parallel           |
 | `pnpm dev:backend`       | Start backend only                          |
 | `pnpm dev:frontend`      | Start frontend only                         |
-| `pnpm dev:backend:ngrok` | Start backend + ngrok tunnel                |
-| `pnpm dev:ngrok`         | Start ngrok tunnel to local backend (3000)  |
 | `pnpm build`             | Build all packages                          |
 | `pnpm lint`              | Lint all packages                           |
 | `pnpm typecheck`         | Type-check all packages                     |
