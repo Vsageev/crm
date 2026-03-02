@@ -42,9 +42,18 @@
 }
 
 .title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text);
+}
+
+.infoIcon {
+  color: var(--color-text-tertiary);
+  cursor: help;
+  flex-shrink: 0;
 }
 
 .closeBtn {
@@ -210,15 +219,27 @@
   flex-shrink: 0;
 }
 
-.selectedPath {
+.pathInput {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: none;
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  transition: border-color var(--transition-fast);
+}
+
+.pathInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.pathInput:focus {
+  border-color: var(--color-link);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 .footerActions {

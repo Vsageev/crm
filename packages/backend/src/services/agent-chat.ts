@@ -1,11 +1,15 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { store } from '../db/index.js';
 import { env } from '../config/env.js';
 import { getAgent } from './agents.js';
 import { createAgentRun, completeAgentRun } from './agent-runs.js';
 
+const STORAGE_DIR = path.resolve(env.DATA_DIR, 'storage');
+
 const AGENTS_DIR = path.resolve(env.DATA_DIR, 'agents');
+export const RUNS_DIR = path.resolve(env.DATA_DIR, 'agent-runs');
 
 // ---------------------------------------------------------------------------
 // CLI command builders
@@ -26,9 +30,19 @@ const TASK_MODE_SYSTEM_PROMPT =
   'You are a task execution agent. Complete the assigned task and report results. ' +
   'Refer to CHANNELS.MD for response instructions.';
 
-function buildCliCommand(model: string, prompt: string, systemPrompt?: string): CliCommand {
+interface BuildCliOptions {
+  model: string;
+  modelId?: string | null;
+  thinkingLevel?: 'low' | 'medium' | 'high' | null;
+  prompt: string;
+  systemPrompt?: string;
+  imagePaths?: string[];
+}
+
+function buildCliCommand(options: BuildCliOptions): CliCommand {
+  const { model, modelId, thinkingLevel, prompt, imagePaths } = options;
   const modelLower = model.trim().toLowerCase();
-  const sysPrompt = systemPrompt ?? CHAT_MODE_SYSTEM_PROMPT;
+  const sysPrompt = options.systemPrompt ?? CHAT_MODE_SYSTEM_PROMPT;
 
   if (modelLower.includes('claude')) {
     const args = [
@@ -39,20 +53,41 @@ function buildCliCommand(model: string, prompt: string, systemPrompt?: string): 
       '--append-system-prompt',
       sysPrompt,
     ];
+    if (modelId) {
+      args.push('--model', modelId);
+    }
+    if (thinkingLevel) {
+      args.push('--effort', thinkingLevel);
+    }
+    // Pass image files for multimodal input.
+    if (imagePaths && imagePaths.length > 0) {
+      for (const imgPath of imagePaths) {
+        args.push('--image', imgPath);
+      }
+    }
     // Always run without interactive permission prompts.
     args.push('--dangerously-skip-permissions');
     return { bin: 'claude', args };
   }
   if (modelLower.includes('codex')) {
     // Run codex in regular exec mode for conversational responses.
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', '--'];
-    args.push(prompt);
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    if (modelId) {
+      args.push('--model', modelId);
+    }
+    if (thinkingLevel) {
+      args.push('-c', `model_reasoning_effort="${thinkingLevel}"`);
+    }
+    args.push('--', prompt);
     return { bin: 'codex', args };
   }
   if (modelLower.includes('qwen')) {
     const args = ['--output-format', 'text'];
     // Always run without interactive approvals.
     args.push('--approval-mode', 'yolo');
+    if (modelId) {
+      args.push('--model', modelId);
+    }
     // Use explicit prompt flag for compatibility with CLI variants that don't
     // accept positional prompt input in non-interactive mode.
     args.push('--prompt', prompt);
@@ -60,7 +95,11 @@ function buildCliCommand(model: string, prompt: string, systemPrompt?: string): 
   }
 
   // Fallback: treat model name as CLI binary with claude-like flags
-  return { bin: modelLower, args: ['-p', prompt, '--output-format', 'text'] };
+  const args = ['-p', prompt, '--output-format', 'text'];
+  if (modelId) {
+    args.push('--model', modelId);
+  }
+  return { bin: modelLower, args };
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +191,10 @@ export function listAgentConversations(agentId: string, limit = 50, offset = 0) 
     );
   });
 
-  const entries = sorted.slice(offset, offset + limit);
+  const entries = sorted.slice(offset, offset + limit).map((conv) => ({
+    ...conv,
+    isBusy: isAgentBusy(agentId, conv.id as string),
+  }));
   return { entries, total: all.length };
 }
 
@@ -204,6 +246,13 @@ export function renameAgentConversation(conversationId: string, subject: string)
   return store.update('conversations', conversationId, { subject });
 }
 
+/**
+ * Mark a conversation as read.
+ */
+export function markAgentConversationRead(conversationId: string) {
+  return store.update('conversations', conversationId, { isUnread: false });
+}
+
 // ---------------------------------------------------------------------------
 // Save messages
 // ---------------------------------------------------------------------------
@@ -214,8 +263,9 @@ interface SaveAgentMessageParams {
   conversationId: string;
   direction: 'inbound' | 'outbound';
   content: string;
-  type?: AgentConversationMessageType;
+  type?: AgentConversationMessageType | 'image';
   metadata?: Record<string, unknown> | null;
+  attachments?: unknown[] | null;
 }
 
 export function saveAgentConversationMessage(params: SaveAgentMessageParams) {
@@ -226,12 +276,14 @@ export function saveAgentConversationMessage(params: SaveAgentMessageParams) {
     type: params.type ?? 'text',
     content: params.content,
     status: params.direction === 'outbound' ? 'sent' : 'delivered',
-    attachments: null,
+    attachments: params.attachments ?? null,
     metadata,
   });
 
+  const markUnread = params.direction === 'inbound' && params.type !== 'system';
   store.update('conversations', params.conversationId, {
     lastMessageAt: new Date().toISOString(),
+    isUnread: markUnread,
   });
 
   return msg;
@@ -268,10 +320,74 @@ function autoTitleIfNeeded(conversationId: string, prompt: string) {
 // Conversation history builder
 // ---------------------------------------------------------------------------
 
+function parseAttachments(raw: unknown): Array<Record<string, unknown>> {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+  return [];
+}
+
+function storageDiskPath(storagePath: string): string {
+  return path.resolve(STORAGE_DIR, '.' + storagePath);
+}
+
+/** Returns disk paths for image files in the most recent image message of the conversation. */
+function getConversationImageDiskPaths(conversationId: string): string[] {
+  const imageMsgs = store
+    .find(
+      'messages',
+      (r: Record<string, unknown>) => r.conversationId === conversationId && r.type === 'image',
+    )
+    .sort(
+      (a: Record<string, unknown>, b: Record<string, unknown>) =>
+        new Date(b.createdAt as string).getTime() - new Date(a.createdAt as string).getTime(),
+    );
+
+  if (imageMsgs.length === 0) return [];
+
+  const latest = imageMsgs[0];
+  const attachments = parseAttachments(latest.attachments);
+  const paths: string[] = [];
+  for (const att of attachments) {
+    if (att.type === 'image' && typeof att.storagePath === 'string') {
+      const diskPath = storageDiskPath(att.storagePath);
+      if (fs.existsSync(diskPath)) {
+        paths.push(diskPath);
+      }
+    }
+  }
+  return paths;
+}
+
+function formatMessageForPrompt(msg: Record<string, unknown>): string {
+  const role = msg.direction === 'outbound' ? 'User' : 'Assistant';
+  const content = (msg.content as string) || '';
+
+  if (msg.type === 'image') {
+    const attachments = parseAttachments(msg.attachments);
+    const imageNames = attachments
+      .filter((a) => a.type === 'image' && typeof a.fileName === 'string')
+      .map((a) => a.fileName as string);
+    const imageLabel = imageNames.length > 0
+      ? `[Image: ${imageNames.join(', ')}]`
+      : '[Image]';
+    return content ? `${role}: ${imageLabel}\n${content}` : `${role}: ${imageLabel}`;
+  }
+
+  return `${role}: ${content}`;
+}
+
+/**
+ * Build the full prompt string from conversation history.
+ * If currentPrompt is provided, it is appended as the latest User turn (for text messages).
+ * If omitted, the history itself is the complete conversation (used when image is the last turn).
+ */
 function buildPromptWithHistory(
   agentId: string,
   conversationId: string,
-  currentPrompt: string,
+  currentPrompt?: string,
 ): string {
   const history = store
     .find('messages', (r: Record<string, unknown>) => r.conversationId === conversationId)
@@ -291,7 +407,7 @@ function buildPromptWithHistory(
     'See CHANNELS.MD for how to send progress updates and final answers. ' +
     'See CLAUDE.MD for endpoint examples.';
 
-  if (history.length === 0) {
+  if (history.length === 0 && currentPrompt) {
     return `${triggerContext}${promptPreamble}\n\nUser: ${currentPrompt}`;
   }
 
@@ -301,10 +417,12 @@ function buildPromptWithHistory(
     const isProgressUpdate = metadata?.agentChatUpdate === true && metadata?.isFinal === false;
     if (isProgressUpdate) continue;
 
-    const role = msg.direction === 'outbound' ? 'User' : 'Assistant';
-    lines.push(`${role}: ${msg.content}`);
+    lines.push(formatMessageForPrompt(msg));
   }
-  lines.push(`User: ${currentPrompt}`);
+
+  if (currentPrompt) {
+    lines.push(`User: ${currentPrompt}`);
+  }
 
   return `${triggerContext}${promptPreamble}\n\nContinue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
 }
@@ -324,10 +442,11 @@ interface AgentProcessResult {
 
 interface AgentProcessOptions {
   agentId: string;
-  agent: { name: string; model: string; apiKeyId: string; workspaceApiKey: string | null };
+  agent: { name: string; model: string; modelId: string | null; thinkingLevel: 'low' | 'medium' | 'high' | null; apiKeyId: string; workspaceApiKey: string | null };
   runKey: string;
   prompt: string;
   systemPrompt: string;
+  imagePaths?: string[];
   triggerType: 'chat' | 'cron' | 'card';
   triggerRef?: { conversationId?: string; cardId?: string; cronJobId?: string };
   onStdoutChunk?: (text: string) => void;
@@ -394,20 +513,178 @@ function findFinalAgentApiMessage(messages: Record<string, unknown>[]) {
   return [...messages].reverse().find((msg) => parseMetadata(msg.metadata)?.isFinal === true) ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// RunHandle — replaces ChildProcess in the running processes map
+// ---------------------------------------------------------------------------
+
+interface RunHandle {
+  runId: string;
+  pid: number;
+  stdoutPath: string;
+  stderrPath: string;
+  stdoutOffset: number;
+  pollTimer: ReturnType<typeof setInterval>;
+  watcher: fs.FSWatcher | null;
+  onStdoutChunk: ((text: string) => void) | null;
+  onExit: ((result: AgentProcessResult) => void) | null;
+}
+
+// Track running processes per run key so parallel chats/tasks can run.
+const runningProcesses = new Map<string, RunHandle>();
+
+function processKey(agentId: string, conversationId: string): string {
+  return `${agentId}:${conversationId}`;
+}
+
+// ---------------------------------------------------------------------------
+// attachToProcess — shared between fresh spawn and re-attach
+// ---------------------------------------------------------------------------
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface AttachOptions {
+  runId: string;
+  runKey: string;
+  pid: number;
+  stdoutPath: string;
+  stderrPath: string;
+  runStartedAt: number;
+  agentId: string;
+  onStdoutChunk?: ((text: string) => void) | null;
+  onExit?: ((result: AgentProcessResult) => void) | null;
+}
+
+function attachToProcess(options: AttachOptions): RunHandle {
+  const {
+    runId, runKey, pid, stdoutPath, stderrPath,
+    runStartedAt, agentId,
+  } = options;
+
+  let stdoutOffset = 0;
+
+  // Try to read any existing output (for re-attach catch-up)
+  try {
+    const stat = fs.statSync(stdoutPath);
+    // For re-attach we start from where file currently is — caller handles catch-up
+    stdoutOffset = stat.size;
+  } catch {
+    // File may not exist yet
+  }
+
+  function readNewOutput() {
+    try {
+      const stat = fs.statSync(stdoutPath);
+      if (stat.size <= handle.stdoutOffset) return;
+
+      const fd = fs.openSync(stdoutPath, 'r');
+      const buf = Buffer.alloc(stat.size - handle.stdoutOffset);
+      fs.readSync(fd, buf, 0, buf.length, handle.stdoutOffset);
+      fs.closeSync(fd);
+
+      handle.stdoutOffset = stat.size;
+      const text = buf.toString('utf-8');
+      if (text && handle.onStdoutChunk) {
+        handle.onStdoutChunk(text);
+      }
+    } catch {
+      // File may have been deleted or is being written to
+    }
+  }
+
+  function finalize() {
+    clearInterval(handle.pollTimer);
+    if (handle.watcher) {
+      handle.watcher.close();
+      handle.watcher = null;
+    }
+    runningProcesses.delete(runKey);
+
+    // Read final output
+    let stdout = '';
+    let stderr = '';
+    try { stdout = fs.readFileSync(stdoutPath, 'utf-8'); } catch { /* */ }
+    try { stderr = fs.readFileSync(stderrPath, 'utf-8'); } catch { /* */ }
+
+    markAgentLastActivity(agentId);
+    const hasError = !stdout.trim();
+    const errorMsg = hasError ? (stderr.trim() || 'Process exited') : null;
+    completeAgentRun(runId, errorMsg, { stdout, stderr });
+
+    if (handle.onExit) {
+      handle.onExit({ code: hasError ? 1 : 0, stdout, stderr, runStartedAt });
+    }
+  }
+
+  // Set up file watcher for stdout
+  let watcher: fs.FSWatcher | null = null;
+  try {
+    // Ensure the file exists before watching
+    if (fs.existsSync(stdoutPath)) {
+      watcher = fs.watch(stdoutPath, () => {
+        readNewOutput();
+      });
+      watcher.on('error', () => {
+        // Ignore watcher errors
+      });
+    }
+  } catch {
+    // fs.watch not always available
+  }
+
+  // Poll PID every 1s to detect exit
+  const pollTimer = setInterval(() => {
+    // Also read output on each poll in case watcher missed events
+    readNewOutput();
+
+    if (!isPidAlive(pid)) {
+      // Give a small delay for final I/O flush
+      setTimeout(() => {
+        readNewOutput();
+        finalize();
+      }, 500);
+    }
+  }, 1000);
+
+  const handle: RunHandle = {
+    runId,
+    pid,
+    stdoutPath,
+    stderrPath,
+    stdoutOffset,
+    pollTimer,
+    watcher,
+    onStdoutChunk: options.onStdoutChunk ?? null,
+    onExit: options.onExit ?? null,
+  };
+
+  runningProcesses.set(runKey, handle);
+  return handle;
+}
+
+// ---------------------------------------------------------------------------
+// runAgentProcess — spawns detached, writes to files
+// ---------------------------------------------------------------------------
+
 function runAgentProcess(options: AgentProcessOptions) {
   const workDir = path.join(AGENTS_DIR, options.agentId);
-  const { bin, args } = buildCliCommand(options.agent.model, options.prompt, options.systemPrompt);
+  const { bin, args } = buildCliCommand({
+    model: options.agent.model,
+    modelId: options.agent.modelId,
+    thinkingLevel: options.agent.thinkingLevel,
+    prompt: options.prompt,
+    systemPrompt: options.systemPrompt,
+    imagePaths: options.imagePaths,
+  });
   const childEnv = buildChildEnv(options.agent);
 
-  const child = spawn(bin, args, {
-    cwd: workDir,
-    env: childEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  runningProcesses.set(options.runKey, child);
-
-  // Record the agent run
+  // Record the agent run first to get runId for log directory
   const agentRun = createAgentRun({
     agentId: options.agentId,
     agentName: options.agent.name,
@@ -418,61 +695,281 @@ function runAgentProcess(options: AgentProcessOptions) {
   });
   const runId = agentRun.id as string;
 
-  let stdout = '';
-  let stderr = '';
-  const runStartedAt = Date.now();
-  let settled = false;
+  // Create run log directory
+  const runLogDir = path.join(RUNS_DIR, runId);
+  fs.mkdirSync(runLogDir, { recursive: true });
 
-  const settle = (callback: () => void) => {
-    if (settled) return;
-    settled = true;
-    runningProcesses.delete(options.runKey);
-    callback();
+  const stdoutPath = path.join(runLogDir, 'stdout.log');
+  const stderrPath = path.join(runLogDir, 'stderr.log');
+
+  // Open file descriptors for stdout/stderr
+  const stdoutFd = fs.openSync(stdoutPath, 'w');
+  const stderrFd = fs.openSync(stderrPath, 'w');
+
+  let child;
+  try {
+    child = spawn(bin, args, {
+      cwd: workDir,
+      env: childEnv,
+      detached: true,
+      stdio: ['ignore', stdoutFd, stderrFd],
+    });
+  } catch (err) {
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+    completeAgentRun(runId, (err as Error).message);
+    options.onSpawnError(err as Error);
+    return;
+  }
+
+  // Unref so server can exit without killing the child
+  child.unref();
+
+  // Close FDs in parent — child owns them now
+  fs.closeSync(stdoutFd);
+  fs.closeSync(stderrFd);
+
+  const pid = child.pid!;
+  const runStartedAt = Date.now();
+
+  // Update DB with PID and paths
+  store.update('agent_runs', runId, {
+    pid,
+    stdoutPath,
+    stderrPath,
+  });
+
+  // Handle spawn errors (e.g. ENOENT)
+  child.on('error', (err) => {
+    // The process may not have started at all
+    const handle = runningProcesses.get(options.runKey);
+    if (handle) {
+      clearInterval(handle.pollTimer);
+      if (handle.watcher) handle.watcher.close();
+      runningProcesses.delete(options.runKey);
+    }
+    completeAgentRun(runId, err.message, { stderr: err.message });
+    options.onSpawnError(err);
+  });
+
+  // Attach monitoring — start reading from offset 0 since we just created the file
+  const handle = attachToProcess({
+    runId,
+    runKey: options.runKey,
+    pid,
+    stdoutPath,
+    stderrPath,
+    runStartedAt,
+    agentId: options.agentId,
+    onStdoutChunk: options.onStdoutChunk,
+    onExit: options.onExit,
+  });
+
+  // For fresh spawns, start reading from byte 0
+  handle.stdoutOffset = 0;
+}
+
+// ---------------------------------------------------------------------------
+// reattachRunningProcess — called from reconcileRunsOnStartup
+// ---------------------------------------------------------------------------
+
+export function reattachRunningProcess(run: Record<string, unknown>) {
+  const agentId = run.agentId as string;
+  const conversationId = run.conversationId as string | null;
+  const cronJobId = run.cronJobId as string | null;
+  const cardId = run.cardId as string | null;
+  const pid = run.pid as number;
+  const runId = run.id as string;
+  const stdoutPath = run.stdoutPath as string;
+  const stderrPath = run.stderrPath as string;
+  const triggerType = run.triggerType as 'chat' | 'cron' | 'card';
+
+  // Reconstruct the run key
+  let runKey: string;
+  if (triggerType === 'chat' && conversationId) {
+    runKey = processKey(agentId, conversationId);
+  } else if (triggerType === 'cron' && cronJobId) {
+    runKey = `${agentId}:cron:${cronJobId}`;
+  } else if (triggerType === 'card' && cardId) {
+    runKey = `${agentId}:card:${cardId}`;
+  } else {
+    runKey = `${agentId}:${runId}`;
+  }
+
+  if (runningProcesses.has(runKey)) return;
+
+  const runStartedAt = new Date(run.startedAt as string).getTime();
+
+  const onExit = (result: AgentProcessResult) => {
+    // For chat triggers, save the final message to conversation
+    if (triggerType === 'chat' && conversationId) {
+      const updatesFromApi = listAgentApiUpdates(conversationId, runStartedAt);
+      const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
+      const stdoutText = result.stdout.trim();
+
+      if (!finalApiMessage && stdoutText) {
+        saveMessage(conversationId, 'inbound', stdoutText);
+      } else if (!finalApiMessage && updatesFromApi.length === 0 && !stdoutText) {
+        // No output at all — don't save empty message for background re-attach
+      }
+    }
   };
 
-  child.stdout!.on('data', (chunk: Buffer) => {
-    const text = chunk.toString();
-    stdout += text;
-    options.onStdoutChunk?.(text);
+  attachToProcess({
+    runId,
+    runKey,
+    pid,
+    stdoutPath,
+    stderrPath,
+    runStartedAt,
+    agentId,
+    onStdoutChunk: null, // No SSE client yet
+    onExit,
   });
 
-  child.stderr!.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
+  console.log(`[agent-chat] Re-attached to process PID=${pid} for run ${runId} (${runKey})`);
+}
 
-  child.on('close', (code) => {
-    settle(() => {
-      markAgentLastActivity(options.agentId);
-      const hasError = (code ?? 1) !== 0 && !stdout.trim();
-      const errorMsg = hasError ? (stderr.trim() || `Process exited with code ${code}`) : null;
-      completeAgentRun(runId, errorMsg, { stdout, stderr });
-      options.onExit({ code, stdout, stderr, runStartedAt });
-    });
-  });
+// ---------------------------------------------------------------------------
+// subscribeToRunOutput — for SSE reconnection
+// ---------------------------------------------------------------------------
 
-  child.on('error', (err) => {
-    settle(() => {
-      completeAgentRun(runId, err.message, { stderr: err.message });
-      options.onSpawnError(err);
-    });
-  });
+export interface RunOutputSubscriber {
+  onChunk: (text: string) => void;
+  onDone: (message: Record<string, unknown> | null) => void;
+  onError: (error: string) => void;
+}
+
+export function subscribeToRunOutput(
+  agentId: string,
+  conversationId: string,
+  subscriber: RunOutputSubscriber,
+): boolean {
+  const key = processKey(agentId, conversationId);
+  const handle = runningProcesses.get(key);
+  if (!handle) return false;
+
+  // Send catch-up: all existing output from file
+  try {
+    const existing = fs.readFileSync(handle.stdoutPath, 'utf-8');
+    if (existing) {
+      subscriber.onChunk(existing);
+    }
+  } catch {
+    // File may not exist
+  }
+
+  // Hook into live updates
+  const prevOnStdoutChunk = handle.onStdoutChunk;
+  handle.onStdoutChunk = (text: string) => {
+    prevOnStdoutChunk?.(text);
+    subscriber.onChunk(text);
+  };
+
+  // Hook into exit
+  const prevOnExit = handle.onExit;
+  handle.onExit = (result: AgentProcessResult) => {
+    prevOnExit?.(result);
+
+    const hasError = (result.code ?? 1) !== 0 && !result.stdout.trim();
+    if (hasError) {
+      const errMsg = result.stderr.trim() || `Process exited with code ${result.code}`;
+      subscriber.onError(errMsg);
+    } else {
+      // Find the saved message
+      const updatesFromApi = listAgentApiUpdates(conversationId, result.runStartedAt);
+      const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
+
+      if (finalApiMessage) {
+        subscriber.onDone(finalApiMessage);
+      } else if (result.stdout.trim()) {
+        // The message was already saved by the onExit handler in reattach or the original spawn
+        // Try to find it
+        const msgs = store
+          .find('messages', (r: Record<string, unknown>) =>
+            r.conversationId === conversationId && r.direction === 'inbound',
+          )
+          .sort(
+            (a: Record<string, unknown>, b: Record<string, unknown>) =>
+              new Date(b.createdAt as string).getTime() - new Date(a.createdAt as string).getTime(),
+          );
+        subscriber.onDone(msgs[0] ?? null);
+      } else if (updatesFromApi.length > 0) {
+        subscriber.onDone(updatesFromApi[updatesFromApi.length - 1]);
+      } else {
+        subscriber.onDone(null);
+      }
+    }
+  };
+
+  return true;
 }
 
 // ---------------------------------------------------------------------------
 // Execute prompt (chat)
 // ---------------------------------------------------------------------------
 
-// Track running processes per run key so parallel chats/tasks can run.
-const runningProcesses = new Map<string, ChildProcess>();
-
-function processKey(agentId: string, conversationId: string): string {
-  return `${agentId}:${conversationId}`;
-}
-
 export interface ExecutePromptCallbacks {
   onChunk: (text: string) => void;
   onDone: (message: Record<string, unknown>) => void;
   onError: (error: string) => void;
+}
+
+function spawnChatProcess(
+  agentId: string,
+  conversationId: string,
+  fullPrompt: string,
+  imagePaths: string[],
+  callbacks: ExecutePromptCallbacks,
+) {
+  const agent = getAgent(agentId);
+  if (!agent) {
+    callbacks.onError('Agent not found');
+    return;
+  }
+
+  const key = processKey(agentId, conversationId);
+
+  runAgentProcess({
+    agentId,
+    agent,
+    runKey: key,
+    prompt: fullPrompt,
+    systemPrompt: CHAT_MODE_SYSTEM_PROMPT,
+    imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+    triggerType: 'chat',
+    triggerRef: { conversationId },
+    onStdoutChunk: (text) => {
+      callbacks.onChunk(text);
+    },
+    onExit: ({ code, stdout, stderr, runStartedAt }) => {
+      if ((code ?? 1) !== 0 && !stdout.trim()) {
+        const errMsg = stderr.trim() || `Process exited with code ${code}`;
+        callbacks.onError(errMsg);
+        return;
+      }
+
+      const updatesFromApi = listAgentApiUpdates(conversationId, runStartedAt);
+      const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
+      const stdoutText = stdout.trim();
+
+      let msg: Record<string, unknown>;
+      if (finalApiMessage) {
+        msg = finalApiMessage;
+      } else if (stdoutText) {
+        msg = saveMessage(conversationId, 'inbound', stdoutText);
+      } else if (updatesFromApi.length > 0) {
+        msg = updatesFromApi[updatesFromApi.length - 1];
+      } else {
+        msg = saveMessage(conversationId, 'inbound', '(empty response)');
+      }
+
+      callbacks.onDone(msg);
+    },
+    onSpawnError: (err) => {
+      callbacks.onError(`Failed to start CLI: ${err.message}`);
+    },
+  });
 }
 
 export function executePrompt(
@@ -502,49 +999,37 @@ export function executePrompt(
   // Auto-title conversation on first message
   autoTitleIfNeeded(conversationId, prompt);
 
-  runAgentProcess({
-    agentId,
-    agent,
+  spawnChatProcess(agentId, conversationId, fullPrompt, [], callbacks);
+}
 
-    runKey: key,
-    prompt: fullPrompt,
-    systemPrompt: CHAT_MODE_SYSTEM_PROMPT,
-    triggerType: 'chat',
-    triggerRef: { conversationId },
-    onStdoutChunk: (text) => {
-      callbacks.onChunk(text);
-    },
-    onExit: ({ code, stdout, stderr, runStartedAt }) => {
-      if ((code ?? 1) !== 0 && !stdout.trim()) {
-        const errMsg = stderr.trim() || `Process exited with code ${code}`;
-        callbacks.onError(errMsg);
-        return;
-      }
+/**
+ * Trigger the agent to respond to the latest message already in the conversation
+ * (used after an image upload — the image message is the user's turn, no new text message needed).
+ */
+export function executeRespondToLastMessage(
+  agentId: string,
+  conversationId: string,
+  callbacks: ExecutePromptCallbacks,
+) {
+  const agent = getAgent(agentId);
+  if (!agent) {
+    callbacks.onError('Agent not found');
+    return;
+  }
 
-      const updatesFromApi = listAgentApiUpdates(conversationId, runStartedAt);
-      const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
-      const stdoutText = stdout.trim();
+  const key = processKey(agentId, conversationId);
+  if (runningProcesses.has(key)) {
+    callbacks.onError('Agent is already processing a prompt');
+    return;
+  }
 
-      let msg: Record<string, unknown>;
-      if (finalApiMessage) {
-        // Agent already posted a final API message; avoid duplicating stdout.
-        msg = finalApiMessage;
-      } else if (stdoutText) {
-        // Fallback for agents that still return output only through stdout.
-        msg = saveMessage(conversationId, 'inbound', stdoutText);
-      } else if (updatesFromApi.length > 0) {
-        // No stdout and no explicit final marker; use latest API update.
-        msg = updatesFromApi[updatesFromApi.length - 1];
-      } else {
-        msg = saveMessage(conversationId, 'inbound', '(empty response)');
-      }
+  // Build prompt from history only — the last image message is already the user's turn
+  const fullPrompt = buildPromptWithHistory(agentId, conversationId);
 
-      callbacks.onDone(msg);
-    },
-    onSpawnError: (err) => {
-      callbacks.onError(`Failed to start CLI: ${err.message}`);
-    },
-  });
+  // Extract image disk paths from the most recent image message
+  const imagePaths = getConversationImageDiskPaths(conversationId);
+
+  spawnChatProcess(agentId, conversationId, fullPrompt, imagePaths, callbacks);
 }
 
 export function isAgentBusy(agentId: string, conversationId: string): boolean {

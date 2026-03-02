@@ -1,18 +1,25 @@
+import crypto from 'node:crypto';
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import { store } from '../db/index.js';
 import { getAgent } from '../services/agents.js';
+import { uploadFile } from '../services/storage.js';
+import { validateUploadedFile } from '../utils/file-validation.js';
 import {
   listAgentConversations,
   createAgentConversation,
   validateConversationOwnership,
   deleteAgentConversation,
   renameAgentConversation,
+  markAgentConversationRead,
   saveAgentConversationMessage,
   executePrompt,
+  executeRespondToLastMessage,
   isAgentBusy,
+  subscribeToRunOutput,
 } from '../services/agent-chat.js';
 
 export async function agentChatRoutes(app: FastifyInstance) {
@@ -88,6 +95,29 @@ export async function agentChatRoutes(app: FastifyInstance) {
       if (!conv) return reply.notFound('Conversation not found');
 
       const updated = renameAgentConversation(request.params.conversationId, request.body.subject);
+      return reply.send(updated);
+    },
+  );
+
+  // Mark a conversation as read
+  typedApp.patch(
+    '/api/agents/:id/chat/conversations/:conversationId/read',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Chat'],
+        summary: 'Mark an agent chat conversation as read',
+        params: z.object({ id: z.string(), conversationId: z.string() }),
+      },
+    },
+    async (request, reply) => {
+      const agent = getAgent(request.params.id);
+      if (!agent) return reply.notFound('Agent not found');
+
+      const conv = validateConversationOwnership(request.params.conversationId, request.params.id);
+      if (!conv) return reply.notFound('Conversation not found');
+
+      const updated = markAgentConversationRead(request.params.conversationId);
       return reply.send(updated);
     },
   );
@@ -244,6 +274,186 @@ export async function agentChatRoutes(app: FastifyInstance) {
           reply.raw.end();
         },
       });
+    },
+  );
+
+  // Trigger agent to respond to the latest message (e.g. after image upload) — SSE streaming
+  typedApp.post(
+    '/api/agents/:id/chat/respond',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Chat'],
+        summary: 'Trigger agent to respond to the latest conversation message (e.g. after image upload)',
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          conversationId: z.string(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const agent = getAgent(request.params.id);
+      if (!agent) return reply.notFound('Agent not found');
+
+      if (isAgentBusy(request.params.id, request.body.conversationId)) {
+        return reply.status(409).send({
+          statusCode: 409,
+          error: 'Conflict',
+          message: 'Agent is already processing a prompt',
+        });
+      }
+
+      const conv = validateConversationOwnership(request.body.conversationId, request.params.id);
+      if (!conv) return reply.notFound('Conversation not found');
+
+      // Set SSE headers
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      executeRespondToLastMessage(request.params.id, request.body.conversationId, {
+        onChunk(text) {
+          reply.raw.write(`data: ${JSON.stringify(text)}\n\n`);
+        },
+        onDone(message) {
+          reply.raw.write(`event: done\ndata: ${JSON.stringify({ messageId: message.id })}\n\n`);
+          reply.raw.end();
+        },
+        onError(error) {
+          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
+          reply.raw.end();
+        },
+      });
+    },
+  );
+
+  // Reconnect to a running agent stream (SSE)
+  typedApp.get(
+    '/api/agents/:id/chat/stream',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Agent Chat'],
+        summary: 'Reconnect to a running agent stream via SSE',
+        params: z.object({ id: z.string() }),
+        querystring: z.object({
+          conversationId: z.string(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const agent = getAgent(request.params.id);
+      if (!agent) return reply.notFound('Agent not found');
+
+      if (!isAgentBusy(request.params.id, request.query.conversationId)) {
+        return reply.status(204).send();
+      }
+
+      // Set SSE headers
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const subscribed = subscribeToRunOutput(
+        request.params.id,
+        request.query.conversationId,
+        {
+          onChunk(text) {
+            reply.raw.write(`data: ${JSON.stringify(text)}\n\n`);
+          },
+          onDone(message) {
+            reply.raw.write(`event: done\ndata: ${JSON.stringify({ messageId: message?.id ?? null })}\n\n`);
+            reply.raw.end();
+          },
+          onError(error) {
+            reply.raw.write(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
+            reply.raw.end();
+          },
+        },
+      );
+
+      if (!subscribed) {
+        // Race condition: process finished between check and subscribe
+        reply.raw.write(`event: done\ndata: ${JSON.stringify({ messageId: null })}\n\n`);
+        reply.raw.end();
+      }
+    },
+  );
+
+  // Upload an image to agent chat
+  typedApp.post(
+    '/api/agents/:id/chat/upload',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agent Chat'],
+        summary: 'Upload an image to agent chat and create a message with the attachment',
+        params: z.object({ id: z.string() }),
+      },
+    },
+    async (request, reply) => {
+      const agent = getAgent(request.params.id);
+      if (!agent) return reply.notFound('Agent not found');
+
+      const data = await request.file();
+      if (!data) return reply.badRequest('No file uploaded');
+
+      const conversationId = (data.fields.conversationId as { value: string } | undefined)?.value;
+      if (!conversationId) return reply.badRequest('conversationId is required');
+
+      const conv = validateConversationOwnership(conversationId, request.params.id);
+      if (!conv) return reply.notFound('Conversation not found');
+
+      const mimeType = data.mimetype || 'application/octet-stream';
+      const filename = data.filename || 'image.jpg';
+
+      const fileCheck = validateUploadedFile(mimeType, filename);
+      if (!fileCheck.valid) return reply.badRequest(fileCheck.error!);
+
+      if (!mimeType.startsWith('image/')) {
+        return reply.badRequest('Only image files are supported');
+      }
+
+      // Read file into buffer
+      const chunks: Buffer[] = [];
+      for await (const chunk of data.file) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+
+      // Save to storage under /chat-uploads/ with a unique name
+      const ext = path.extname(filename) || '.jpg';
+      const uniqueName = `${crypto.randomUUID()}${ext}`;
+      const storagePath = '/chat-uploads';
+
+      const entry = await uploadFile(storagePath, uniqueName, mimeType, buffer);
+
+      // Build attachment metadata
+      const attachment = {
+        type: 'image',
+        fileName: filename,
+        mimeType,
+        fileSize: buffer.length,
+        storagePath: entry.path,
+      };
+
+      const caption = (data.fields.caption as { value: string } | undefined)?.value || null;
+
+      const message = saveAgentConversationMessage({
+        conversationId,
+        direction: 'outbound',
+        content: caption || '',
+        type: 'image',
+        attachments: [attachment],
+      });
+
+      return reply.status(201).send(message);
     },
   );
 }

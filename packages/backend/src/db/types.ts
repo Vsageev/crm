@@ -273,6 +273,9 @@ export interface AgentRun {
   conversationId: string | null;
   cardId: string | null;
   cronJobId: string | null;
+  pid: number | null;
+  stdoutPath: string | null;
+  stderrPath: string | null;
   errorMessage: string | null;
   startedAt: string;
   finishedAt: string | null;

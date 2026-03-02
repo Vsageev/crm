@@ -41,7 +41,8 @@ import { agentChatRoutes } from './routes/agent-chat.js';
 import { agentRunRoutes } from './routes/agent-runs.js';
 import { initAllCronJobs } from './services/agent-cron.js';
 import { initAllBoardCronJobs } from './services/board-cron.js';
-import { reconcileStaleRuns } from './services/agent-runs.js';
+import { reconcileRunsOnStartup, cleanupOldRunLogs } from './services/agent-runs.js';
+import { reattachRunningProcess, RUNS_DIR } from './services/agent-chat.js';
 import { ensureAgentServiceAccounts } from './services/agents.js';
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
@@ -114,8 +115,12 @@ export async function buildApp() {
   // Initialize board cron template jobs
   initAllBoardCronJobs();
 
-  // Mark any leftover 'running' agent runs as error (server crashed)
-  reconcileStaleRuns();
+  // Ensure agent-runs log directory exists
+  fs.mkdirSync(RUNS_DIR, { recursive: true });
+
+  // Clean old run logs, then reconcile running records (re-attach or mark dead)
+  cleanupOldRunLogs();
+  reconcileRunsOnStartup((run) => reattachRunningProcess(run));
 
   return app;
 }

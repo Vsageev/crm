@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Folder, File, ChevronRight, CornerLeftUp, HardDrive, X, Check } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Folder, File, ChevronRight, CornerLeftUp, HardDrive, X, Check, Info } from 'lucide-react';
 import { Button, Tooltip } from '../ui';
 import { api, ApiError } from '../lib/api';
 import styles from './FileSystemBrowserModal.module.css';
@@ -21,6 +21,8 @@ export function FileSystemBrowserModal({ onSelect, onClose }: FileSystemBrowserM
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [pathInput, setPathInput] = useState('/');
+  const pathInputRef = useRef<HTMLInputElement>(null);
 
   const fetchEntries = useCallback(async (dirPath: string) => {
     setLoading(true);
@@ -41,6 +43,7 @@ export function FileSystemBrowserModal({ onSelect, onClose }: FileSystemBrowserM
 
   useEffect(() => {
     fetchEntries(currentPath);
+    setPathInput(currentPath);
   }, [currentPath, fetchEntries]);
 
   useEffect(() => {
@@ -50,6 +53,11 @@ export function FileSystemBrowserModal({ onSelect, onClose }: FileSystemBrowserM
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
+
+  // Keep pathInput in sync when a file is selected
+  useEffect(() => {
+    setPathInput(selected ?? currentPath);
+  }, [selected, currentPath]);
 
   const pathSegments = currentPath === '/' ? [] : currentPath.split('/').filter(Boolean);
 
@@ -67,14 +75,44 @@ export function FileSystemBrowserModal({ onSelect, onClose }: FileSystemBrowserM
   }
 
   function handleSelectCurrent() {
-    onSelect(selected ?? currentPath);
+    const value = pathInput.trim();
+    if (value) {
+      onSelect(value);
+    } else {
+      onSelect(selected ?? currentPath);
+    }
+  }
+
+  async function handlePathInputSubmit() {
+    const value = pathInput.trim();
+    if (!value) return;
+
+    // Try to navigate to it as a directory first
+    try {
+      const data = await api<{ path: string; entries: FsEntry[] }>(
+        `/storage/browse-fs?path=${encodeURIComponent(value)}`,
+      );
+      // If it returned entries or didn't error, it's a valid directory — navigate
+      setEntries(data.entries);
+      setCurrentPath(value);
+      setSelected(null);
+      setError('');
+    } catch {
+      // Not a directory or doesn't exist — treat as a direct path selection
+      onSelect(value);
+    }
   }
 
   return (
     <div className={styles.overlay} onClick={onClose}>
       <div className={styles.panel} onClick={(e) => e.stopPropagation()}>
         <div className={styles.header}>
-          <span className={styles.title}>Select file or folder</span>
+          <span className={styles.title}>
+            Select file or folder
+            <Tooltip label="Browsers can't access local paths from a native picker. You can browse here, or paste a path — in Finder hold Option and right-click → Copy as Pathname (or ⌥⌘C), in Explorer Shift + right-click → Copy as path.">
+              <Info size={14} className={styles.infoIcon} />
+            </Tooltip>
+          </span>
           <Tooltip label="Close">
             <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
               <X size={16} />
@@ -149,12 +187,23 @@ export function FileSystemBrowserModal({ onSelect, onClose }: FileSystemBrowserM
         </div>
 
         <div className={styles.footer}>
-          <span className={styles.selectedPath}>
-            {selected ?? currentPath}
-          </span>
+          <input
+            ref={pathInputRef}
+            className={styles.pathInput}
+            value={pathInput}
+            onChange={(e) => setPathInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handlePathInputSubmit();
+              }
+            }}
+            placeholder="Type or paste a path..."
+            spellCheck={false}
+          />
           <div className={styles.footerActions}>
             <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button size="sm" onClick={handleSelectCurrent}>
+            <Button size="sm" onClick={handleSelectCurrent} disabled={!pathInput.trim()}>
               Select
             </Button>
           </div>

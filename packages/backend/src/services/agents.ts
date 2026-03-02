@@ -194,6 +194,8 @@ export interface AgentRecord {
   name: string;
   description: string;
   model: string;
+  modelId: string | null;
+  thinkingLevel: 'low' | 'medium' | 'high' | null;
   preset: string;
   status: 'active' | 'inactive' | 'error';
   apiKeyId: string;
@@ -207,6 +209,9 @@ export interface AgentRecord {
   workspaceApiKeyId: string | null;
   serviceUserId: string | null;
   lastActivity: string | null;
+  avatarIcon: string;
+  avatarBgColor: string;
+  avatarLogoColor: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -228,8 +233,17 @@ function agentDir(agentId: string): string {
 function asAgent(rec: Record<string, unknown>): AgentRecord {
   return {
     ...rec,
+    modelId: typeof rec.modelId === 'string' ? rec.modelId : null,
+    thinkingLevel: ['low', 'medium', 'high'].includes(rec.thinkingLevel as string)
+      ? (rec.thinkingLevel as AgentRecord['thinkingLevel'])
+      : null,
     skipPermissions: Boolean(rec.skipPermissions),
     cronJobs: Array.isArray(rec.cronJobs) ? rec.cronJobs : [],
+    avatarIcon: typeof rec.avatarIcon === 'string' ? rec.avatarIcon : 'spark',
+    avatarBgColor:
+      typeof rec.avatarBgColor === 'string' ? rec.avatarBgColor : '#1a1a2e',
+    avatarLogoColor:
+      typeof rec.avatarLogoColor === 'string' ? rec.avatarLogoColor : '#e94560',
   } as unknown as AgentRecord;
 }
 
@@ -241,6 +255,8 @@ export interface CreateAgentParams {
   name: string;
   description: string;
   model: string;
+  modelId?: string | null;
+  thinkingLevel?: 'low' | 'medium' | 'high' | null;
   preset: string;
   apiKeyId: string;
   apiKeyName: string;
@@ -346,6 +362,8 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
     name: params.name,
     description: params.description,
     model: params.model,
+    modelId: params.modelId ?? null,
+    thinkingLevel: params.thinkingLevel ?? null,
     preset: params.preset,
     status: 'active',
     apiKeyId: params.apiKeyId,
@@ -400,7 +418,7 @@ export function getAgent(id: string): AgentRecord | null {
 
 export function updateAgent(
   id: string,
-  data: Partial<Pick<AgentRecord, 'name' | 'description' | 'model' | 'status' | 'skipPermissions' | 'cronJobs' | 'groupId'>>,
+  data: Partial<Pick<AgentRecord, 'name' | 'description' | 'model' | 'modelId' | 'thinkingLevel' | 'status' | 'skipPermissions' | 'cronJobs' | 'groupId' | 'avatarIcon' | 'avatarBgColor' | 'avatarLogoColor'>>,
 ): AgentRecord | null {
   const current = store.getById('agents', id);
   if (!current) return null;
@@ -409,10 +427,15 @@ export function updateAgent(
   if (data.name !== undefined) patch.name = data.name;
   if (data.description !== undefined) patch.description = data.description;
   if (data.model !== undefined) patch.model = data.model;
+  if (data.modelId !== undefined) patch.modelId = data.modelId;
+  if (data.thinkingLevel !== undefined) patch.thinkingLevel = data.thinkingLevel;
   if (data.status !== undefined) patch.status = data.status;
   if (data.skipPermissions !== undefined) patch.skipPermissions = data.skipPermissions;
   if (data.cronJobs !== undefined) patch.cronJobs = data.cronJobs;
   if (data.groupId !== undefined) patch.groupId = data.groupId;
+  if (data.avatarIcon !== undefined) patch.avatarIcon = data.avatarIcon;
+  if (data.avatarBgColor !== undefined) patch.avatarBgColor = data.avatarBgColor;
+  if (data.avatarLogoColor !== undefined) patch.avatarLogoColor = data.avatarLogoColor;
 
   const updated = store.update('agents', id, patch);
   if (!updated) return null;

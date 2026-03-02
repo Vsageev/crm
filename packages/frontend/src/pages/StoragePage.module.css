@@ -220,9 +220,21 @@ button.colName:hover .fileName {
   flex-shrink: 0;
 }
 
-.iconReference {
-  color: var(--color-primary-brand);
+.iconWithBadge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+}
+
+.iconBadge {
+  position: absolute;
+  bottom: -3px;
+  right: -4px;
+  color: var(--color-primary-brand);
+  background: var(--color-card);
+  border-radius: 2px;
 }
 
 /* Icon buttons */

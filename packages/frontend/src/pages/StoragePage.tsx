@@ -39,6 +39,23 @@ function getFileIcon(entry: StorageEntry) {
   return <File size={18} className={styles.iconFile} />;
 }
 
+function getEntryIcon(entry: StorageEntry) {
+  const baseIcon = entry.type === 'folder'
+    ? <Folder size={18} className={styles.iconFolder} />
+    : getFileIcon(entry);
+
+  if (!entry.isReference) return baseIcon;
+
+  return (
+    <Tooltip label={`Reference → ${entry.target}`}>
+      <span className={styles.iconWithBadge}>
+        {baseIcon}
+        <Link2 size={10} className={styles.iconBadge} />
+      </span>
+    </Tooltip>
+  );
+}
+
 export function StoragePage() {
   const [currentPath, setCurrentPath] = useState('/');
   const [entries, setEntries] = useState<StorageEntry[]>([]);
@@ -376,15 +393,7 @@ export function StoragePage() {
                   className={styles.fileRow}
                 >
                   <button className={styles.colName} onClick={() => handleEntryClick(entry)}>
-                    {entry.isReference ? (
-                      <Tooltip label={`Reference → ${entry.target}`}>
-                        <Link2 size={18} className={styles.iconReference} />
-                      </Tooltip>
-                    ) : entry.type === 'folder' ? (
-                      <Folder size={18} className={styles.iconFolder} />
-                    ) : (
-                      getFileIcon(entry)
-                    )}
+                    {getEntryIcon(entry)}
                     <span className={styles.fileName}>{entry.name}</span>
                   </button>
                   <span className={styles.colSize}>{entry.type === 'file' ? formatFileSize(entry.size) : '—'}</span>
