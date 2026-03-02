@@ -548,6 +548,8 @@ export interface AgentFileEntry {
   type: 'file' | 'folder';
   size: number;
   createdAt: string;
+  isReference?: boolean;
+  target?: string;
 }
 
 function normalizePath(p: string): string {
@@ -599,16 +601,24 @@ export function listAgentFiles(agentId: string, dirPath: string): AgentFileEntry
       const resolvedType = st.isFile() ? 'file' : st.isDirectory() ? 'folder' : null;
       if (!resolvedType) return null;
 
+      const isSymlink = entry.isSymbolicLink();
       const relative = path.relative(agentDir(agentId), fullPath).split(path.sep).join('/');
       const createdAtSource =
         Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
-      return {
+      const fileEntry: AgentFileEntry = {
         name: entry.name,
         path: normalizePath('/' + relative),
         type: resolvedType,
         size: resolvedType === 'file' ? st.size : 0,
         createdAt: createdAtSource.toISOString(),
       };
+
+      if (isSymlink) {
+        fileEntry.isReference = true;
+        fileEntry.target = fs.readlinkSync(fullPath);
+      }
+
+      return fileEntry;
     })
     .filter((e): e is AgentFileEntry => e !== null);
 }
@@ -687,6 +697,45 @@ export function createAgentFolder(agentId: string, dirPath: string, name: string
     type: 'folder',
     size: 0,
     createdAt: createdAtSource.toISOString(),
+  };
+}
+
+export function createAgentReference(agentId: string, dirPath: string, name: string, target: string): AgentFileEntry {
+  const parentPath = validateAgentPath(agentId, dirPath);
+  const safeName = name.replace(/[/\\:*?"<>|]/g, '_').trim();
+  if (!safeName) throw new Error('Invalid reference name');
+
+  const fullPath = parentPath === '/' ? '/' + safeName : parentPath + '/' + safeName;
+  validateAgentPath(agentId, fullPath);
+
+  const diskPath = resolveAgentDiskPath(agentId, fullPath);
+  if (fs.existsSync(diskPath)) {
+    throw new Error('A file or folder with this name already exists');
+  }
+
+  fs.symlinkSync(target, diskPath);
+
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(diskPath);
+  } catch {
+    throw new Error('Failed to create reference — target may be invalid');
+  }
+
+  const resolvedType = st.isFile() ? 'file' : st.isDirectory() ? 'folder' : null;
+  if (!resolvedType) throw new Error('Failed to create reference — target is not a file or folder');
+
+  const createdAtSource =
+    Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
+
+  return {
+    name: safeName,
+    path: fullPath,
+    type: resolvedType,
+    size: resolvedType === 'file' ? st.size : 0,
+    createdAt: createdAtSource.toISOString(),
+    isReference: true,
+    target,
   };
 }
 

@@ -19,6 +19,7 @@ import {
   readAgentFileContent,
   uploadAgentFile,
   createAgentFolder,
+  createAgentReference,
   deleteAgentFile,
   listAgentGroups,
   createAgentGroup,
@@ -448,6 +449,34 @@ export async function agentRoutes(app: FastifyInstance) {
       if (!agent) return reply.notFound('Agent not found');
       try {
         const entry = createAgentFolder(request.params.id, request.body.path, request.body.name);
+        return reply.status(201).send(entry);
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
+  // Create reference (symlink)
+  typedApp.post(
+    '/api/agents/:id/files/references',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Agents'],
+        summary: 'Create a reference (symlink) in agent workspace',
+        params: z.object({ id: z.string() }),
+        body: z.object({
+          path: z.string().default('/'),
+          name: z.string().min(1).max(255),
+          target: z.string().min(1),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const agent = getAgent(request.params.id);
+      if (!agent) return reply.notFound('Agent not found');
+      try {
+        const entry = createAgentReference(request.params.id, request.body.path, request.body.name, request.body.target);
         return reply.status(201).send(entry);
       } catch (err) {
         return reply.badRequest((err as Error).message);

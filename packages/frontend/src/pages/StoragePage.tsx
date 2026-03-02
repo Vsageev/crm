@@ -12,12 +12,14 @@ import {
   Eye,
   FileText,
   Image,
+  Link2,
 } from 'lucide-react';
 import { PageHeader } from '../layout';
 import { Button, Input, Tooltip } from '../ui';
 import { api, apiUpload, ApiError } from '../lib/api';
 import { formatFileSize, formatFileDate, isTextPreviewable, isImagePreviewable, isPreviewable } from '../lib/file-utils';
 import { FilePreviewModal } from '../components/FilePreviewModal';
+import { FileSystemBrowserModal } from '../components/FileSystemBrowserModal';
 import styles from './StoragePage.module.css';
 
 interface StorageEntry {
@@ -27,6 +29,8 @@ interface StorageEntry {
   size: number;
   mimeType: string | null;
   createdAt: string;
+  isReference?: boolean;
+  target?: string;
 }
 
 function getFileIcon(entry: StorageEntry) {
@@ -46,6 +50,12 @@ export function StoragePage() {
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+
+  // New reference
+  const [showNewRef, setShowNewRef] = useState(false);
+  const [refName, setRefName] = useState('');
+  const [refTarget, setRefTarget] = useState('');
+  const [creatingRef, setCreatingRef] = useState(false);
 
   // Delete confirmation
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
@@ -82,6 +92,7 @@ export function StoragePage() {
   function navigateTo(dirPath: string) {
     setCurrentPath(dirPath);
     setShowNewFolder(false);
+    setShowNewRef(false);
     setDeletingPath(null);
   }
 
@@ -106,6 +117,28 @@ export function StoragePage() {
       setError(err instanceof ApiError ? err.message : 'Failed to create folder');
     } finally {
       setCreatingFolder(false);
+    }
+  }
+
+  async function handleCreateReference() {
+    if (!refName.trim() || !refTarget.trim()) return;
+    setCreatingRef(true);
+    setError('');
+    try {
+      await api('/storage/references', {
+        method: 'POST',
+        body: JSON.stringify({ path: currentPath, name: refName.trim(), target: refTarget.trim() }),
+      });
+      setShowNewRef(false);
+      setRefName('');
+      setRefTarget('');
+      setSuccess('Reference created');
+      await fetchEntries(currentPath);
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to create reference');
+    } finally {
+      setCreatingRef(false);
     }
   }
 
@@ -277,10 +310,24 @@ export function StoragePage() {
                 onClick={() => {
                   setShowNewFolder(!showNewFolder);
                   setFolderName('');
+                  setShowNewRef(false);
                 }}
               >
                 <FolderPlus size={14} />
                 Folder
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowNewRef(!showNewRef);
+                  setRefName('');
+                  setRefTarget('');
+                  setShowNewFolder(false);
+                }}
+              >
+                <Link2 size={14} />
+                Reference
               </Button>
             </span>
           </div>
@@ -303,6 +350,38 @@ export function StoragePage() {
                 {creatingFolder ? 'Creating...' : 'Create'}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+          {showNewRef && (
+            <div className={styles.newFolderRow}>
+              <div className={styles.newFolderIcon}>
+                <Link2 size={18} className={styles.iconReference} />
+              </div>
+              <Input
+                label=""
+                placeholder="Reference name"
+                value={refName}
+                onChange={(e) => setRefName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setShowNewRef(false);
+                }}
+              />
+              <Input
+                label=""
+                placeholder="Target path (e.g. /tmp)"
+                value={refTarget}
+                onChange={(e) => setRefTarget(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreateReference();
+                  if (e.key === 'Escape') setShowNewRef(false);
+                }}
+              />
+              <Button size="sm" onClick={handleCreateReference} disabled={creatingRef || !refName.trim() || !refTarget.trim()}>
+                {creatingRef ? 'Creating...' : 'Create'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowNewRef(false)}>
                 Cancel
               </Button>
             </div>
@@ -343,7 +422,11 @@ export function StoragePage() {
                   className={styles.fileRow}
                 >
                   <button className={styles.colName} onClick={() => handleEntryClick(entry)}>
-                    {entry.type === 'folder' ? (
+                    {entry.isReference ? (
+                      <Tooltip label={`Reference → ${entry.target}`}>
+                        <Link2 size={18} className={styles.iconReference} />
+                      </Tooltip>
+                    ) : entry.type === 'folder' ? (
                       <Folder size={18} className={styles.iconFolder} />
                     ) : (
                       getFileIcon(entry)

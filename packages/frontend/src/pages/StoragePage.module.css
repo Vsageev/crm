@@ -220,6 +220,11 @@ button.colName:hover .fileName {
   flex-shrink: 0;
 }
 
+.iconReference {
+  color: var(--color-primary-brand);
+  flex-shrink: 0;
+}
+
 /* Icon buttons */
 .iconBtn {
   display: flex;

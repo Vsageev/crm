@@ -33,6 +33,7 @@ import {
   ChevronDown,
   Layers,
   Pencil,
+  Link2,
 } from 'lucide-react';
 import { Button, Badge, Input, Textarea, Select, CronEditor, ApiKeyFormFields, MarkdownContent, Tooltip } from '../ui';
 import { api, apiUpload, ApiError } from '../lib/api';
@@ -256,7 +257,7 @@ function generateId(): string {
 
 /* ── Agent file entry type ── */
 
-type AgentFileEntry = import('../lib/file-utils').FileEntry;
+type AgentFileEntry = import('../lib/file-utils').FileEntry & { isReference?: boolean; target?: string };
 
 function getAgentFileIcon(entry: AgentFileEntry) {
   if (isImagePreviewable(entry.name)) return <Image size={18} className={styles.filesIconFile} />;
@@ -276,6 +277,11 @@ function AgentFiles({ agentId }: { agentId: string }) {
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+
+  const [showNewRef, setShowNewRef] = useState(false);
+  const [refName, setRefName] = useState('');
+  const [refTarget, setRefTarget] = useState('');
+  const [creatingRef, setCreatingRef] = useState(false);
 
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -314,6 +320,7 @@ function AgentFiles({ agentId }: { agentId: string }) {
   function navigateTo(dirPath: string) {
     setCurrentPath(dirPath);
     setShowNewFolder(false);
+    setShowNewRef(false);
     setDeletingPath(null);
   }
 
@@ -337,6 +344,28 @@ function AgentFiles({ agentId }: { agentId: string }) {
       setError(err instanceof ApiError ? err.message : 'Failed to create folder');
     } finally {
       setCreatingFolder(false);
+    }
+  }
+
+  async function handleCreateReference() {
+    if (!refName.trim() || !refTarget.trim()) return;
+    setCreatingRef(true);
+    setError('');
+    try {
+      await api(`/agents/${agentId}/files/references`, {
+        method: 'POST',
+        body: JSON.stringify({ path: currentPath, name: refName.trim(), target: refTarget.trim() }),
+      });
+      setShowNewRef(false);
+      setRefName('');
+      setRefTarget('');
+      setSuccess('Reference created');
+      await fetchEntries(currentPath);
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to create reference');
+    } finally {
+      setCreatingRef(false);
     }
   }
 
@@ -498,10 +527,24 @@ function AgentFiles({ agentId }: { agentId: string }) {
                 onClick={() => {
                   setShowNewFolder(!showNewFolder);
                   setFolderName('');
+                  setShowNewRef(false);
                 }}
               >
                 <FolderPlus size={14} />
                 Folder
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowNewRef(!showNewRef);
+                  setRefName('');
+                  setRefTarget('');
+                  setShowNewFolder(false);
+                }}
+              >
+                <Link2 size={14} />
+                Reference
               </Button>
             </span>
           </div>
@@ -525,6 +568,39 @@ function AgentFiles({ agentId }: { agentId: string }) {
                 {creatingFolder ? 'Creating...' : 'Create'}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+
+          {showNewRef && (
+            <div className={styles.filesNewFolderRow}>
+              <div className={styles.filesNewFolderIcon}>
+                <Link2 size={18} className={styles.filesIconReference} />
+              </div>
+              <Input
+                label=""
+                placeholder="Reference name"
+                value={refName}
+                onChange={(e) => setRefName(e.target.value)}
+                onKeyDown={(e: KeyboardEvent) => {
+                  if (e.key === 'Escape') setShowNewRef(false);
+                }}
+              />
+              <Input
+                label=""
+                placeholder="Target path (e.g. /tmp)"
+                value={refTarget}
+                onChange={(e) => setRefTarget(e.target.value)}
+                onKeyDown={(e: KeyboardEvent) => {
+                  if (e.key === 'Enter') handleCreateReference();
+                  if (e.key === 'Escape') setShowNewRef(false);
+                }}
+              />
+              <Button size="sm" onClick={handleCreateReference} disabled={creatingRef || !refName.trim() || !refTarget.trim()}>
+                {creatingRef ? 'Creating...' : 'Create'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowNewRef(false)}>
                 Cancel
               </Button>
             </div>
@@ -564,7 +640,11 @@ function AgentFiles({ agentId }: { agentId: string }) {
               {sorted.map((entry) => (
                 <div key={entry.path} className={styles.filesRow}>
                   <button className={styles.filesColName} onClick={() => handleEntryClick(entry)}>
-                    {entry.type === 'folder' ? (
+                    {entry.isReference ? (
+                      <Tooltip label={`Reference → ${entry.target}`}>
+                        <Link2 size={18} className={styles.filesIconReference} />
+                      </Tooltip>
+                    ) : entry.type === 'folder' ? (
                       <Folder size={18} className={styles.filesIconFolder} />
                     ) : (
                       getAgentFileIcon(entry)

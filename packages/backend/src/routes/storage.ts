@@ -7,10 +7,12 @@ import { requirePermission } from '../middleware/rbac.js';
 import {
   listDir,
   createFolder,
+  createReference,
   uploadFile,
   deleteItem,
   getFilePath,
   getStats,
+  browseFileSystem,
 } from '../services/storage.js';
 
 export async function storageRoutes(app: FastifyInstance) {
@@ -55,6 +57,29 @@ export async function storageRoutes(app: FastifyInstance) {
     },
   );
 
+  // Browse host filesystem (for reference picker)
+  typedApp.get(
+    '/api/storage/browse-fs',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:read')],
+      schema: {
+        tags: ['Storage'],
+        summary: 'Browse the host filesystem for creating references',
+        querystring: z.object({
+          path: z.string().default('/'),
+        }),
+      },
+    },
+    async (request, reply) => {
+      try {
+        const entries = browseFileSystem(request.query.path);
+        return reply.send({ path: request.query.path, entries });
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
   // Create folder
   typedApp.post(
     '/api/storage/folders',
@@ -72,6 +97,31 @@ export async function storageRoutes(app: FastifyInstance) {
     async (request, reply) => {
       try {
         const entry = createFolder(request.body.path, request.body.name);
+        return reply.status(201).send(entry);
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
+  // Create reference (symlink)
+  typedApp.post(
+    '/api/storage/references',
+    {
+      onRequest: [app.authenticate, requirePermission('settings:update')],
+      schema: {
+        tags: ['Storage'],
+        summary: 'Create a reference (symlink) to a local path',
+        body: z.object({
+          path: z.string().default('/'),
+          name: z.string().min(1).max(255),
+          target: z.string().min(1),
+        }),
+      },
+    },
+    async (request, reply) => {
+      try {
+        const entry = createReference(request.body.path, request.body.name, request.body.target);
         return reply.status(201).send(entry);
       } catch (err) {
         return reply.badRequest((err as Error).message);

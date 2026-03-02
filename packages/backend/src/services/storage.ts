@@ -28,6 +28,8 @@ export interface StorageEntry {
   size: number;
   mimeType: string | null;
   createdAt: string;
+  isReference?: boolean;
+  target?: string;
 }
 
 function ensureStorageDir() {
@@ -66,7 +68,20 @@ function inferMimeType(fileName: string): string | null {
 }
 
 function buildEntryFromDisk(diskPath: string, name: string): StorageEntry | null {
-  const stats = fs.statSync(diskPath);
+  const lstats = fs.lstatSync(diskPath);
+  const isSymlink = lstats.isSymbolicLink();
+
+  let stats: fs.Stats;
+  if (isSymlink) {
+    try {
+      stats = fs.statSync(diskPath);
+    } catch {
+      return null;
+    }
+  } else {
+    stats = lstats;
+  }
+
   const isFile = stats.isFile();
   const isFolder = stats.isDirectory();
 
@@ -77,7 +92,7 @@ function buildEntryFromDisk(diskPath: string, name: string): StorageEntry | null
   const createdAtSource =
     Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0 ? stats.birthtime : stats.mtime;
 
-  return {
+  const entry: StorageEntry = {
     name,
     path: entryPath,
     type: isFile ? 'file' : 'folder',
@@ -85,6 +100,13 @@ function buildEntryFromDisk(diskPath: string, name: string): StorageEntry | null
     mimeType: isFile ? inferMimeType(name) : null,
     createdAt: createdAtSource.toISOString(),
   };
+
+  if (isSymlink) {
+    entry.isReference = true;
+    entry.target = fs.readlinkSync(diskPath);
+  }
+
+  return entry;
 }
 
 export function listDir(dirPath: string): StorageEntry[] {
@@ -104,7 +126,7 @@ export function listDir(dirPath: string): StorageEntry[] {
   return fs
     .readdirSync(diskDir, { withFileTypes: true })
     .map((entry) => {
-      if (!entry.isFile() && !entry.isDirectory()) return null;
+      if (!entry.isFile() && !entry.isDirectory() && !entry.isSymbolicLink()) return null;
       return buildEntryFromDisk(path.join(diskDir, entry.name), entry.name);
     })
     .filter((entry): entry is StorageEntry => entry !== null);
@@ -131,6 +153,31 @@ export function createFolder(dirPath: string, name: string): StorageEntry {
   const entry = buildEntryFromDisk(diskPath, safeName);
   if (!entry || entry.type !== 'folder') {
     throw new Error('Failed to create folder');
+  }
+
+  return entry;
+}
+
+export function createReference(dirPath: string, name: string, target: string): StorageEntry {
+  ensureStorageDir();
+  const parentPath = validatePath(dirPath);
+
+  const safeName = name.replace(/[/\\:*?"<>|]/g, '_').trim();
+  if (!safeName) throw new Error('Invalid reference name');
+
+  const fullPath = parentPath === '/' ? '/' + safeName : parentPath + '/' + safeName;
+  validatePath(fullPath);
+
+  const diskPath = resolveDiskPath(fullPath);
+  if (fs.existsSync(diskPath)) {
+    throw new Error('A file or folder with this name already exists');
+  }
+
+  fs.symlinkSync(target, diskPath);
+
+  const entry = buildEntryFromDisk(diskPath, safeName);
+  if (!entry) {
+    throw new Error('Failed to create reference — target may be invalid');
   }
 
   return entry;
@@ -220,4 +267,51 @@ function collectStats(dirPath: string): { totalFiles: number; totalFolders: numb
 export function getStats(): { totalFiles: number; totalFolders: number; totalSize: number } {
   ensureStorageDir();
   return collectStats(STORAGE_DIR);
+}
+
+// ---------------------------------------------------------------------------
+// Browse host filesystem (for reference picker)
+// ---------------------------------------------------------------------------
+
+export interface FsEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'folder';
+}
+
+export function browseFileSystem(dirPath: string): FsEntry[] {
+  const resolved = path.resolve(dirPath);
+  if (!fs.existsSync(resolved)) return [];
+  const st = fs.statSync(resolved);
+  if (!st.isDirectory()) return [];
+
+  return fs
+    .readdirSync(resolved, { withFileTypes: true })
+    .filter((e) => {
+      if (e.name.startsWith('.')) return false;
+      if (e.isFile() || e.isDirectory()) return true;
+      if (e.isSymbolicLink()) {
+        try { return fs.statSync(path.join(resolved, e.name)).isDirectory() || fs.statSync(path.join(resolved, e.name)).isFile(); } catch { return false; }
+      }
+      return false;
+    })
+    .map((e) => {
+      let type: 'file' | 'folder';
+      if (e.isDirectory()) {
+        type = 'folder';
+      } else if (e.isFile()) {
+        type = 'file';
+      } else {
+        try {
+          type = fs.statSync(path.join(resolved, e.name)).isDirectory() ? 'folder' : 'file';
+        } catch {
+          type = 'file';
+        }
+      }
+      return { name: e.name, path: path.join(resolved, e.name), type };
+    })
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 }

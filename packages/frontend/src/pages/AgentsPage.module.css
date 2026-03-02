@@ -1493,6 +1493,11 @@ button.filesColName:hover .filesFileName {
   flex-shrink: 0;
 }
 
+.filesIconReference {
+  color: var(--color-primary-brand);
+  flex-shrink: 0;
+}
+
 .filesIconBtn {
   display: flex;
   align-items: center;
