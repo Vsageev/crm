@@ -57,6 +57,30 @@ export interface ListAgentBatchRunsOptions {
   offset?: number;
 }
 
+function enrichBatchRun(run: Record<string, unknown>) {
+  const agentId = typeof run.agentId === 'string' ? run.agentId : null;
+  const agent = agentId ? getAgent(agentId) : null;
+  return {
+    ...run,
+    agentName:
+      typeof run.agentName === 'string' && run.agentName
+        ? run.agentName
+        : agent?.name ?? null,
+    avatarIcon:
+      typeof run.avatarIcon === 'string' && run.avatarIcon
+        ? run.avatarIcon
+        : agent?.avatarIcon ?? null,
+    avatarBgColor:
+      typeof run.avatarBgColor === 'string' && run.avatarBgColor
+        ? run.avatarBgColor
+        : agent?.avatarBgColor ?? null,
+    avatarLogoColor:
+      typeof run.avatarLogoColor === 'string' && run.avatarLogoColor
+        ? run.avatarLogoColor
+        : agent?.avatarLogoColor ?? null,
+  };
+}
+
 export interface ListAgentBatchRunItemsOptions {
   status?: AgentBatchItemStatus;
   limit?: number;
@@ -705,7 +729,7 @@ export function listAgentBatchRuns(options: ListAgentBatchRunsOptions = {}) {
     return parseIsoDateMs(b.createdAt) - parseIsoDateMs(a.createdAt);
   });
 
-  const entries = sorted.slice(offset, offset + limit);
+  const entries = sorted.slice(offset, offset + limit).map(enrichBatchRun);
   return { entries, total: sorted.length };
 }
 

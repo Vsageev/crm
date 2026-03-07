@@ -485,7 +485,17 @@ interface AgentProcessResult {
 
 interface AgentProcessOptions {
   agentId: string;
-  agent: { name: string; model: string; modelId: string | null; thinkingLevel: 'low' | 'medium' | 'high' | null; apiKeyId: string; workspaceApiKey: string | null };
+  agent: {
+    name: string;
+    model: string;
+    modelId: string | null;
+    thinkingLevel: 'low' | 'medium' | 'high' | null;
+    apiKeyId: string;
+    workspaceApiKey: string | null;
+    avatarIcon?: string | null;
+    avatarBgColor?: string | null;
+    avatarLogoColor?: string | null;
+  };
   runKey: string;
   prompt: string;
   systemPrompt: string;
@@ -866,6 +876,9 @@ function runAgentProcess(options: AgentProcessOptions): string {
   const agentRun = createAgentRun({
     agentId: options.agentId,
     agentName: options.agent.name,
+    avatarIcon: options.agent.avatarIcon ?? null,
+    avatarBgColor: options.agent.avatarBgColor ?? null,
+    avatarLogoColor: options.agent.avatarLogoColor ?? null,
     triggerType: options.triggerType,
     conversationId: options.triggerRef?.conversationId,
     cardId: options.triggerRef?.cardId,

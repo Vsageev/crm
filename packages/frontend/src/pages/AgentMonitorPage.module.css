@@ -752,6 +752,43 @@
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
 }
 
+.simpleThinking {
+  margin: 2px 0;
+}
+
+.simpleThinkingToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
+.simpleThinkingToggle:hover {
+  color: var(--color-text-secondary);
+}
+
+.simpleThinkingToggle > svg {
+  flex-shrink: 0;
+}
+
+.simpleThinkingContent {
+  padding: 2px 0 4px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
+  opacity: 0.7;
+}
+
 /* ── Structured log view ─────────────────────────────────── */
 
 .structuredLog {

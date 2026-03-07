@@ -14,6 +14,9 @@ const LOG_RETENTION_DAYS = 7;
 interface CreateAgentRunParams {
   agentId: string;
   agentName: string;
+  avatarIcon?: string | null;
+  avatarBgColor?: string | null;
+  avatarLogoColor?: string | null;
   triggerType: TriggerType;
   conversationId?: string | null;
   cardId?: string | null;
@@ -28,6 +31,9 @@ export function createAgentRun(params: CreateAgentRunParams): Record<string, unk
   return store.insert('agent_runs', {
     agentId: params.agentId,
     agentName: params.agentName,
+    avatarIcon: params.avatarIcon ?? null,
+    avatarBgColor: params.avatarBgColor ?? null,
+    avatarLogoColor: params.avatarLogoColor ?? null,
     triggerType: params.triggerType,
     status: 'running' as RunStatus,
     conversationId: params.conversationId ?? null,
@@ -168,6 +174,9 @@ function toAgentRunSummary(run: Record<string, unknown>) {
     id: run.id,
     agentId: run.agentId,
     agentName: run.agentName,
+    avatarIcon: run.avatarIcon ?? null,
+    avatarBgColor: run.avatarBgColor ?? null,
+    avatarLogoColor: run.avatarLogoColor ?? null,
     triggerType: run.triggerType,
     status: run.status,
     conversationId: run.conversationId ?? null,

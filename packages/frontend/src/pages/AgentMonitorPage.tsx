@@ -17,6 +17,9 @@ interface AgentRun {
   id: string;
   agentId: string;
   agentName: string;
+  avatarIcon?: string | null;
+  avatarBgColor?: string | null;
+  avatarLogoColor?: string | null;
   triggerType: AgentRunTriggerType;
   status: 'running' | 'completed' | 'error';
   conversationId: string | null;
@@ -50,6 +53,10 @@ interface AgentBatchRun {
   sourceId: string;
   sourceName: string | null;
   agentId: string;
+  agentName?: string | null;
+  avatarIcon?: string | null;
+  avatarBgColor?: string | null;
+  avatarLogoColor?: string | null;
   prompt: string;
   maxParallel: number;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -205,16 +212,43 @@ function LogCopyButton({ text }: { text: string }) {
 
 function SimpleLogView({ blocks }: { blocks: OutputBlock[] }) {
   const filtered = blocks.filter(
-    (b) => b.type === 'assistant_text' || b.type === 'tool_call' || b.type === 'result',
+    (b) => b.type === 'assistant_text' || b.type === 'tool_call' || b.type === 'result' || b.type === 'thinking',
   );
+  const [expandedThinking, setExpandedThinking] = useState<Set<number>>(new Set());
 
   if (filtered.length === 0) {
     return <span className={styles.logEmpty}>No displayable content</span>;
   }
 
+  const toggleThinking = (idx: number) => {
+    setExpandedThinking(prev => {
+      const next = new Set(prev);
+      next.has(idx) ? next.delete(idx) : next.add(idx);
+      return next;
+    });
+  };
+
   return (
     <div className={styles.simpleLog}>
       {filtered.map((block, i) => {
+        if (block.type === 'thinking') {
+          const isExpanded = expandedThinking.has(i);
+          return (
+            <div key={i} className={styles.simpleThinking}>
+              <button className={styles.simpleThinkingToggle} onClick={() => toggleThinking(i)}>
+                <Brain size={12} />
+                <span>Thinking</span>
+                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+              {isExpanded && (
+                <div className={styles.simpleThinkingContent}>
+                  <MarkdownContent compact>{block.content}</MarkdownContent>
+                </div>
+              )}
+            </div>
+          );
+        }
+
         if (block.type === 'assistant_text') {
           return (
             <div key={i} className={styles.simpleText}>
@@ -780,27 +814,68 @@ export function AgentMonitorPage() {
   const [triggerFilter, setTriggerFilter] = useState<TriggerFilter>('all');
   const [agentFilter, setAgentFilter] = useState<string>('all');
 
+  const seedAgentAvatars = useCallback((entries: Array<{
+    agentId: string;
+    agentName?: string | null;
+    avatarIcon?: string | null;
+    avatarBgColor?: string | null;
+    avatarLogoColor?: string | null;
+  }>) => {
+    setAgentAvatars((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const entry of entries) {
+        if (!entry.agentId) continue;
+        if (!entry.avatarIcon || !entry.avatarBgColor || !entry.avatarLogoColor) continue;
+
+        const existing = next[entry.agentId];
+        if (
+          existing?.avatarIcon === entry.avatarIcon &&
+          existing.avatarBgColor === entry.avatarBgColor &&
+          existing.avatarLogoColor === entry.avatarLogoColor &&
+          (existing.name ?? null) === (entry.agentName ?? null)
+        ) {
+          continue;
+        }
+
+        next[entry.agentId] = {
+          id: entry.agentId,
+          name: entry.agentName ?? existing?.name,
+          avatarIcon: entry.avatarIcon,
+          avatarBgColor: entry.avatarBgColor,
+          avatarLogoColor: entry.avatarLogoColor,
+        };
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, []);
+
   const fetchActive = useCallback(async () => {
     try {
       const res = await api<{ entries: AgentRun[] }>('/agent-runs/active');
+      seedAgentAvatars(res.entries);
       setActiveRuns(res.entries);
       return res.entries.length;
     } catch {
       return 0;
     }
-  }, []);
+  }, [seedAgentAvatars]);
 
   const fetchActiveBatchRuns = useCallback(async () => {
     try {
       const res = await api<{ entries: AgentBatchRun[] }>(
         `/agent-batch-runs?status=active&limit=${ACTIVE_BATCH_RUNS_LIMIT}`,
       );
+      seedAgentAvatars(res.entries);
       setActiveBatchRuns(res.entries);
       return res.entries.length;
     } catch {
       return 0;
     }
-  }, []);
+  }, [seedAgentAvatars]);
 
   const fetchRecentBatchRuns = useCallback(async () => {
     try {
@@ -822,11 +897,12 @@ export function AgentMonitorPage() {
           return bTime - aTime;
         })
         .slice(0, RECENT_BATCH_RUNS_LIMIT);
+      seedAgentAvatars(merged);
       setRecentBatchRuns(merged);
     } catch {
       // best effort
     }
-  }, []);
+  }, [seedAgentAvatars]);
 
   const fetchHistory = useCallback(async (
     {
@@ -855,6 +931,7 @@ export function AgentMonitorPage() {
       if (triggerType !== 'all') params.set('triggerType', triggerType);
       if (agentId !== 'all') params.set('agentId', agentId);
       const res = await api<{ entries: AgentRun[]; total: number }>(`/agent-runs?${params.toString()}`);
+      seedAgentAvatars(res.entries);
       setHistoryRuns((prev) => (append ? [...prev, ...res.entries] : res.entries));
       setHistoryTotal(res.total);
     } catch {
@@ -866,7 +943,7 @@ export function AgentMonitorPage() {
       setHistoryLoading(false);
       setLoadingMoreHistory(false);
     }
-  }, []);
+  }, [seedAgentAvatars]);
 
   // Initial load
   useEffect(() => {

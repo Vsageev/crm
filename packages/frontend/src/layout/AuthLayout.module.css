@@ -12,85 +12,174 @@
   flex-direction: column;
   justify-content: space-between;
   padding: 48px;
-  background: #1A1A2E;
+  background: #141414;
   position: relative;
   overflow: hidden;
 }
 
-.brandContent {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
+/* ── Top branding ── */
 
-.brandMark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+.brandTop {
+  position: relative;
+  z-index: 1;
 }
 
 .brandName {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.2);
 }
 
-/* ── Geometric grid ── */
+/* ── Hero content ── */
 
-.gridContainer {
+.heroSection {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 32px;
+  position: relative;
+  z-index: 1;
+  animation: fadeIn 0.8s ease-out both;
 }
 
-.grid {
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* ── Morphing logo mark ── */
+
+.logoMark {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px;
-  width: 220px;
-  height: 220px;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  width: 56px;
+  height: 56px;
 }
 
-.cell {
+.square {
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.04);
-  animation: pulse 4s ease-in-out infinite alternate;
-  transition: background 0.3s ease, border-color 0.3s ease;
-  border: 1px solid rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.12);
 }
 
-.cell:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.12);
+.square:nth-child(1) {
+  background: rgba(255, 255, 255, 0.5);
+  animation: morph1 12s ease-in-out infinite;
 }
 
-@keyframes pulse {
-  0% {
-    background: rgba(255, 255, 255, 0.03);
+.square:nth-child(2) {
+  animation: morph2 12s ease-in-out infinite;
+}
+
+.square:nth-child(3) {
+  animation: morph3 12s ease-in-out infinite;
+}
+
+.square:nth-child(4) {
+  animation: morph4 12s ease-in-out infinite;
+}
+
+/*
+  Morph cycle (12s):
+  0%   — default 2×2 grid
+  25%  — squares swap diagonally
+  50%  — collapse into a row
+  75%  — fan out reversed
+  100% — back to default
+*/
+
+@keyframes morph1 {
+  0%, 100% {
+    transform: translate(0, 0);
+    background: rgba(255, 255, 255, 0.5);
+  }
+  25% {
+    transform: translate(calc(100% + 6px), calc(100% + 6px));
+    background: rgba(255, 255, 255, 0.12);
   }
   50% {
-    background: rgba(255, 255, 255, 0.10);
+    transform: translate(0, calc(50% + 3px));
+    background: rgba(255, 255, 255, 0.25);
   }
-  100% {
-    background: rgba(255, 255, 255, 0.03);
+  75% {
+    transform: translate(calc(100% + 6px), 0);
+    background: rgba(255, 255, 255, 0.35);
   }
 }
 
-/* ── Footer tagline ── */
+@keyframes morph2 {
+  0%, 100% {
+    transform: translate(0, 0);
+    background: rgba(255, 255, 255, 0.12);
+  }
+  25% {
+    transform: translate(calc(-100% - 6px), calc(100% + 6px));
+    background: rgba(255, 255, 255, 0.35);
+  }
+  50% {
+    transform: translate(0, calc(50% + 3px));
+    background: rgba(255, 255, 255, 0.12);
+  }
+  75% {
+    transform: translate(calc(-100% - 6px), 0);
+    background: rgba(255, 255, 255, 0.5);
+  }
+}
+
+@keyframes morph3 {
+  0%, 100% {
+    transform: translate(0, 0);
+    background: rgba(255, 255, 255, 0.12);
+  }
+  25% {
+    transform: translate(calc(100% + 6px), calc(-100% - 6px));
+    background: rgba(255, 255, 255, 0.5);
+  }
+  50% {
+    transform: translate(0, calc(-50% - 3px));
+    background: rgba(255, 255, 255, 0.35);
+  }
+  75% {
+    transform: translate(calc(100% + 6px), 0);
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+@keyframes morph4 {
+  0%, 100% {
+    transform: translate(0, 0);
+    background: rgba(255, 255, 255, 0.06);
+  }
+  25% {
+    transform: translate(calc(-100% - 6px), calc(-100% - 6px));
+    background: rgba(255, 255, 255, 0.25);
+  }
+  50% {
+    transform: translate(0, calc(-50% - 3px));
+    background: rgba(255, 255, 255, 0.5);
+  }
+  75% {
+    transform: translate(calc(-100% - 6px), 0);
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+.heroTitle {
+  font-size: 36px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0;
+}
+
+/* ── Footer (empty spacer) ── */
 
 .brandFooter {
-  display: flex;
-}
-
-.footerText {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.15);
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Right form panel ── */
@@ -113,7 +202,7 @@
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: #1A1A2E;
+  color: #141414;
   margin-bottom: 48px;
 }
 

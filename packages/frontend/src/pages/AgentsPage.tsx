@@ -419,6 +419,8 @@ function agentConversationKey(agentId: string, conversationId: string): string {
   return `${agentId}:${conversationId}`;
 }
 
+const RUN_HANDOFF_MS = 6000;
+
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -708,137 +710,138 @@ function AgentFiles({ agentId }: { agentId: string }) {
       {success && <div className={styles.filesToast}>{success}</div>}
       {error && <div className={styles.filesError}>{error}</div>}
 
-      {loading ? (
-        <div className={styles.loadingState}>Loading...</div>
-      ) : (
-        <div className={styles.filesTable}>
-          <div className={styles.filesTableHeader}>
-            <span className={styles.filesColName}>Name</span>
-            <span className={styles.filesColSize}>Size</span>
-            <span className={styles.filesColDate}>Modified</span>
-            <span className={styles.filesColActions}>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                <Upload size={14} />
-                {uploading ? 'Uploading...' : 'Upload'}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setShowNewFolder(!showNewFolder);
-                  setFolderName('');
-                }}
-              >
-                <FolderPlus size={14} />
-                Folder
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowFsBrowser(true)}>
-                <Link2 size={14} />
-                Reference
-              </Button>
-            </span>
-          </div>
+      <div className={styles.filesPanelScroll}>
+        {loading ? (
+          <div className={styles.loadingState}>Loading...</div>
+        ) : (
+          <div className={styles.filesTable}>
+            <div className={styles.filesTableHeader}>
+              <span className={styles.filesColName}>Name</span>
+              <span className={styles.filesColSize}>Size</span>
+              <span className={styles.filesColDate}>Modified</span>
+              <span className={styles.filesColActions}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                >
+                  <Upload size={14} />
+                  {uploading ? 'Uploading...' : 'Upload'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setShowNewFolder(!showNewFolder);
+                    setFolderName('');
+                  }}
+                >
+                  <FolderPlus size={14} />
+                  Folder
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowFsBrowser(true)}>
+                  <Link2 size={14} />
+                  Reference
+                </Button>
+              </span>
+            </div>
 
-          {showNewFolder && (
-            <div className={styles.filesNewFolderRow}>
-              <div className={styles.filesNewFolderIcon}>
-                <Folder size={18} className={styles.filesIconFolder} />
+            {showNewFolder && (
+              <div className={styles.filesNewFolderRow}>
+                <div className={styles.filesNewFolderIcon}>
+                  <Folder size={18} className={styles.filesIconFolder} />
+                </div>
+                <Input
+                  label=""
+                  placeholder="Folder name"
+                  value={folderName}
+                  onChange={(e) => setFolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCreateFolder();
+                    if (e.key === 'Escape') setShowNewFolder(false);
+                  }}
+                />
+                <Button
+                  size="sm"
+                  onClick={handleCreateFolder}
+                  disabled={creatingFolder || !folderName.trim()}
+                >
+                  {creatingFolder ? 'Creating...' : 'Create'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
+                  Cancel
+                </Button>
               </div>
-              <Input
-                label=""
-                placeholder="Folder name"
-                value={folderName}
-                onChange={(e) => setFolderName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreateFolder();
-                  if (e.key === 'Escape') setShowNewFolder(false);
-                }}
-              />
-              <Button
-                size="sm"
-                onClick={handleCreateFolder}
-                disabled={creatingFolder || !folderName.trim()}
-              >
-                {creatingFolder ? 'Creating...' : 'Create'}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
-                Cancel
-              </Button>
-            </div>
-          )}
+            )}
 
-          {parentPath !== null && (
-            <div className={styles.filesRow}>
-              <button
-                className={styles.filesColName}
-                onClick={() => navigateTo(parentPath === '/' ? '/' : parentPath)}
-              >
-                <CornerLeftUp size={18} className={styles.filesIconFile} />
-                <span className={styles.filesFileName}>..</span>
-              </button>
-              <span className={styles.filesColSize}>—</span>
-              <span className={styles.filesColDate}>—</span>
-              <span className={styles.filesColActions} />
-            </div>
-          )}
+            {parentPath !== null && (
+              <div className={styles.filesRow}>
+                <button
+                  className={styles.filesColName}
+                  onClick={() => navigateTo(parentPath === '/' ? '/' : parentPath)}
+                >
+                  <CornerLeftUp size={18} className={styles.filesIconFile} />
+                  <span className={styles.filesFileName}>..</span>
+                </button>
+                <span className={styles.filesColSize}>—</span>
+                <span className={styles.filesColDate}>—</span>
+                <span className={styles.filesColActions} />
+              </div>
+            )}
 
-          {sorted.length === 0 ? (
-            <div
-              className={`${styles.filesEmpty} ${dragOver ? styles.filesEmptyDragOver : ''}`}
-              onDrop={handleDrop}
-              onDragEnter={handleDragEnter}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-            >
-              <Upload size={32} strokeWidth={1.5} />
-              <p>Drop files here or use the upload button</p>
-            </div>
-          ) : (
-            <div
-              className={`${styles.filesDropTarget} ${dragOver ? styles.filesDropTargetActive : ''}`}
-              onDrop={handleDrop}
-              onDragEnter={handleDragEnter}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-            >
-              {sorted.map((entry) => (
-                <div key={entry.path} className={styles.filesRow}>
-                  <button className={styles.filesColName} onClick={() => handleEntryClick(entry)}>
-                    {getAgentEntryIcon(entry)}
-                    <span className={styles.filesFileName}>{entry.name}</span>
-                  </button>
-                  <span className={styles.filesColSize}>
-                    {entry.type === 'file' ? formatFileSize(entry.size) : '—'}
-                  </span>
-                  <span className={styles.filesColDate}>{formatFileDate(entry.createdAt)}</span>
-                  <span className={styles.filesColActions}>
-                    {entry.type === 'file' && isPreviewable(entry.name) && (
-                      <Tooltip label="Preview">
-                        <button
-                          className={styles.filesIconBtn}
-                          onClick={() => setPreviewEntry(entry)}
-                          aria-label="Preview"
-                        >
-                          <Eye size={16} />
-                        </button>
-                      </Tooltip>
-                    )}
-                    {entry.type === 'file' && (
-                      <Tooltip label="Download">
-                        <button
-                          className={styles.filesIconBtn}
-                          onClick={() => handleDownload(entry.path)}
-                          aria-label="Download"
-                        >
-                          <Download size={16} />
-                        </button>
-                      </Tooltip>
-                    )}
+            {sorted.length === 0 ? (
+              <div
+                className={`${styles.filesEmpty} ${dragOver ? styles.filesEmptyDragOver : ''}`}
+                onDrop={handleDrop}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+              >
+                <Upload size={32} strokeWidth={1.5} />
+                <p>Drop files here or use the upload button</p>
+              </div>
+            ) : (
+              <div
+                className={`${styles.filesDropTarget} ${dragOver ? styles.filesDropTargetActive : ''}`}
+                onDrop={handleDrop}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+              >
+                {sorted.map((entry) => (
+                  <div key={entry.path} className={styles.filesRow}>
+                    <button className={styles.filesColName} onClick={() => handleEntryClick(entry)}>
+                      {getAgentEntryIcon(entry)}
+                      <span className={styles.filesFileName}>{entry.name}</span>
+                    </button>
+                    <span className={styles.filesColSize}>
+                      {entry.type === 'file' ? formatFileSize(entry.size) : '—'}
+                    </span>
+                    <span className={styles.filesColDate}>{formatFileDate(entry.createdAt)}</span>
+                    <span className={styles.filesColActions}>
+                      {entry.type === 'file' && isPreviewable(entry.name) && (
+                        <Tooltip label="Preview">
+                          <button
+                            className={styles.filesIconBtn}
+                            onClick={() => setPreviewEntry(entry)}
+                            aria-label="Preview"
+                          >
+                            <Eye size={16} />
+                          </button>
+                        </Tooltip>
+                      )}
+                      {entry.type === 'file' && (
+                        <Tooltip label="Download">
+                          <button
+                            className={styles.filesIconBtn}
+                            onClick={() => handleDownload(entry.path)}
+                            aria-label="Download"
+                          >
+                            <Download size={16} />
+                          </button>
+                        </Tooltip>
+                      )}
                     <Tooltip label="Show in Finder">
                       <button
                         className={styles.filesIconBtn}
@@ -883,7 +886,8 @@ function AgentFiles({ agentId }: { agentId: string }) {
             </div>
           )}
         </div>
-      )}
+        )}
+      </div>
 
       {previewEntry && (
         <FilePreviewModal
@@ -975,6 +979,7 @@ export function AgentsPage() {
   const [stagedImages, setStagedImages] = useState<{ file: File; previewUrl: string }[]>([]);
   const [draggingOver, setDraggingOver] = useState(false);
   const [pendingConversationKeys, setPendingConversationKeys] = useState<Set<string>>(new Set());
+  const [runHandoffKeys, setRunHandoffKeys] = useState<Set<string>>(new Set());
   const [stoppingRun, setStoppingRun] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -983,6 +988,8 @@ export function AgentsPage() {
   const activeConvIdRef = useRef<string | null>(null);
   const pendingConversationKeysRef = useRef<Set<string>>(new Set());
   const pendingConversationCountRef = useRef<Map<string, number>>(new Map());
+  const runHandoffTimersRef = useRef<Map<string, number>>(new Map());
+  const runHandoffStartedAtRef = useRef<Map<string, number>>(new Map());
 
   // ── Conversation indicators ──
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -1155,6 +1162,51 @@ export function AgentsPage() {
     [],
   );
 
+  const clearRunHandoff = useCallback((agentId: string, conversationId: string) => {
+    const key = agentConversationKey(agentId, conversationId);
+    const timer = runHandoffTimersRef.current.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      runHandoffTimersRef.current.delete(key);
+    }
+    runHandoffStartedAtRef.current.delete(key);
+    setRunHandoffKeys((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const beginRunHandoff = useCallback(
+    (agentId: string, conversationId: string) => {
+      const key = agentConversationKey(agentId, conversationId);
+      const existing = runHandoffTimersRef.current.get(key);
+      if (existing) {
+        clearTimeout(existing);
+      }
+      runHandoffStartedAtRef.current.set(key, Date.now());
+      const timer = window.setTimeout(() => {
+        runHandoffTimersRef.current.delete(key);
+        runHandoffStartedAtRef.current.delete(key);
+        setRunHandoffKeys((prev) => {
+          if (!prev.has(key)) return prev;
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }, RUN_HANDOFF_MS);
+      runHandoffTimersRef.current.set(key, timer);
+      setRunHandoffKeys((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    },
+    [],
+  );
+
   const activeConversation = useMemo(() => {
     if (!activeAgentId || !activeConvId) return null;
     return (convsByAgent[activeAgentId] || []).find((conv) => conv.id === activeConvId) ?? null;
@@ -1163,9 +1215,17 @@ export function AgentsPage() {
     activeAgentId && activeConvId
       ? pendingConversationKeys.has(agentConversationKey(activeAgentId, activeConvId))
       : false;
+  const activeConversationHandoff =
+    activeAgentId && activeConvId
+      ? runHandoffKeys.has(agentConversationKey(activeAgentId, activeConvId))
+      : false;
   const activeConversationBusy = Boolean(activeConversation?.isBusy);
   const activeConversationQueueCount = toQueueCount(activeConversation?.queuedCount);
-  const streaming = activeConversationPending || activeConversationBusy;
+  const streaming =
+    activeConversationPending ||
+    activeConversationBusy ||
+    activeConversationHandoff ||
+    activeConversationQueueCount > 0;
 
   const isActiveConversation = useCallback(
     (agentId: string, conversationId: string) =>
@@ -1215,12 +1275,17 @@ export function AgentsPage() {
       const data = await api<{ entries: ChatConversation[]; total: number }>(
         `/agents/${agentId}/chat/conversations`,
       );
+      for (const conversation of data.entries) {
+        if (conversation.isBusy || toQueueCount(conversation.queuedCount) > 0) {
+          clearRunHandoff(agentId, conversation.id);
+        }
+      }
       setConvsByAgent((prev) => ({ ...prev, [agentId]: data.entries }));
       return data.entries;
     } catch {
       return [];
     }
-  }, []);
+  }, [clearRunHandoff]);
 
   const refreshAllConversations = useCallback(async () => {
     const agentIds = agents.map((agent) => agent.id);
@@ -1246,6 +1311,11 @@ export function AgentsPage() {
       for (const entry of fetched) {
         if (!entry) continue;
         const [agentId, incoming] = entry;
+        for (const conversation of incoming) {
+          if (conversation.isBusy || toQueueCount(conversation.queuedCount) > 0) {
+            clearRunHandoff(agentId, conversation.id);
+          }
+        }
         const existing = prev[agentId] || [];
         if (areChatConversationListsEqual(existing, incoming)) continue;
         next[agentId] = incoming;
@@ -1254,7 +1324,7 @@ export function AgentsPage() {
 
       return changed ? next : prev;
     });
-  }, [agents]);
+  }, [agents, clearRunHandoff]);
 
   /* ── Fetch messages ── */
   const messagesRef2 = useRef<ChatMessage[]>([]);
@@ -1269,6 +1339,19 @@ export function AgentsPage() {
           `/agents/${agentId}/chat/messages?conversationId=${conversationId}`,
         );
         if (!isActiveConversation(agentId, conversationId)) return;
+        const handoffStartedAt =
+          runHandoffStartedAtRef.current.get(agentConversationKey(agentId, conversationId)) ?? null;
+        if (
+          handoffStartedAt !== null &&
+          data.entries.some(
+            (message) =>
+              message.direction === 'inbound' &&
+              message.type !== 'system' &&
+              new Date(message.createdAt).getTime() >= handoffStartedAt,
+          )
+        ) {
+          clearRunHandoff(agentId, conversationId);
+        }
         // Skip update if message list hasn't changed (avoids dropping optimistic
         // temp messages and prevents unnecessary re-renders during polling).
         const prev = messagesRef2.current;
@@ -1287,7 +1370,7 @@ export function AgentsPage() {
         if (!silent) setChatLoading(false);
       }
     },
-    [isActiveConversation],
+    [clearRunHandoff, isActiveConversation],
   );
 
   const markConversationRead = useCallback(async (agentId: string, conversationId: string) => {
@@ -1327,6 +1410,17 @@ export function AgentsPage() {
       }
     },
     [isActiveConversation],
+  );
+
+  const syncActiveConversation = useCallback(
+    async (agentId: string, conversationId: string, options?: { silent?: boolean }) => {
+      await Promise.all([
+        fetchMessages(agentId, conversationId, options),
+        fetchQueueItems(agentId, conversationId),
+        fetchConversations(agentId),
+      ]);
+    },
+    [fetchConversations, fetchMessages, fetchQueueItems],
   );
 
   async function handleSaveQueueItem(itemId: string) {
@@ -1473,33 +1567,52 @@ export function AgentsPage() {
     };
   }, [agents, refreshAllConversations]);
 
-  // While a run is active (local pending request or backend busy flag),
-  // periodically refresh messages so progress/final updates are visible.
+  // While a run is active or queued, keep the active chat state in sync so the
+  // reply, queue badge, and processing indicator settle together.
   useEffect(() => {
-    if ((!activeConversationBusy && !activeConversationPending) || !activeAgentId || !activeConvId)
+    if (!streaming || !activeAgentId || !activeConvId) {
       return;
+    }
 
     const agentId = activeAgentId;
     const conversationId = activeConvId;
-    void fetchMessages(agentId, conversationId, { silent: true });
-    void fetchQueueItems(agentId, conversationId);
+    void syncActiveConversation(agentId, conversationId, { silent: true });
 
     const intervalId = window.setInterval(() => {
-      void fetchMessages(agentId, conversationId, { silent: true });
-      void fetchQueueItems(agentId, conversationId);
+      void syncActiveConversation(agentId, conversationId, { silent: true });
     }, 1500);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
-    activeConversationBusy,
-    activeConversationPending,
     activeAgentId,
     activeConvId,
-    fetchMessages,
-    fetchQueueItems,
+    streaming,
+    syncActiveConversation,
   ]);
+
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (streaming) {
+      wasStreamingRef.current = true;
+      return;
+    }
+    if (!wasStreamingRef.current || !activeAgentId || !activeConvId) return;
+    wasStreamingRef.current = false;
+    void syncActiveConversation(activeAgentId, activeConvId, { silent: true });
+  }, [activeAgentId, activeConvId, streaming, syncActiveConversation]);
+
+  useEffect(
+    () => () => {
+      for (const timer of runHandoffTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      runHandoffTimersRef.current.clear();
+      runHandoffStartedAtRef.current.clear();
+    },
+    [],
+  );
 
   /* ── Scroll to bottom ── */
   const scrollToBottom = useCallback(() => {
@@ -1652,6 +1765,7 @@ export function AgentsPage() {
         [agentId]: (prev[agentId] || []).filter((c) => c.id !== convId),
       }));
       pendingConversationCountRef.current.delete(agentConversationKey(agentId, convId));
+      clearRunHandoff(agentId, convId);
       setPendingConversationKeys((prev) => {
         const key = agentConversationKey(agentId, convId);
         if (!prev.has(key)) return prev;
@@ -1704,6 +1818,7 @@ export function AgentsPage() {
       const next = new Set(prev);
       for (const c of toDelete) {
         pendingConversationCountRef.current.delete(agentConversationKey(agentId, c.id));
+        clearRunHandoff(agentId, c.id);
         changed = next.delete(agentConversationKey(agentId, c.id)) || changed;
       }
       return changed ? next : prev;
@@ -1784,6 +1899,7 @@ export function AgentsPage() {
       }
 
       // Trigger the agent to respond to the uploaded images
+      beginRunHandoff(sentAgentId, sentConvId);
       setConversationPending(sentAgentId, sentConvId, true);
       try {
         await api(`/agents/${sentAgentId}/chat/respond`, {
@@ -1795,6 +1911,7 @@ export function AgentsPage() {
           fetchConversations(sentAgentId),
         ]);
       } catch (err) {
+        clearRunHandoff(sentAgentId, sentConvId);
         setChatError(err instanceof Error ? err.message : 'Failed to get agent response');
       } finally {
         setConversationPending(sentAgentId, sentConvId, false);
@@ -1822,6 +1939,7 @@ export function AgentsPage() {
 
     const directMessageId = `direct-${Date.now()}-${generateId()}`;
     if (!alreadyBusy) {
+      beginRunHandoff(sentAgentId, sentConvId);
       setConversationPending(sentAgentId, sentConvId, true);
     }
     try {
@@ -1836,21 +1954,19 @@ export function AgentsPage() {
         }),
       });
       const immediateQueuedCount = toQueueCount(queueResponse.queuedCount);
-      if (immediateQueuedCount > 0) {
-        setConvsByAgent((prev) => {
-          const convs = prev[sentAgentId];
-          if (!convs || convs.length === 0) return prev;
-          let changed = false;
-          const nextConvs = convs.map((conv) => {
-            if (conv.id !== sentConvId) return conv;
-            if (toQueueCount(conv.queuedCount) === immediateQueuedCount && conv.isBusy) return conv;
-            changed = true;
-            return { ...conv, isBusy: true, queuedCount: immediateQueuedCount };
-          });
-          if (!changed) return prev;
-          return { ...prev, [sentAgentId]: nextConvs };
+      setConvsByAgent((prev) => {
+        const convs = prev[sentAgentId];
+        if (!convs || convs.length === 0) return prev;
+        let changed = false;
+        const nextConvs = convs.map((conv) => {
+          if (conv.id !== sentConvId) return conv;
+          if (conv.isBusy && toQueueCount(conv.queuedCount) === immediateQueuedCount) return conv;
+          changed = true;
+          return { ...conv, isBusy: true, queuedCount: immediateQueuedCount };
         });
-      }
+        if (!changed) return prev;
+        return { ...prev, [sentAgentId]: nextConvs };
+      });
       // Refetch queue items to replace optimistic entry with real data
       await fetchQueueItems(sentAgentId, sentConvId);
       if (!alreadyBusy) {
@@ -1862,6 +1978,7 @@ export function AgentsPage() {
       }
     } catch (err) {
       // Remove optimistic queue item on failure
+      clearRunHandoff(sentAgentId, sentConvId);
       setQueueItems((prev) => prev.filter((item) => item.id !== optimisticQueueItem.id));
       setChatError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
@@ -2303,6 +2420,9 @@ export function AgentsPage() {
         delete next[id];
         return next;
       });
+      for (const conversation of convsByAgent[id] || []) {
+        clearRunHandoff(id, conversation.id);
+      }
       if (activeAgentId === id) {
         setActiveConversation(null, null);
         setMessages([]);
@@ -2784,21 +2904,6 @@ export function AgentsPage() {
                       Files
                     </button>
                   </div>
-                  <Tooltip label="Message queue">
-                    <button
-                      className={`${styles.iconBtn} ${queuePanelOpen ? styles.iconBtnActive : ''}`}
-                      onClick={() => {
-                        const next = !queuePanelOpen;
-                        setQueuePanelOpen(next);
-                        if (next && activeAgentId && activeConvId) {
-                          void fetchQueueItems(activeAgentId, activeConvId);
-                        }
-                      }}
-                      aria-label="Message queue"
-                    >
-                      <ListOrdered size={15} />
-                    </button>
-                  </Tooltip>
                   <Tooltip label="Agent settings">
                     <button
                       className={styles.iconBtn}

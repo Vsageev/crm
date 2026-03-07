@@ -159,6 +159,30 @@ function dedupeAdjacentParts(parts: string[]): string[] {
   return deduped;
 }
 
+function appendStreamDelta(existing: string | undefined, incoming: string): string {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const existingTrimmed = existing.trim();
+  const incomingTrimmed = incoming.trim();
+  if (
+    (existingTrimmed === '{}' && incomingTrimmed.startsWith('{'))
+    || (existingTrimmed === '[]' && incomingTrimmed.startsWith('['))
+  ) {
+    return incoming;
+  }
+  if (existing.includes(incoming)) return existing;
+  if (incoming.includes(existing)) return incoming;
+
+  const maxOverlap = Math.min(existing.length, incoming.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (existing.endsWith(incoming.slice(0, overlap))) {
+      return `${existing}${incoming.slice(overlap)}`;
+    }
+  }
+
+  return `${existing}${incoming}`;
+}
+
 function extractJsonObjects(output: string): string[] | null {
   const chunks: string[] = [];
   let start = -1;
@@ -443,40 +467,54 @@ function renderStreamBlock(block: StreamBlockState): string | null {
 }
 
 function formatPartialStreamContent(events: JsonRecord[]): string {
-  const thinkingByIndex = new Map<number, string>();
-  const textByIndex = new Map<number, string>();
+  const streamBlocks = new Map<number, StreamBlockState>();
 
   for (const event of events) {
     if (event.type !== 'stream_event') continue;
 
     const inner = asRecord(event.event);
-    if (!inner || inner.type !== 'content_block_delta') continue;
+    if (!inner || typeof inner.type !== 'string') continue;
+
+    if (inner.type === 'content_block_start') {
+      const index = typeof inner.index === 'number' ? inner.index : 0;
+      const contentBlock = asRecord(inner.content_block);
+      if (contentBlock) streamBlocks.set(index, createStreamBlock(contentBlock));
+      continue;
+    }
+
+    if (inner.type !== 'content_block_delta') continue;
 
     const index = typeof inner.index === 'number' ? inner.index : 0;
     const delta = asRecord(inner.delta);
     if (!delta || typeof delta.type !== 'string') continue;
+    const block = streamBlocks.get(index) || { type: 'content', raw: null };
 
     if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-      thinkingByIndex.set(index, `${thinkingByIndex.get(index) || ''}${delta.thinking}`);
+      block.type = 'thinking';
+      block.thinking = appendStreamDelta(block.thinking, delta.thinking);
+    } else if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+      block.type = 'text';
+      block.text = appendStreamDelta(block.text, delta.text);
+    } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+      block.type = 'tool_use';
+      block.input = appendStreamDelta(block.input, delta.partial_json);
     }
 
-    if (delta.type === 'text_delta' && typeof delta.text === 'string') {
-      textByIndex.set(index, `${textByIndex.get(index) || ''}${delta.text}`);
-    }
+    streamBlocks.set(index, block);
   }
 
   const parts: string[] = [];
 
-  const thinking = [...thinkingByIndex.entries()]
+  const thinking = [...streamBlocks.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([, value]) => value.trim())
+    .map(([, block]) => block.thinking?.trim() || '')
     .filter(Boolean)
     .join('\n\n');
   if (thinking) parts.push(`Thinking\n${thinking}`);
 
-  const text = [...textByIndex.entries()]
+  const text = [...streamBlocks.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([, value]) => value)
+    .map(([, block]) => block.text || '')
     .join('')
     .trim();
   if (text) parts.push(`Assistant\n${text}`);
@@ -487,15 +525,16 @@ function formatPartialStreamContent(events: JsonRecord[]): string {
 function formatStructuredEventsForDisplay(events: JsonRecord[]): string {
   const parts: string[] = [];
   const streamBlocks = new Map<number, StreamBlockState>();
-  let hadStreamContent = false;
+  let currentMessageBlocks: OutputBlock[] = [];
 
   const flushBlock = (index: number) => {
     const block = streamBlocks.get(index);
     if (!block) return;
     const rendered = renderStreamBlock(block);
     if (rendered) parts.push(rendered);
+    const output = buildStreamBlockOutput(block);
+    if (output) currentMessageBlocks.push(output);
     streamBlocks.delete(index);
-    hadStreamContent = true;
   };
 
   for (const event of events) {
@@ -506,8 +545,9 @@ function formatStructuredEventsForDisplay(events: JsonRecord[]): string {
     }
 
     if (event.type === 'assistant' || event.role === 'assistant') {
-      if (hadStreamContent) {
-        hadStreamContent = false;
+      const assistantBlocks = getAssistantEventBlocks(event);
+      const streamedBlocks = [...currentMessageBlocks, ...getActiveStreamOutputs(streamBlocks)];
+      if (assistantBlocks.length > 0 && outputBlocksMatch(streamedBlocks, assistantBlocks)) {
         continue;
       }
       const rendered = renderAssistantEvent(event);
@@ -533,6 +573,7 @@ function formatStructuredEventsForDisplay(events: JsonRecord[]): string {
     if (!inner || typeof inner.type !== 'string') continue;
 
     if (inner.type === 'message_start') {
+      currentMessageBlocks = [];
       const message = asRecord(inner.message);
       if (!message) continue;
 
@@ -562,13 +603,13 @@ function formatStructuredEventsForDisplay(events: JsonRecord[]): string {
 
       if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         block.type = 'thinking';
-        block.thinking = `${block.thinking || ''}${delta.thinking}`;
+        block.thinking = appendStreamDelta(block.thinking, delta.thinking);
       } else if (delta.type === 'text_delta' && typeof delta.text === 'string') {
         block.type = 'text';
-        block.text = `${block.text || ''}${delta.text}`;
+        block.text = appendStreamDelta(block.text, delta.text);
       } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
         block.type = 'tool_use';
-        block.input = `${block.input || ''}${delta.partial_json}`;
+        block.input = appendStreamDelta(block.input, delta.partial_json);
       }
 
       streamBlocks.set(index, block);
@@ -697,6 +738,54 @@ export type OutputBlock =
   | MessageMetaBlock
   | PlainTextBlock;
 
+function outputBlocksMatch(left: OutputBlock[], right: OutputBlock[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((block, index) => outputBlocksEqual(block, right[index]));
+}
+
+function outputBlocksEqual(left: OutputBlock, right: OutputBlock): boolean {
+  if (left.type !== right.type) return false;
+
+  switch (left.type) {
+    case 'thinking':
+    case 'assistant_text':
+    case 'plain_text':
+      return left.content.trim() === (right as ThinkingBlock | AssistantTextBlock | PlainTextBlock).content.trim();
+    case 'tool_call':
+      return (
+        left.toolName === (right as ToolCallBlock).toolName
+        && (left.toolId || '') === ((right as ToolCallBlock).toolId || '')
+        && (left.input || '').trim() === (((right as ToolCallBlock).input || '').trim())
+      );
+    case 'tool_result':
+      return (
+        (left.toolId || '') === ((right as ToolResultBlock).toolId || '')
+        && left.content.trim() === (right as ToolResultBlock).content.trim()
+      );
+    case 'result':
+      return (
+        (left.text || '').trim() === (((right as ResultBlock).text || '').trim())
+        && left.durationMs === (right as ResultBlock).durationMs
+        && left.stopReason === (right as ResultBlock).stopReason
+        && left.isError === (right as ResultBlock).isError
+      );
+    case 'message_meta':
+      return (
+        left.label === (right as MessageMetaBlock).label
+        && JSON.stringify(left.details) === JSON.stringify((right as MessageMetaBlock).details)
+      );
+    case 'system_init':
+      return JSON.stringify(left) === JSON.stringify(right);
+    case 'rate_limit':
+      return (
+        (left.message || '') === ((right as RateLimitBlock).message || '')
+        && (left.retryAfter || '') === ((right as RateLimitBlock).retryAfter || '')
+      );
+    default:
+      return false;
+  }
+}
+
 function buildSystemInitBlock(event: JsonRecord): SystemInitBlock {
   const block: SystemInitBlock = { type: 'system_init' };
   if (typeof event.model === 'string') block.model = event.model;
@@ -795,6 +884,27 @@ function buildStreamBlockOutput(block: StreamBlockState): OutputBlock | null {
   return null;
 }
 
+function getActiveStreamOutputs(streamBlocks: Map<number, StreamBlockState>): OutputBlock[] {
+  return [...streamBlocks.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, block]) => buildStreamBlockOutput(block))
+    .filter((block): block is OutputBlock => block !== null);
+}
+
+function getAssistantEventBlocks(event: JsonRecord): OutputBlock[] {
+  const message = asRecord(event.message);
+  const content = Array.isArray(message?.content)
+    ? message.content
+    : Array.isArray(event.content)
+      ? event.content
+      : null;
+
+  if (content) return buildContentBlocks(content);
+
+  const text = extractFromAssistantEvent(event);
+  return text ? [{ type: 'assistant_text', content: text }] : [];
+}
+
 function parseUsageRecord(usage: unknown): ResultBlock['usage'] | undefined {
   const rec = asRecord(usage);
   if (!rec) return undefined;
@@ -809,15 +919,17 @@ function parseUsageRecord(usage: unknown): ResultBlock['usage'] | undefined {
 function structuredEventsToBlocks(events: JsonRecord[]): OutputBlock[] {
   const blocks: OutputBlock[] = [];
   const streamBlocks = new Map<number, StreamBlockState>();
-  let hadStreamContent = false;
+  let currentMessageBlocks: OutputBlock[] = [];
 
   const flushBlock = (index: number) => {
     const sb = streamBlocks.get(index);
     if (!sb) return;
     const ob = buildStreamBlockOutput(sb);
-    if (ob) blocks.push(ob);
+    if (ob) {
+      blocks.push(ob);
+      currentMessageBlocks.push(ob);
+    }
     streamBlocks.delete(index);
-    hadStreamContent = true;
   };
 
   for (const event of events) {
@@ -827,23 +939,12 @@ function structuredEventsToBlocks(events: JsonRecord[]): OutputBlock[] {
     }
 
     if (event.type === 'assistant' || event.role === 'assistant') {
-      // Skip assistant events if we already built the same content from stream deltas
-      if (hadStreamContent) {
-        hadStreamContent = false;
+      const assistantBlocks = getAssistantEventBlocks(event);
+      const streamedBlocks = [...currentMessageBlocks, ...getActiveStreamOutputs(streamBlocks)];
+      if (assistantBlocks.length > 0 && outputBlocksMatch(streamedBlocks, assistantBlocks)) {
         continue;
       }
-      const message = asRecord(event.message);
-      const content = Array.isArray(message?.content)
-        ? message.content
-        : Array.isArray(event.content)
-          ? event.content
-          : null;
-      if (content) {
-        blocks.push(...buildContentBlocks(content));
-      } else {
-        const text = extractFromAssistantEvent(event);
-        if (text) blocks.push({ type: 'assistant_text', content: text });
-      }
+      if (assistantBlocks.length > 0) blocks.push(...assistantBlocks);
       continue;
     }
 
@@ -879,6 +980,7 @@ function structuredEventsToBlocks(events: JsonRecord[]): OutputBlock[] {
     if (!inner || typeof inner.type !== 'string') continue;
 
     if (inner.type === 'message_start') {
+      currentMessageBlocks = [];
       const message = asRecord(inner.message);
       if (message) {
         const details: Record<string, string> = {};
@@ -906,13 +1008,13 @@ function structuredEventsToBlocks(events: JsonRecord[]): OutputBlock[] {
 
       if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         block.type = 'thinking';
-        block.thinking = `${block.thinking || ''}${delta.thinking}`;
+        block.thinking = appendStreamDelta(block.thinking, delta.thinking);
       } else if (delta.type === 'text_delta' && typeof delta.text === 'string') {
         block.type = 'text';
-        block.text = `${block.text || ''}${delta.text}`;
+        block.text = appendStreamDelta(block.text, delta.text);
       } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
         block.type = 'tool_use';
-        block.input = `${block.input || ''}${delta.partial_json}`;
+        block.input = appendStreamDelta(block.input, delta.partial_json);
       }
 
       streamBlocks.set(index, block);

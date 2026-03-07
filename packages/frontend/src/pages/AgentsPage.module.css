@@ -2026,8 +2026,16 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   padding: var(--space-4) var(--space-5);
+}
+
+.filesPanelScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .filesHiddenInput {
