@@ -1,3 +1,5 @@
+import type { OutputBlock } from 'shared';
+
 export interface AgentChatAttachment {
   type: string;
   fileName: string;
@@ -16,6 +18,7 @@ export interface AgentChatMessage {
   attachments?: AgentChatAttachment[] | null;
   parentId?: string | null;
   previousUserMessageId?: string | null;
+  runId?: string | null;
   siblingIndex?: number;
   siblingCount?: number;
   siblingIds?: string[];
@@ -193,6 +196,35 @@ export interface AgentConversationChatView {
   }>;
 }
 
+export interface AgentChatRunEvent {
+  id: string;
+  kind: OutputBlock['type'];
+  label: string;
+  detail: string | null;
+}
+
+export const RUN_EVENT_DETAIL_PREVIEW_MAX = 120;
+
+const RUN_EVENT_EXPANDABLE_KINDS = new Set<OutputBlock['type']>([
+  'thinking',
+  'plain_text',
+  'tool_result',
+  'tool_call',
+  'result',
+]);
+
+export interface AgentChatRunEventSummary {
+  headline: string;
+  badgeLabel: string;
+  preview: string | null;
+  events: AgentChatRunEvent[];
+  stats: {
+    tools: number;
+    messages: number;
+    updates: number;
+  };
+}
+
 export function toQueueCount(value: unknown): number {
   const parsed = Number(value ?? 0);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
@@ -264,6 +296,338 @@ export function queueItemsLabel(count: number): string {
 
 export function getQueueItemMode(item: Pick<AgentChatQueueItem, 'mode'>): QueueExecutionMode {
   return item.mode ?? 'append_prompt';
+}
+
+export interface BuildAgentChatRunEventSummaryOptions {
+  /** Hide the final draft row when the assistant bubble already shows the answer. */
+  hideFinalDraft?: boolean;
+}
+
+export function buildAgentChatRunEventSummary(
+  blocks: OutputBlock[] | null | undefined,
+  options: BuildAgentChatRunEventSummaryOptions = {},
+): AgentChatRunEventSummary {
+  const normalizedBlocks = collapseConsecutiveAssistantTextBlocks(blocks ?? []);
+  const rawEvents = normalizedBlocks
+    .map((block, index) => mapOutputBlockToRunEvent(block, index))
+    .filter((event): event is AgentChatRunEvent => event !== null);
+  const events = prepareRunEventsForDisplay(
+    collapseConsecutiveDraftRunEvents(rawEvents),
+    options,
+  );
+  const latest = events.length > 0 ? events[events.length - 1] : null;
+  const latestPreview = findLatestRunEventPreview(normalizedBlocks);
+  const toolCount = (blocks ?? []).filter((block) => block.type === 'tool_call').length;
+  const messageCount = (blocks ?? []).filter((block) => block.type === 'assistant_text').length;
+
+  return {
+    headline: latest?.label ?? 'Thinking',
+    badgeLabel: latest ? latest.label : 'Processing...',
+    preview: latestPreview,
+    events,
+    stats: {
+      tools: toolCount,
+      messages: messageCount,
+      updates: events.length,
+    },
+  };
+}
+
+function mapOutputBlockToRunEvent(block: OutputBlock, index: number): AgentChatRunEvent | null {
+  const id = `${block.type}:${index}`;
+  if (block.type === 'system_init') {
+    return {
+      id,
+      kind: block.type,
+      label: block.model ? `Session started: ${block.model}` : 'Session started',
+      detail: block.cwd ?? null,
+    };
+  }
+  if (block.type === 'thinking') {
+    return {
+      id,
+      kind: block.type,
+      label: 'Thinking through next step',
+      detail: formatRunEventDetailText(block.content),
+    };
+  }
+  if (block.type === 'assistant_text') {
+    return {
+      id: `assistant_text:draft:${index}`,
+      kind: block.type,
+      label: 'Drafting response',
+      detail: formatRunEventDraftText(block.content),
+    };
+  }
+  if (block.type === 'tool_call') {
+    return {
+      id,
+      kind: block.type,
+      label: `Running ${block.toolName}`,
+      detail: formatRunEventDetailText(block.input ?? null),
+    };
+  }
+  if (block.type === 'tool_result') {
+    return {
+      id,
+      kind: block.type,
+      label: 'Reading tool output',
+      detail: formatRunEventDetailText(block.content),
+    };
+  }
+  if (block.type === 'result') {
+    return {
+      id,
+      kind: block.type,
+      label: block.isError ? 'Run hit an error' : 'Finishing run',
+      detail: formatRunEventDetailText(block.text ?? block.stopReason ?? null),
+    };
+  }
+  if (block.type === 'rate_limit') {
+    return {
+      id,
+      kind: block.type,
+      label: 'Rate limited',
+      detail: block.retryAfter ? `Retrying in ${block.retryAfter}s` : (block.message ?? null),
+    };
+  }
+  if (block.type === 'message_meta') {
+    const details = Object.entries(block.details)
+      .slice(0, 2)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(', ');
+    return {
+      id,
+      kind: block.type,
+      label: block.label,
+      detail: details || null,
+    };
+  }
+  if (block.type === 'plain_text') {
+    return {
+      id,
+      kind: block.type,
+      label: 'Streaming output',
+      detail: formatRunEventDetailText(block.content),
+    };
+  }
+  return null;
+}
+
+function collapseConsecutiveAssistantTextBlocks(blocks: OutputBlock[]): OutputBlock[] {
+  const collapsed: OutputBlock[] = [];
+
+  for (const block of blocks) {
+    const previous = collapsed[collapsed.length - 1];
+    if (block.type === 'assistant_text' && previous?.type === 'assistant_text') {
+      collapsed[collapsed.length - 1] = {
+        type: 'assistant_text',
+        content: mergeAssistantTextContent(previous.content, block.content),
+      };
+      continue;
+    }
+    collapsed.push(block);
+  }
+
+  return collapsed;
+}
+
+function mergeAssistantTextContent(current: string, incoming: string): string {
+  return mergeRunEventDraftDetails(current, incoming) ?? '';
+}
+
+function collapseConsecutiveDraftRunEvents(events: AgentChatRunEvent[]): AgentChatRunEvent[] {
+  const collapsed: AgentChatRunEvent[] = [];
+
+  for (const event of events) {
+    const previous = collapsed[collapsed.length - 1];
+    if (event.kind === 'assistant_text' && previous?.kind === 'assistant_text') {
+      collapsed[collapsed.length - 1] = {
+        ...previous,
+        id: previous.id,
+        detail: mergeRunEventDraftDetails(previous.detail, event.detail),
+      };
+      continue;
+    }
+    collapsed.push(event);
+  }
+
+  return collapsed;
+}
+
+function normalizeDraftTextForCompare(text: string): string {
+  return text.replace(/\s+/g, '');
+}
+
+function findDraftTextSuffixPrefixOverlap(previous: string, next: string): number {
+  const max = Math.min(previous.length, next.length);
+  for (let size = max; size > 0; size -= 1) {
+    if (previous.endsWith(next.slice(0, size))) {
+      return size;
+    }
+  }
+  return 0;
+}
+
+function joinDraftTextSegments(previous: string, next: string): string {
+  const overlap = findDraftTextSuffixPrefixOverlap(previous, next);
+  if (overlap > 0) {
+    return previous + next.slice(overlap);
+  }
+  const needsSpace =
+    previous.length > 0 &&
+    next.length > 0 &&
+    !/\s/.test(previous.at(-1) ?? '') &&
+    !/\s/.test(next[0] ?? '');
+  return needsSpace ? `${previous} ${next}` : `${previous}${next}`;
+}
+
+function mergeRunEventDraftDetails(
+  current: string | null,
+  incoming: string | null,
+): string | null {
+  const next = formatRunEventDraftText(incoming);
+  if (!next) return current;
+  const previous = current?.trim() ? current : null;
+  if (!previous) return next;
+  if (next === previous) return previous;
+  if (next.startsWith(previous)) return next;
+  if (previous.startsWith(next)) return previous;
+
+  const prevCmp = normalizeDraftTextForCompare(previous);
+  const nextCmp = normalizeDraftTextForCompare(next);
+  if (nextCmp.startsWith(prevCmp)) return next;
+  if (prevCmp.startsWith(nextCmp)) return previous;
+  if (prevCmp === nextCmp) {
+    return next.length >= previous.length ? next : previous;
+  }
+
+  return joinDraftTextSegments(previous, next);
+}
+
+function formatRunEventDraftText(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  return text ? text : null;
+}
+
+function findLatestRunEventPreview(blocks: OutputBlock[]): string | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (!block) continue;
+    if (block.type === 'assistant_text') {
+      const preview = formatRunEventDraftText(block.content);
+      if (preview) return preview;
+    }
+    if (block.type === 'thinking' || block.type === 'plain_text') {
+      const preview = summarizeRunEventText(block.content, 220);
+      if (preview) return preview;
+    }
+    if (block.type === 'tool_result') {
+      const preview = summarizeRunEventText(block.content, 220);
+      if (preview) return preview;
+    }
+  }
+  return null;
+}
+
+export function formatRunEventDetailText(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const text = value.replace(/\r\n/g, '\n').trim();
+  return text ? text : null;
+}
+
+export function isRunEventDetailExpandable(
+  kind: OutputBlock['type'],
+  detail: string | null,
+): boolean {
+  if (!detail || kind === 'assistant_text' || !RUN_EVENT_EXPANDABLE_KINDS.has(kind)) {
+    return false;
+  }
+  return detail.length > 80 || detail.includes('\n');
+}
+
+/** @deprecated Use isRunEventDetailExpandable + shouldTruncateRunEventDetail */
+export function shouldOfferRunEventDetailExpand(
+  kind: OutputBlock['type'],
+  detail: string | null,
+  compact: boolean,
+): boolean {
+  return isRunEventDetailExpandable(kind, detail) && compact;
+}
+
+export function shouldTruncateRunEventDetail(
+  kind: OutputBlock['type'],
+  detail: string | null,
+  detailExpanded: boolean,
+  compact: boolean,
+): boolean {
+  if (!isRunEventDetailExpandable(kind, detail)) return false;
+  if (compact) return true;
+  return !detailExpanded;
+}
+
+export function summarizeRunEventPreview(
+  value: string | null | undefined,
+  maxLength = RUN_EVENT_DETAIL_PREVIEW_MAX,
+): string | null {
+  const text = value?.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function summarizeRunEventText(
+  value: string | null | undefined,
+  maxLength = RUN_EVENT_DETAIL_PREVIEW_MAX,
+): string | null {
+  return summarizeRunEventPreview(value, maxLength);
+}
+
+function normalizeRunEventComparableText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function runEventTextsMatch(left: string, right: string): boolean {
+  return normalizeRunEventComparableText(left) === normalizeRunEventComparableText(right);
+}
+
+function prepareRunEventsForDisplay(
+  events: AgentChatRunEvent[],
+  options: BuildAgentChatRunEventSummaryOptions,
+): AgentChatRunEvent[] {
+  let displayEvents = events;
+  let hiddenFinalDraftDetail: string | null = null;
+
+  if (options.hideFinalDraft) {
+    const lastDraftIndex = displayEvents.findLastIndex((event) => event.kind === 'assistant_text');
+    if (lastDraftIndex >= 0) {
+      hiddenFinalDraftDetail = displayEvents[lastDraftIndex]?.detail ?? null;
+      displayEvents = displayEvents.filter((_, index) => index !== lastDraftIndex);
+    }
+  }
+
+  const lastEvent = displayEvents[displayEvents.length - 1];
+  if (lastEvent?.kind !== 'result' || !lastEvent.detail) {
+    return displayEvents;
+  }
+
+  const matchingTextEvent = [...displayEvents]
+    .slice(0, -1)
+    .reverse()
+    .find((event) => event.kind === 'assistant_text' || event.kind === 'plain_text');
+  const duplicatesHiddenDraft =
+    hiddenFinalDraftDetail != null &&
+    runEventTextsMatch(hiddenFinalDraftDetail, lastEvent.detail);
+  const duplicatesVisibleText =
+    matchingTextEvent?.detail != null &&
+    runEventTextsMatch(matchingTextEvent.detail, lastEvent.detail);
+  if (duplicatesHiddenDraft || duplicatesVisibleText) {
+    return displayEvents.map((event, index) =>
+      index === displayEvents.length - 1 ? { ...event, detail: null } : event,
+    );
+  }
+
+  return displayEvents;
 }
 
 export function getBranchTargetIdByOffset(
@@ -435,6 +799,7 @@ function mapCanonicalMessage(
         ? (turn.userMessage?.id ?? turn.parentTurnId)
         : turn.parentTurnId,
     previousUserMessageId: null,
+    runId: message.direction === 'inbound' ? (turn.execution.run?.id ?? null) : null,
     turnId: turn.id,
     turnStatus: turn.status,
     turnType: turn.turnType,

@@ -1159,6 +1159,7 @@
 .messageMeta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-1);
   font-size: 12px;
@@ -1734,6 +1735,262 @@ button.messageMonitorBtn,
   align-items: center;
   gap: 5px;
 }
+
+/* ── Run activity (live + history under assistant messages) ── */
+.agentRunActivity {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.agentRunActivityLive {
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.agentRunActivityHistory {
+  margin-top: 0;
+  border-top: none;
+  border-bottom-left-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-lg);
+}
+
+.messageBubbleAgent + .agentRunActivityHistory {
+  margin-top: -1px;
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.agentRunActivityToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.agentRunActivityToggle:hover {
+  color: var(--color-text);
+}
+
+.agentRunActivityToggle .chatSpinner {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.agentRunActivityHeadline {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.agentRunActivitySteps {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+}
+
+.agentRunActivityChevron {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.agentRunActivityPeek {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.agentRunActivityBody {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  max-height: min(360px, 50vh);
+  overflow: auto;
+}
+
+.agentRunActivityEmpty {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agentRunEventList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentRunEventList > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.agentRunEvent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agentRunEventCompact {
+  padding: 0;
+}
+
+.agentRunEventIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+}
+
+.agentRunEventBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agentRunEventLabel {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.agentRunEventDetail {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agentRunEventDetailCompact {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentRunEventDetailToggle {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.agentRunEventDetailToggle:hover {
+  color: var(--color-text-secondary);
+}
+
+.agentRunEventTool {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.agentRunEventTool .agentRunEventIcon {
+  color: var(--color-warning);
+}
+
+.agentRunEventTool .agentRunEventLabel {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.agentRunEventTool .agentRunEventDetail,
+.agentRunEventTool .agentRunEventDetailCompact {
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-size: 11px;
+}
+
+.agentRunEventThinking .agentRunEventLabel,
+.agentRunEventMeta .agentRunEventLabel {
+  color: var(--color-text-secondary);
+}
+
+.agentRunEventThinking .agentRunEventDetail {
+  color: var(--color-text-secondary);
+}
+
+.agentRunEventTextOutput {
+  margin: 1px 0;
+}
+
+.agentRunEventTextOutput .agentRunEventIcon {
+  color: var(--color-text-tertiary);
+}
+
+.agentRunEventTextOutput .agentRunEventLabel {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.agentRunEventTextOutputRow {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text) 3.5%, transparent);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.agentRunEventDraftRow .agentRunEventBody {
+  gap: 0;
+}
+
+.agentRunEventTextOutputDetail {
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
+.agentRunEventTextOutputDetail p {
+  margin: 0;
+}
+
+.agentRunEventTextOutputDetail p + p {
+  margin-top: var(--space-2);
+}
+
+.agentRunEventWarning .agentRunEventLabel {
+  color: var(--color-warning);
+}
+
+.agentRunEventResult .agentRunEventLabel {
+  color: var(--color-text-secondary);
+}
+
 
 .streamingQueueCount {
   opacity: 0.7;
@@ -2752,10 +3009,103 @@ button.messageMonitorBtn,
   color: var(--color-text-secondary);
 }
 
-.settingsPathCode {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
+.settingsGridItemFull {
+  grid-column: 1 / -1;
+}
+
+.settingsGridItemFull .settingsGridValue {
+  width: 100%;
+}
+
+.settingsPathField {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-card);
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+/* Tooltip wraps the path trigger in an inline-flex span */
+.settingsPathField > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.settingsPathField > span:first-of-type > button {
+  width: 100%;
+}
+
+.settingsPathField:hover {
+  border-color: var(--color-text-tertiary);
+  background: var(--color-surface);
+}
+
+.settingsPathFieldPath {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 5px 8px;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settingsPathText {
+  display: block;
+  font-family: var(
+    --font-mono,
+    'SF Mono',
+    'Cascadia Code',
+    'Fira Code',
+    'JetBrains Mono',
+    monospace
+  );
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.settingsPathField:hover .settingsPathText {
+  color: var(--color-text);
+}
+
+.settingsPathFieldDivider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--color-border);
+  align-self: stretch;
+}
+
+.settingsPathFieldAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.settingsPathFieldAction:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
 }
 
 .settingsEmpty {

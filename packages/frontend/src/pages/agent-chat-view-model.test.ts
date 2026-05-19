@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAgentChatRunEventSummary,
+  isRunEventDetailExpandable,
+  shouldTruncateRunEventDetail,
   buildAgentConversationViewModel,
   type AgentConversationChatTurn,
   type AgentConversationChatView,
@@ -332,6 +335,45 @@ describe('buildAgentConversationViewModel', () => {
     expect(view.showStreamingBubble).toBe(false);
   });
 
+  it('carries canonical assistant run ids for completed chat timelines', () => {
+    const view = buildView(
+      canonicalView([
+        canonicalTurn({
+          id: 'turn-completed',
+          assistantMessage: {
+            id: 'assistant-completed',
+            direction: 'inbound',
+            type: 'text',
+            content: 'Done',
+            status: 'sent',
+            metadata: null,
+            attachments: null,
+            createdAt: '2026-01-01T00:00:03.000Z',
+            updatedAt: null,
+          },
+          execution: {
+            queue: null,
+            run: {
+              id: 'run-completed',
+              turnId: 'turn-completed',
+              status: 'completed',
+              errorMessage: null,
+              responseText: 'Done',
+              startedAt: '2026-01-01T00:00:01.000Z',
+              finishedAt: '2026-01-01T00:00:03.000Z',
+              durationMs: 2000,
+            },
+          },
+        }),
+      ]),
+    );
+
+    expect(view.visibleMessages.find((message) => message.id === 'assistant-completed')).toMatchObject({
+      direction: 'inbound',
+      runId: 'run-completed',
+    });
+  });
+
   it('renders canonical view without accepting legacy state or optimistic rows', () => {
     const view = buildAgentConversationViewModel({
       canonicalView: canonicalView([canonicalTurn({ id: 'turn-canonical' })]),
@@ -409,5 +451,162 @@ describe('buildAgentConversationViewModel', () => {
       siblingIds: ['message-shared', 'message-shared', 'message-third'],
       siblingTurnIds: ['turn-1', 'turn-2', 'turn-3'],
     });
+  });
+});
+
+describe('buildAgentChatRunEventSummary', () => {
+  it('turns parsed monitor blocks into compact chat status events', () => {
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'system_init', model: 'gpt-5.3-codex', cwd: '/workspace' },
+      { type: 'thinking', content: 'Need to inspect the chat rendering code first.' },
+      { type: 'tool_call', toolName: 'rg', input: '{"pattern":"Processing"}' },
+      { type: 'tool_result', content: 'AgentsPage.tsx: Processing...' },
+      { type: 'assistant_text', content: 'I found the processing bubble and updated it.' },
+    ]);
+
+    expect(summary.headline).toBe('Drafting response');
+    expect(summary.badgeLabel).toBe('Drafting response');
+    expect(summary.preview).toBe('I found the processing bubble and updated it.');
+    expect(summary.stats).toEqual({ tools: 1, messages: 1, updates: 5 });
+    expect(summary.events.map((event) => event.label)).toEqual([
+      'Session started: gpt-5.3-codex',
+      'Thinking through next step',
+      'Running rg',
+      'Reading tool output',
+      'Drafting response',
+    ]);
+  });
+
+  it('keeps the full timeline instead of truncating older run events', () => {
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'system_init', model: 'gpt-5.3-codex', cwd: '/workspace' },
+      { type: 'thinking', content: 'first' },
+      { type: 'tool_call', toolName: 'rg', input: 'one' },
+      { type: 'tool_result', content: 'two' },
+      { type: 'tool_call', toolName: 'sed', input: 'three' },
+      { type: 'tool_result', content: 'four' },
+      { type: 'assistant_text', content: 'five' },
+      { type: 'result', text: 'done', isError: false },
+    ]);
+
+    expect(summary.stats.updates).toBe(8);
+    expect(summary.events).toHaveLength(8);
+    expect(summary.events[0]?.label).toBe('Session started: gpt-5.3-codex');
+    expect(summary.events.at(-1)?.label).toBe('Finishing run');
+  });
+
+  it('falls back cleanly before the first monitor event arrives', () => {
+    const summary = buildAgentChatRunEventSummary(null);
+
+    expect(summary.headline).toBe('Thinking');
+    expect(summary.badgeLabel).toBe('Processing...');
+    expect(summary.preview).toBeNull();
+    expect(summary.events).toEqual([]);
+  });
+
+  it('stores full thinking text but truncates it until the row is expanded', () => {
+    const longThinking = 'line one\nline two\n' + 'x'.repeat(200);
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'thinking', content: longThinking },
+    ]);
+    const detail = summary.events[0]?.detail ?? null;
+
+    expect(detail).toBe(longThinking);
+    expect(detail).not.toContain('...');
+    expect(isRunEventDetailExpandable('thinking', detail)).toBe(true);
+    expect(shouldTruncateRunEventDetail('thinking', detail, false, false)).toBe(true);
+    expect(shouldTruncateRunEventDetail('thinking', detail, true, false)).toBe(false);
+    expect(shouldTruncateRunEventDetail('thinking', detail, false, true)).toBe(true);
+  });
+
+  it('hides the final draft and duplicate result text for completed messages', () => {
+    const finalAnswer = 'Here is the completed answer.';
+    const summary = buildAgentChatRunEventSummary(
+      [
+        { type: 'thinking', content: 'Working through the request.' },
+        { type: 'assistant_text', content: finalAnswer },
+        { type: 'result', text: finalAnswer, isError: false },
+      ],
+      { hideFinalDraft: true },
+    );
+
+    expect(summary.events.map((event) => event.label)).toEqual([
+      'Thinking through next step',
+      'Finishing run',
+    ]);
+    expect(summary.events.at(-1)?.detail).toBeNull();
+  });
+
+  it('keeps the full drafting response text without truncation', () => {
+    const longDraft = 'x'.repeat(240);
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'assistant_text', content: longDraft },
+    ]);
+
+    expect(summary.events).toHaveLength(1);
+    expect(summary.events[0]?.detail).toBe(longDraft);
+    expect(summary.events[0]?.detail).not.toContain('...');
+    expect(summary.preview).toBe(longDraft);
+  });
+
+  it('merges consecutive drafting response events into one updating row', () => {
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'tool_call', toolName: 'rg', input: 'one' },
+      { type: 'assistant_text', content: 'Hello' },
+      { type: 'assistant_text', content: 'Hello world' },
+      { type: 'assistant_text', content: 'Hello world!' },
+    ]);
+
+    expect(summary.events.map((event) => event.label)).toEqual([
+      'Running rg',
+      'Drafting response',
+    ]);
+    expect(summary.events[1]?.detail).toBe('Hello world!');
+    expect(summary.stats.updates).toBe(2);
+    expect(summary.stats.messages).toBe(3);
+  });
+
+  it('prefers spaced draft text over a whitespace-collapsed duplicate chunk', () => {
+    const summary = buildAgentChatRunEventSummary([
+      {
+        type: 'assistant_text',
+        content:
+          'Redesigningthepathrowsintoasinglefield-stylecontrolthatmatchesothersettingsinputs,withTooltipsinsteadofnativetitles.',
+      },
+      {
+        type: 'assistant_text',
+        content:
+          'Redesigning the path rows into a single field-style control that matches other settings inputs, with Tooltips instead of native titles.',
+      },
+    ]);
+
+    expect(summary.events).toHaveLength(1);
+    expect(summary.events[0]?.detail).toBe(
+      'Redesigning the path rows into a single field-style control that matches other settings inputs, with Tooltips instead of native titles.',
+    );
+  });
+
+  it('merges markdown link chunks without losing spaces around the link', () => {
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'assistant_text', content: 'Open [the settings file](/Users/demo/settings.ts)' },
+      {
+        type: 'assistant_text',
+        content: 'Open [the settings file](/Users/demo/settings.ts) in Finder.',
+      },
+    ]);
+
+    expect(summary.events).toHaveLength(1);
+    expect(summary.events[0]?.detail).toBe(
+      'Open [the settings file](/Users/demo/settings.ts) in Finder.',
+    );
+  });
+
+  it('inserts a space when joining unrelated draft chunks', () => {
+    const summary = buildAgentChatRunEventSummary([
+      { type: 'assistant_text', content: 'First sentence.' },
+      { type: 'assistant_text', content: 'Second sentence.' },
+    ]);
+
+    expect(summary.events[0]?.detail).toBe('First sentence. Second sentence.');
   });
 });

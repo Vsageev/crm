@@ -42,6 +42,8 @@ export const AGENT_MODEL_PROVIDERS = [
     vendor: 'Cursor',
     description: 'Headless Cursor Agent CLI with current server-relevant model IDs.',
     modelIds: [
+      'composer-2.5-fast',
+      'composer-2.5',
       'composer-2-fast',
       'composer-2',
       'auto',

@@ -2,6 +2,7 @@ import { and, asc, count, desc, eq, or } from 'drizzle-orm';
 import { store } from '../connection.js';
 import * as schema from '../schema.js';
 import type { StoreRecord } from '../store.js';
+import { AGENT_CHAT_TURNS_COLLECTION } from './agent-chat-turns-repository.js';
 import { getFlushedNativeDb, recordsFromLegacyRows } from './native-repository-utils.js';
 
 /** SQL store collection names for agent execution state. */
@@ -136,24 +137,37 @@ export function deleteTerminalChatQueueItemsBeyondRetention(options: {
   return deleted;
 }
 
-export function deleteChatQueueItemsForConversation(conversationId: string): void {
+export async function deleteChatQueueItemsForConversation(conversationId: string): Promise<void> {
   const ids = store
     .getAll(AGENT_CHAT_QUEUE_COLLECTION)
     .filter((r) => r.conversationId === conversationId)
     .map((r) => String(r.id));
   for (const id of ids) {
-    store.delete(AGENT_CHAT_QUEUE_COLLECTION, id);
+    await store.delete(AGENT_CHAT_QUEUE_COLLECTION, id);
   }
 }
 
 export async function clearAgentRunConversationReferences(conversationId: string): Promise<void> {
-  const updates = store
+  const conversationTurnIds = new Set(
+    store
+      .getAll(AGENT_CHAT_TURNS_COLLECTION)
+      .filter((turn) => turn.conversationId === conversationId)
+      .map((turn) => String(turn.id)),
+  );
+  const runs = store
     .getAll(AGENT_RUNS_COLLECTION)
-    .filter((r) => r.conversationId === conversationId)
-    .map((r) => store.update(AGENT_RUNS_COLLECTION, String(r.id), { conversationId: null }))
-    .filter(Boolean);
+    .filter(
+      (r) =>
+        r.conversationId === conversationId ||
+        (typeof r.turnId === 'string' && conversationTurnIds.has(r.turnId)),
+    );
 
-  await Promise.all(updates);
+  for (const run of runs) {
+    await store.update(AGENT_RUNS_COLLECTION, String(run.id), {
+      conversationId: null,
+      turnId: null,
+    });
+  }
 }
 
 export async function clearAgentRunCardReferences(cardId: string): Promise<void> {

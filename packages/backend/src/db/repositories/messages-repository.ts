@@ -114,20 +114,20 @@ export async function getLatestNonSystemMessageForConversationNative(
   return row ? recordFromLegacyRow(row) : null;
 }
 
-export function deleteAllMessagesForConversation(conversationId: string): void {
+export async function deleteAllMessagesForConversation(conversationId: string): Promise<void> {
   const ids = store
     .getAll(COLLECTION)
     .filter((r) => r.conversationId === conversationId)
     .map((r) => String(r.id));
   for (const id of ids) {
-    store.delete(COLLECTION, id);
+    await store.delete(COLLECTION, id);
   }
 }
 
 export async function deleteAllMessagesForConversationNative(conversationId: string): Promise<void> {
   const db = await getFlushedNativeDb();
   if (!db) {
-    deleteAllMessagesForConversation(conversationId);
+    await deleteAllMessagesForConversation(conversationId);
     return;
   }
 

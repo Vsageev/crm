@@ -86,13 +86,13 @@ export async function listMessageDraftsNative(
   };
 }
 
-export function deleteAllMessageDraftsForConversation(conversationId: string): void {
+export async function deleteAllMessageDraftsForConversation(conversationId: string): Promise<void> {
   const ids = store
     .getAll(COLLECTION)
     .filter((r) => r.conversationId === conversationId)
     .map((r) => String(r.id));
   for (const id of ids) {
-    store.delete(COLLECTION, id);
+    await store.delete(COLLECTION, id);
   }
 }
 
@@ -101,7 +101,7 @@ export async function deleteAllMessageDraftsForConversationNative(
 ): Promise<void> {
   const db = await getFlushedNativeDb();
   if (!db) {
-    deleteAllMessageDraftsForConversation(conversationId);
+    await deleteAllMessageDraftsForConversation(conversationId);
     return;
   }
 

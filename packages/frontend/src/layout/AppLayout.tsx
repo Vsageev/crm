@@ -12,6 +12,7 @@ import { useActiveRunsCount } from '../hooks/useActiveRunsCount';
 import { useAgentRunNotifications } from '../hooks/useAgentRunNotifications';
 import { api } from '../lib/api';
 import { getNotificationPreferences, toast } from '../stores/toast';
+import { DevtoolsMenu } from '../devtools/DevtoolsMenu';
 import styles from './AppLayout.module.css';
 
 const PAGE_TITLES: Record<string, string> = {
@@ -231,6 +232,7 @@ export function AppLayout() {
             showCollectionPicker
           />
         )}
+        <DevtoolsMenu />
       </div>
     </WorkspaceProvider>
   );

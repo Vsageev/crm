@@ -2,6 +2,7 @@ import { store } from '../db/index.js';
 import type { StoreRecord } from '../db/store.js';
 import {
   createAgentChatTurnRecord,
+  deleteAgentChatTurnRecordsForConversation,
   findAgentChatTurnRecordByRunId,
   findAgentChatTurnRecordByUserMessage,
   getAgentChatTurnRecord,
@@ -12,6 +13,7 @@ import {
 } from '../db/repositories/agent-chat-turns-repository.js';
 
 export type { AgentChatTurnStatus, AgentChatTurnType };
+export { deleteAgentChatTurnRecordsForConversation };
 
 export interface CreateAgentChatTurnParams {
   id?: string;

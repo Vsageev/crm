@@ -76,6 +76,26 @@ export function listAgentChatTurnRecordsForConversation(
     .sort((a, b) => parseIsoDateMs(a.createdAt) - parseIsoDateMs(b.createdAt));
 }
 
+export async function deleteAgentChatTurnRecordsForConversation(
+  conversationId: string,
+): Promise<void> {
+  const turns = store
+    .getAll(AGENT_CHAT_TURNS_COLLECTION)
+    .filter((turn) => turn.conversationId === conversationId);
+
+  for (const turn of turns) {
+    if (turn.parentTurnId == null && turn.supersedesTurnId == null) continue;
+    await store.update(AGENT_CHAT_TURNS_COLLECTION, String(turn.id), {
+      parentTurnId: null,
+      supersedesTurnId: null,
+    });
+  }
+
+  for (const turn of turns) {
+    await store.delete(AGENT_CHAT_TURNS_COLLECTION, String(turn.id));
+  }
+}
+
 export function findAgentChatTurnRecordByUserMessage(
   agentId: string,
   conversationId: string,

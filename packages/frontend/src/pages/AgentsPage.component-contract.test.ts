@@ -351,11 +351,10 @@ describe('AgentsPage component contract', () => {
 
   it('opens normal message editing for processing transcript execution rows', () => {
     const queuedEditButton = sourceSlice(
-      'const isProcessingTranscriptMessage =',
+      'const transcriptExecutionItemId =',
       "{msg.direction === 'inbound' && (",
     );
     for (const expected of [
-      "isProcessingTranscriptMessage\n                                          ? styles.messageExecutionStateProcessing",
       'if (editableBranchQueueItem) {',
       'startEditingMessage(msg)',
       'startEditingQueuedMessage(msg, editableBranchQueueItem)',
@@ -374,8 +373,104 @@ describe('AgentsPage component contract', () => {
       stateInput: 'transcript message row has status=processing',
       contractName: 'processing-transcript-row-edit-message',
       sourceText: queuedEditButton,
-      unexpected:
-        'disabled={\n                                                isProcessingTranscriptMessage ||',
+      unexpected: 'disabled={\n                                                isProcessingTranscriptMessage ||',
     });
+    assertNotContains({
+      componentName: 'AgentsPage.queuedMessageRow',
+      stateInput: 'transcript message row has status=processing',
+      contractName: 'processing-transcript-row-status-chip-removed',
+      sourceText: queuedEditButton,
+      unexpected: 'styles.messageExecutionStateProcessing',
+    });
+  });
+
+  it('keeps run activity collapsed until the user expands it', () => {
+    const runActivity = sourceSlice('function AgentRunActivity({', 'function formatBytes');
+    const runEventRow = sourceSlice('function AgentRunEventRow({', 'function AgentRunEventTimeline');
+    for (const expected of [
+      'const [expanded, setExpanded] = useState(false);',
+      'data-testid="agent-run-activity"',
+      "data-run-activity-expanded={expanded ? 'true' : 'false'}",
+      'className={styles.agentRunActivityToggle}',
+      'onClick={() => setExpanded((value) => !value)}',
+      'aria-expanded={expanded}',
+      '{!expanded && (',
+      '<AgentRunEventRow event={latestEvent} compact />',
+      '{expanded && (',
+      '<AgentRunEventTimeline events={summary.events} />',
+    ]) {
+      assertContains({
+        componentName: 'AgentRunActivity',
+        stateInput: 'run activity longer than collapsed preview',
+        contractName: 'activity-explicit-expand',
+        sourceText: runActivity,
+        expected,
+      });
+    }
+
+    for (const expected of [
+      "const isDraft = event.kind === 'assistant_text'",
+      'styles.agentRunEventTextOutputDetail',
+      'styles.agentRunEventTextOutputRow',
+      'const [detailExpanded, setDetailExpanded] = useState(false);',
+      'styles.agentRunEventDetailToggle',
+    ]) {
+      assertContains({
+        componentName: 'AgentRunEventRow',
+        stateInput: 'drafting response stream row',
+        contractName: 'draft-full-detail-row',
+        sourceText: runEventRow,
+        expected,
+      });
+    }
+  });
+
+  it('keeps completed run history attached to the assistant message, not the meta row', () => {
+    const messageRender = sourceSlice(
+      'const messageRunOutputBlocks = parseRunDetailOutputBlocks(messageRunDetail);',
+      '<div\n                                  className={`${styles.messageMeta} ${',
+    );
+    for (const expected of [
+      '<MarkdownContent>{msg.content}</MarkdownContent>',
+      'messageRunEventSummary.stats.updates > 0 && (',
+      'hideFinalDraft:',
+      '<AgentRunActivity',
+      'mode="history"',
+    ]) {
+      assertContains({
+        componentName: 'AgentsPage.completedAssistantMessage',
+        stateInput: 'completed inbound message has a run timeline',
+        contractName: 'history-attached-to-message',
+        sourceText: messageRender,
+        expected,
+      });
+    }
+
+    const messageMeta = sourceSlice(
+      "className={`${styles.messageMeta} ${",
+      "{errorsByMessageId.get(msg.id)?.map((item) => (",
+    );
+    assertNotContains({
+      componentName: 'AgentsPage.completedAssistantMessageMeta',
+      stateInput: 'completed inbound message has a run timeline',
+      contractName: 'history-not-in-meta-row',
+      sourceText: messageMeta,
+      unexpected: '<AgentRunActivity',
+    });
+  });
+
+  it('uses the same activity panel for live streaming runs', () => {
+    const streamingRender = sourceSlice('{showStreamingBubble && (', '{queuedMessages.length > 0 && (');
+    for (const expected of [
+      '<AgentRunActivity summary={activeRunEventSummary} mode="live" />',
+    ]) {
+      assertContains({
+        componentName: 'AgentsPage.streamingRun',
+        stateInput: 'active chat run is streaming',
+        contractName: 'live-activity-panel',
+        sourceText: streamingRender,
+        expected,
+      });
+    }
   });
 });

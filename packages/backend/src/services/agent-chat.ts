@@ -47,6 +47,7 @@ import {
   getAgentRun,
 } from './agent-runs.js';
 import {
+  deleteAgentChatTurnRecordsForConversation,
   createAgentChatTurn,
   findAgentChatTurnForUserMessage,
   getAgentChatTurn,
@@ -740,10 +741,11 @@ export function validateConversationOwnership(
  */
 export async function deleteAgentConversation(conversationId: string) {
   return store.transaction(async () => {
-    deleteAllMessagesForConversation(conversationId);
-    deleteAllMessageDraftsForConversation(conversationId);
-    clearConversationQueue(conversationId);
+    await clearConversationQueue(conversationId);
     await clearAgentRunConversationReferences(conversationId);
+    await deleteAgentChatTurnRecordsForConversation(conversationId);
+    await deleteAllMessagesForConversation(conversationId);
+    await deleteAllMessageDraftsForConversation(conversationId);
     return store.delete('conversations', conversationId);
   });
 }
@@ -3523,8 +3525,8 @@ export function canRespondToMessageStartImmediately(
   return getGlobalRunningAgentCount() < getMaxConcurrentAgents();
 }
 
-function clearConversationQueue(conversationId: string) {
-  deleteChatQueueItemsForConversation(conversationId);
+async function clearConversationQueue(conversationId: string) {
+  await deleteChatQueueItemsForConversation(conversationId);
 
   for (const [key, entry] of queueDrainTimers) {
     const [, queuedConversationId] = key.split(':');

@@ -62,8 +62,10 @@ import {
   OctagonX,
   Cpu,
   Monitor,
+  Brain,
+  Wrench,
 } from 'lucide-react';
-import { formatDate } from 'shared';
+import { formatDate, parseAgentOutputBlocks, type OutputBlock } from 'shared';
 import {
   Button,
   Badge,
@@ -109,11 +111,17 @@ import styles from './AgentsPage.module.css';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   buildAgentChatMarkdownExport,
+  buildAgentChatRunEventSummary,
   buildAgentConversationViewModel,
   getBranchTargetIdByOffset,
   normalizeAgentChatAttachments,
   queueItemsLabel,
+  isRunEventDetailExpandable,
+  shouldTruncateRunEventDetail,
+  summarizeRunEventPreview,
   toQueueCount,
+  RUN_EVENT_DETAIL_PREVIEW_MAX,
+  type AgentChatRunEventSummary,
   type AgentConversationChatView,
 } from './agent-chat-view-model';
 
@@ -397,6 +405,14 @@ interface AgentMessageMetadata {
   fallbackModel?: string | null;
 }
 
+interface ActiveAgentRunDetail {
+  id: string;
+  status: 'running' | 'completed' | 'error';
+  stdout: string | null;
+  stderr: string | null;
+  responseText: string | null;
+}
+
 interface DraftAttachment {
   file: File;
   kind: 'image' | 'file';
@@ -527,8 +543,202 @@ function formatModelLabel(model?: string | null, modelId?: string | null): strin
   return providerName || null;
 }
 
+function parseRunDetailOutputBlocks(
+  runDetail: ActiveAgentRunDetail | null | undefined,
+): OutputBlock[] | null {
+  const stdout = runDetail?.stdout?.trim();
+  if (!stdout) return null;
+  return parseAgentOutputBlocks(stdout) ?? [{ type: 'plain_text' as const, content: stdout }];
+}
+
 function buildMonitorRunUrl(runId: string): string {
   return `/monitor?${new URLSearchParams({ runId }).toString()}`;
+}
+
+function AgentRunEventIcon({ kind }: { kind: OutputBlock['type'] }) {
+  if (kind === 'thinking') return <Brain size={12} aria-hidden />;
+  if (kind === 'assistant_text') return <MessageSquare size={12} aria-hidden />;
+  if (kind === 'system_init' || kind === 'message_meta') return <Cpu size={12} aria-hidden />;
+  if (kind === 'rate_limit' || kind === 'result') return <AlertTriangle size={12} aria-hidden />;
+  if (kind === 'tool_call' || kind === 'tool_result') return <Wrench size={12} aria-hidden />;
+  if (kind === 'plain_text') return <Terminal size={12} aria-hidden />;
+  return <Loader size={12} className={styles.spinIcon} aria-hidden />;
+}
+
+type AgentRunEvent = AgentChatRunEventSummary['events'][number];
+
+function runEventRowClass(kind: OutputBlock['type']): string {
+  const base = styles.agentRunEvent;
+  if (kind === 'tool_call' || kind === 'tool_result') {
+    return `${base} ${styles.agentRunEventTool}`;
+  }
+  if (kind === 'thinking') return `${base} ${styles.agentRunEventThinking}`;
+  if (kind === 'assistant_text' || kind === 'plain_text') {
+    return `${base} ${styles.agentRunEventTextOutput}`;
+  }
+  if (kind === 'system_init' || kind === 'message_meta') {
+    return `${base} ${styles.agentRunEventMeta}`;
+  }
+  if (kind === 'rate_limit') return `${base} ${styles.agentRunEventWarning}`;
+  if (kind === 'result') return `${base} ${styles.agentRunEventResult}`;
+  return base;
+}
+
+function AgentRunEventRow({
+  event,
+  compact = false,
+}: {
+  event: AgentRunEvent;
+  compact?: boolean;
+}) {
+  const [detailExpanded, setDetailExpanded] = useState(false);
+  const isTextOutput = event.kind === 'assistant_text' || event.kind === 'plain_text';
+  const isDraft = event.kind === 'assistant_text';
+  const isDraftMarkdown = event.kind === 'assistant_text';
+  const showDraftLabel = isDraft && !event.detail;
+  const hideTextOutputIcon = isDraft && Boolean(event.detail);
+  const canExpandDetail = isRunEventDetailExpandable(event.kind, event.detail);
+  const truncateDetail = shouldTruncateRunEventDetail(
+    event.kind,
+    event.detail,
+    detailExpanded,
+    compact,
+  );
+
+  return (
+    <div
+      className={`${runEventRowClass(event.kind)} ${compact ? styles.agentRunEventCompact : ''} ${
+        isTextOutput ? styles.agentRunEventTextOutputRow : ''
+      } ${isDraft ? styles.agentRunEventDraftRow : ''}`}
+    >
+      {!hideTextOutputIcon ? (
+        <span className={styles.agentRunEventIcon} aria-hidden>
+          <AgentRunEventIcon kind={event.kind} />
+        </span>
+      ) : null}
+      <span className={styles.agentRunEventBody}>
+        {!hideTextOutputIcon || showDraftLabel ? (
+          <span className={styles.agentRunEventLabel}>{event.label}</span>
+        ) : null}
+        {event.detail ? (
+          isDraftMarkdown ? (
+            <MarkdownContent compact className={styles.agentRunEventTextOutputDetail}>
+              {event.detail}
+            </MarkdownContent>
+          ) : (
+            <span
+              className={
+                truncateDetail
+                  ? styles.agentRunEventDetailCompact
+                  : isTextOutput
+                    ? styles.agentRunEventTextOutputDetail
+                    : styles.agentRunEventDetail
+              }
+            >
+              {truncateDetail
+                ? summarizeRunEventPreview(
+                    event.detail,
+                    compact ? 80 : RUN_EVENT_DETAIL_PREVIEW_MAX,
+                  )
+                : event.detail}
+            </span>
+          )
+        ) : null}
+        {canExpandDetail && !compact ? (
+          <button
+            type="button"
+            className={styles.agentRunEventDetailToggle}
+            onClick={() => setDetailExpanded((value) => !value)}
+            aria-expanded={detailExpanded}
+          >
+            {detailExpanded ? 'Show less' : 'Show more'}
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+function AgentRunEventTimeline({ events }: { events: AgentRunEvent[] }) {
+  if (events.length === 0) {
+    return <div className={styles.agentRunActivityEmpty}>Waiting for streamed events</div>;
+  }
+
+  return (
+    <ol className={styles.agentRunEventList} aria-label="Run activity">
+      {events.map((event) => (
+        <li key={event.id}>
+          <AgentRunEventRow event={event} />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function AgentRunActivity({
+  summary,
+  mode,
+}: {
+  summary: AgentChatRunEventSummary;
+  mode: 'live' | 'history';
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isLive = mode === 'live';
+  const latestEvent =
+    summary.events.length > 0 ? summary.events[summary.events.length - 1] : null;
+  const stepCount = summary.stats.updates;
+  const stepLabel =
+    stepCount > 0
+      ? `${stepCount} step${stepCount === 1 ? '' : 's'}`
+      : isLive
+        ? 'Starting…'
+        : 'No events';
+  const headline = isLive ? summary.headline : 'Run activity';
+
+  return (
+    <div
+      className={`${styles.agentRunActivity} ${
+        isLive ? styles.agentRunActivityLive : styles.agentRunActivityHistory
+      }`}
+      data-testid="agent-run-activity"
+      data-run-activity-mode={mode}
+      data-run-activity-expanded={expanded ? 'true' : 'false'}
+    >
+      <button
+        type="button"
+        className={styles.agentRunActivityToggle}
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        {isLive ? <Loader size={14} className={styles.chatSpinner} aria-hidden /> : null}
+        <span className={styles.agentRunActivityHeadline}>{headline}</span>
+        <span className={styles.agentRunActivitySteps}>{stepLabel}</span>
+        {expanded ? (
+          <ChevronDown size={14} className={styles.agentRunActivityChevron} aria-hidden />
+        ) : (
+          <ChevronRight size={14} className={styles.agentRunActivityChevron} aria-hidden />
+        )}
+      </button>
+
+      {!expanded && (
+        <div className={styles.agentRunActivityPeek} aria-live={isLive ? 'polite' : undefined}>
+          {latestEvent ? (
+            <AgentRunEventRow event={latestEvent} compact />
+          ) : (
+            <span className={styles.agentRunActivityEmpty}>
+              {isLive ? 'Waiting for the first event…' : 'No captured run events'}
+            </span>
+          )}
+        </div>
+      )}
+
+      {expanded && (
+        <div className={styles.agentRunActivityBody}>
+          <AgentRunEventTimeline events={summary.events} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatBytes(value: number): string {
@@ -1581,6 +1791,54 @@ function relativeTime(dateStr: string | null): string {
   return `${days}d`;
 }
 
+function getRevealInFileManagerLabel(): string {
+  if (typeof navigator === 'undefined') return 'Reveal in file manager';
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes('mac')) return 'Reveal in Finder';
+  if (platform.includes('win')) return 'Reveal in Explorer';
+  return 'Reveal in file manager';
+}
+
+function AgentSettingsPathRow({
+  path,
+  onReveal,
+  revealLabel = getRevealInFileManagerLabel(),
+}: {
+  path: string;
+  onReveal: () => void | Promise<void>;
+  revealLabel?: string;
+}) {
+  const handleReveal = () => {
+    void onReveal();
+  };
+
+  return (
+    <div className={styles.settingsPathField}>
+      <Tooltip label={path}>
+        <button
+          type="button"
+          className={styles.settingsPathFieldPath}
+          onClick={handleReveal}
+          aria-label={`${revealLabel}: ${path}`}
+        >
+          <span className={styles.settingsPathText}>{path}</span>
+        </button>
+      </Tooltip>
+      <span className={styles.settingsPathFieldDivider} aria-hidden="true" />
+      <Tooltip label={revealLabel}>
+        <button
+          type="button"
+          className={styles.settingsPathFieldAction}
+          onClick={handleReveal}
+          aria-label={revealLabel}
+        >
+          <FolderOpen size={14} />
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
 function getSkipPermissionsFlag(model: string): string {
   const normalized = model.toLowerCase();
   if (normalized === 'claude') return '--dangerously-skip-permissions';
@@ -2457,7 +2715,12 @@ export function AgentsPage() {
   const [showChatLoading, setShowChatLoading] = useState(false);
   const [runnerDevices, setRunnerDevices] = useState<RunnerDevice[]>([]);
   const [runnerLoading, setRunnerLoading] = useState(true);
+  const [activeRunDetail, setActiveRunDetail] = useState<ActiveAgentRunDetail | null>(null);
+  const [chatRunDetailsById, setChatRunDetailsById] = useState<
+    Record<string, ActiveAgentRunDetail>
+  >({});
   const chatLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestedChatRunDetailIdsRef = useRef<Set<string>>(new Set());
 
   // ── Message search state ──
   const [messageSearchResults, setMessageSearchResults] = useState<MessageSearchResult[]>([]);
@@ -2921,6 +3184,91 @@ export function AgentsPage() {
     showStreamingBubble ||
     activeConversationRun !== null ||
     effectivePendingBranchExecutionsByMessageId.size > 0;
+  const activeConversationRunId = activeConversationRun?.id ?? null;
+  const activeRunOutputBlocks = useMemo<OutputBlock[] | null>(() => {
+    if (!activeRunDetail || activeRunDetail.id !== activeConversationRunId) return null;
+    return parseRunDetailOutputBlocks(activeRunDetail);
+  }, [activeConversationRunId, activeRunDetail]);
+  const activeRunEventSummary = useMemo(
+    () => buildAgentChatRunEventSummary(activeRunOutputBlocks),
+    [activeRunOutputBlocks],
+  );
+  const visibleInboundRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const msg of visibleMessages) {
+      if (msg.direction !== 'inbound') continue;
+      const messageMeta = parseAgentMessageMetadata(msg.metadata);
+      const runId = messageMeta?.runId ?? msg.runId ?? null;
+      if (runId) ids.add(runId);
+    }
+    return [...ids];
+  }, [visibleMessages]);
+  const getProcessingExecutionLabel = useCallback(
+    (runId: string | null | undefined) =>
+      runId && runId === activeConversationRunId
+        ? activeRunEventSummary.badgeLabel
+        : 'Processing...',
+    [activeConversationRunId, activeRunEventSummary.badgeLabel],
+  );
+
+  useEffect(() => {
+    if (!activeConversationRunId) {
+      setActiveRunDetail(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const fetchRunDetail = async () => {
+      try {
+        const data = await api<ActiveAgentRunDetail>(`/agent-runs/${activeConversationRunId}`);
+        if (!cancelled) {
+          setActiveRunDetail(data);
+          setChatRunDetailsById((prev) => ({ ...prev, [data.id]: data }));
+        }
+      } catch {
+        // Keep the last successful snapshot so transient monitor polling errors do not blank the UI.
+      }
+    };
+
+    void fetchRunDetail();
+    const interval = window.setInterval(() => {
+      void fetchRunDetail();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeConversationRunId]);
+
+  useEffect(() => {
+    if (visibleInboundRunIds.length === 0) return undefined;
+
+    let cancelled = false;
+    for (const runId of visibleInboundRunIds) {
+      const cached = chatRunDetailsById[runId];
+      const needsFetch = !cached || cached.status === 'running';
+      if (!needsFetch || requestedChatRunDetailIdsRef.current.has(runId)) continue;
+
+      requestedChatRunDetailIdsRef.current.add(runId);
+      void api<ActiveAgentRunDetail>(`/agent-runs/${runId}`)
+        .then((data) => {
+          if (cancelled) return;
+          setChatRunDetailsById((prev) => ({ ...prev, [data.id]: data }));
+        })
+        .catch(() => {
+          // The completed-message timeline is opportunistic; a later render can retry.
+        })
+        .finally(() => {
+          requestedChatRunDetailIdsRef.current.delete(runId);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatRunDetailsById, visibleInboundRunIds]);
+
   const shouldSyncActiveConversation = streaming || queuedQueueItems.length > 0;
   const activeAgentWorkspaceIds = useMemo(() => {
     if (!activeAgent?.groupId) return [];
@@ -4047,6 +4395,28 @@ export function AgentsPage() {
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Failed to open conversation folder');
+    }
+  }, []);
+
+  const revealLocalPathInFileManager = useCallback(async (diskPath: string) => {
+    try {
+      await api('/storage/reveal-local', {
+        method: 'POST',
+        body: JSON.stringify({ path: diskPath }),
+      });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to open folder');
+    }
+  }, []);
+
+  const revealAgentWorkspaceInFileManager = useCallback(async (agentId: string) => {
+    try {
+      await api(`/agents/${agentId}/files/reveal`, {
+        method: 'POST',
+        body: JSON.stringify({ path: '/' }),
+      });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to open folder');
     }
   }, []);
 
@@ -6183,7 +6553,19 @@ export function AgentsPage() {
                       {visibleMessages.map((msg) => {
                         const messageMeta = parseAgentMessageMetadata(msg.metadata);
                         const monitorRunId =
-                          msg.direction === 'inbound' ? (messageMeta?.runId ?? null) : null;
+                          msg.direction === 'inbound'
+                            ? (messageMeta?.runId ?? msg.runId ?? null)
+                            : null;
+                        const messageRunDetail = monitorRunId
+                          ? (chatRunDetailsById[monitorRunId] ?? null)
+                          : null;
+                        const messageRunOutputBlocks = parseRunDetailOutputBlocks(messageRunDetail);
+                        const messageRunEventSummary = messageRunOutputBlocks
+                          ? buildAgentChatRunEventSummary(messageRunOutputBlocks, {
+                              hideFinalDraft:
+                                msg.direction === 'inbound' && Boolean(msg.content?.trim()),
+                            })
+                          : null;
                         const messageModelLabel =
                           msg.direction === 'inbound'
                             ? formatModelLabel(messageMeta?.model, messageMeta?.modelId)
@@ -6201,8 +6583,6 @@ export function AgentsPage() {
                             : null;
                         const isQueuedTranscriptMessage =
                           transcriptExecutionItem?.status === 'queued';
-                        const isProcessingTranscriptMessage =
-                          transcriptExecutionItem?.status === 'processing';
                         const transcriptExecutionItemId = transcriptExecutionItem?.id ?? null;
                         const isSavingTranscriptExecutionItem =
                           transcriptExecutionItemId != null &&
@@ -6300,6 +6680,14 @@ export function AgentsPage() {
                                       <div className={styles.messagePlainText}>{msg.content}</div>
                                     ))}
                                 </div>
+                                {msg.direction === 'inbound' &&
+                                  messageRunEventSummary &&
+                                  messageRunEventSummary.stats.updates > 0 && (
+                                    <AgentRunActivity
+                                      summary={messageRunEventSummary}
+                                      mode="history"
+                                    />
+                                  )}
                                 {msg.direction === 'inbound' && messageMeta?.fallbackRetry && (
                                   <div className={styles.fallbackNotice} role="status">
                                     <AlertTriangle size={14} aria-hidden />
@@ -6323,28 +6711,6 @@ export function AgentsPage() {
                                       className={`${styles.turnBadge} ${styles.turnBadgeStopped}`}
                                     >
                                       Stopped
-                                    </span>
-                                  )}
-                                  {transcriptExecutionItem && (
-                                    <span
-                                      className={`${styles.messageExecutionState} ${
-                                        isProcessingTranscriptMessage
-                                          ? styles.messageExecutionStateProcessing
-                                          : styles.messageExecutionStateQueued
-                                      }`}
-                                    >
-                                      {isProcessingTranscriptMessage ? (
-                                        <Loader size={11} className={styles.spinIcon} />
-                                      ) : (
-                                        <Clock size={11} aria-hidden />
-                                      )}
-                                      {isDeletingTranscriptExecutionItem
-                                        ? 'Removing…'
-                                        : isSavingTranscriptExecutionItem
-                                          ? 'Saving…'
-                                          : isProcessingTranscriptMessage
-                                            ? 'Processing…'
-                                            : `Queued #${transcriptExecutionItem.queuePosition ?? 1}`}
                                     </span>
                                   )}
                                   {isEditableChatMessage(msg) && (
@@ -6594,14 +6960,7 @@ export function AgentsPage() {
                       {showStreamingBubble && (
                         <div className={`${styles.messageRow} ${styles.messageRowAgent}`}>
                           <div className={styles.messageContent}>
-                            <div
-                              className={`${styles.messageBubble} ${styles.messageBubbleAgent} ${styles.streamingCursor}`}
-                            >
-                              <span className={styles.streamingQueueInfo}>
-                                <Loader size={13} className={styles.spinIcon} />
-                                Thinking…
-                              </span>
-                            </div>
+                            <AgentRunActivity summary={activeRunEventSummary} mode="live" />
                             <div className={styles.streamingActions}>
                               {activeConversationRun && (
                                 <button
@@ -6703,7 +7062,7 @@ export function AgentsPage() {
                                         : isSavingQueuedItem
                                           ? 'Saving…'
                                           : isProcessingQueuedItem
-                                            ? 'Processing…'
+                                            ? getProcessingExecutionLabel(queueItem?.runId)
                                             : `Queued #${queueItem?.queuePosition ?? idx + 1}`}
                                     </span>
                                     <span>
@@ -7578,27 +7937,33 @@ export function AgentsPage() {
                     </div>
                   </div>
                   {settingsAgent.repositoryRoot && (
-                    <div className={styles.settingsGridItem}>
+                    <div
+                      className={`${styles.settingsGridItem} ${styles.settingsGridItemFull}`}
+                    >
                       <div className={styles.settingsGridLabel}>
                         <Folder size={13} />
                         Repository folder
                       </div>
                       <div className={styles.settingsGridValue}>
-                        <code className={`${styles.settingsCode} ${styles.settingsPathCode}`}>
-                          {settingsAgent.repositoryRoot}
-                        </code>
+                        <AgentSettingsPathRow
+                          path={settingsAgent.repositoryRoot}
+                          onReveal={() => revealLocalPathInFileManager(settingsAgent.repositoryRoot!)}
+                        />
                       </div>
                     </div>
                   )}
-                  <div className={styles.settingsGridItem}>
+                  <div
+                    className={`${styles.settingsGridItem} ${styles.settingsGridItemFull}`}
+                  >
                     <div className={styles.settingsGridLabel}>
                       <FolderOpen size={13} />
                       Agent folder
                     </div>
                     <div className={styles.settingsGridValue}>
-                      <code className={`${styles.settingsCode} ${styles.settingsPathCode}`}>
-                        {settingsAgent.workspacePath}
-                      </code>
+                      <AgentSettingsPathRow
+                        path={settingsAgent.workspacePath}
+                        onReveal={() => revealAgentWorkspaceInFileManager(settingsAgent.id)}
+                      />
                     </div>
                   </div>
                 </div>

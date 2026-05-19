@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
   return {
     store,
     clearAgentRunConversationReferences: vi.fn(),
+    deleteAgentChatTurnRecordsForConversation: vi.fn(),
     deleteAllMessagesForConversation: vi.fn(),
     deleteAllMessageDraftsForConversation: vi.fn(),
     deleteChatQueueItemsForConversation: vi.fn(),
@@ -59,6 +60,19 @@ vi.mock('../lib/port-allocator.js', () => ({
   allocatePort: vi.fn(async () => 3000),
   releasePort: vi.fn(),
 }));
+vi.mock('./agent-chat-turns.js', () => ({
+  createAgentChatTurn: vi.fn(),
+  deleteAgentChatTurnRecordsForConversation: mocks.deleteAgentChatTurnRecordsForConversation,
+  findAgentChatTurnForUserMessage: vi.fn(() => null),
+  getAgentChatTurn: vi.fn(() => null),
+  listAgentChatTurns: vi.fn(() => []),
+  markAgentChatTurnCompleted: vi.fn(() => null),
+  markAgentChatTurnFailed: vi.fn(() => null),
+  markAgentChatTurnQueued: vi.fn(() => null),
+  markAgentChatTurnRunning: vi.fn(() => null),
+  markAgentChatTurnStopped: vi.fn(() => null),
+  updateAgentChatTurn: vi.fn(() => null),
+}));
 
 import { deleteAgentConversation } from './agent-chat.js';
 
@@ -70,6 +84,7 @@ describe('deleteAgentConversation', () => {
     );
     mocks.store.delete.mockReturnValue({ id: 'conversation-1' });
     mocks.clearAgentRunConversationReferences.mockResolvedValue(undefined);
+    mocks.deleteAgentChatTurnRecordsForConversation.mockResolvedValue(undefined);
   });
 
   it('deletes dependent chat state and clears run references before deleting the conversation', async () => {
@@ -82,10 +97,23 @@ describe('deleteAgentConversation', () => {
     expect(mocks.deleteAllMessageDraftsForConversation).toHaveBeenCalledWith('conversation-1');
     expect(mocks.deleteChatQueueItemsForConversation).toHaveBeenCalledWith('conversation-1');
     expect(mocks.clearAgentRunConversationReferences).toHaveBeenCalledWith('conversation-1');
+    expect(mocks.deleteAgentChatTurnRecordsForConversation).toHaveBeenCalledWith('conversation-1');
     expect(mocks.store.delete).toHaveBeenCalledWith('conversations', 'conversation-1');
 
     expect(
+      mocks.deleteChatQueueItemsForConversation.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.clearAgentRunConversationReferences.mock.invocationCallOrder[0]);
+    expect(
       mocks.clearAgentRunConversationReferences.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.deleteAgentChatTurnRecordsForConversation.mock.invocationCallOrder[0]);
+    expect(
+      mocks.deleteAgentChatTurnRecordsForConversation.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.deleteAllMessagesForConversation.mock.invocationCallOrder[0]);
+    expect(
+      mocks.deleteAllMessagesForConversation.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.deleteAllMessageDraftsForConversation.mock.invocationCallOrder[0]);
+    expect(
+      mocks.deleteAllMessageDraftsForConversation.mock.invocationCallOrder[0],
     ).toBeLessThan(mocks.store.delete.mock.invocationCallOrder[0]);
   });
 });
