@@ -33,7 +33,7 @@ export async function getFlushedNativeDb(): Promise<PostgresDatabase | null> {
 
 export function recordFromLegacyRow<T extends StoreRecord>(row: T): StoreRecord {
   const legacy = row.legacyData;
-  const nativeFields = { ...row };
+  const nativeFields = normalizeNativeFields(row);
   delete nativeFields.legacyData;
   if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
     return { ...(legacy as StoreRecord), ...nativeFields };
@@ -43,4 +43,12 @@ export function recordFromLegacyRow<T extends StoreRecord>(row: T): StoreRecord 
 
 export function recordsFromLegacyRows<T extends StoreRecord>(rows: T[]): StoreRecord[] {
   return rows.map(recordFromLegacyRow);
+}
+
+function normalizeNativeFields(row: StoreRecord): StoreRecord {
+  const normalized: StoreRecord = {};
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = value instanceof Date ? value.toISOString() : value;
+  }
+  return normalized;
 }

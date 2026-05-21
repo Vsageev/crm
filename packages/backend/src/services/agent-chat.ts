@@ -166,6 +166,8 @@ const PERMANENT_QUEUE_ERROR_PATTERNS = [
   /spawn .+ ENOENT/i,
   /Queued execution item is missing its durable turn/i,
   /Queued execution item references a terminal or superseded turn/i,
+  /Queued execution item references a completed turn/i,
+  /Chat execution cannot start for a completed turn/i,
 ];
 
 function isPermanentQueueError(errorMessage: string): boolean {
@@ -2157,9 +2159,9 @@ function formatMessageForPrompt(msg: Record<string, unknown>): string {
 }
 
 /**
- * Build the full prompt string from the current user message plus prior context.
- * The current message is kept out of the history block so run monitors and
- * model instructions do not treat old rounds as part of the latest turn.
+ * Build the full prompt string from conversation history.
+ * If currentPrompt is provided, it is appended as the latest User turn (for text messages).
+ * If omitted, the history itself is the complete conversation (used when image is the last turn).
  */
 function buildPromptWithHistory(
   agentId: string,
@@ -2183,7 +2185,6 @@ function buildPromptWithHistory(
 
   const lines: string[] = [];
   for (const msg of history) {
-    if (!currentPrompt && leafMessageId && msg.id === leafMessageId) continue;
     const metadata = parseMetadata(msg.metadata);
     const isProgressUpdate = metadata?.agentChatUpdate === true && metadata?.isFinal === false;
     if (isProgressUpdate) continue;
@@ -2191,16 +2192,18 @@ function buildPromptWithHistory(
     lines.push(formatMessageForPrompt(msg));
   }
 
+  if (currentPrompt) {
+    lines.push(`User: ${currentPrompt}`);
+  }
+
   const latestUserMessage = currentPrompt
     ? `User: ${currentPrompt}`
     : formatLatestUserMessageForPrompt(history);
   const latestUserSection = latestUserMessage
-    ? `Current User Message\n${latestUserMessage}\n\n`
+    ? `Latest User Message\n${latestUserMessage}\n\n`
     : '';
-  const historySection =
-    lines.length > 0 ? `Conversation Context (prior turns only)\n${lines.join('\n\n')}\n\n` : '';
 
-  return `${triggerContext}${latestUserSection}${historySection}Instructions\nAnswer only the Current User Message. Use Conversation Context only as background; do not continue or answer prior turns.`;
+  return `${triggerContext}${latestUserSection}Continue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
 }
 
 function formatLatestUserMessageForPrompt(history: Record<string, unknown>[]): string | null {
@@ -2213,15 +2216,7 @@ function formatLatestUserMessageForPrompt(history: Record<string, unknown>[]): s
   return null;
 }
 
-function buildChatRunTriggerPrompt(
-  currentPrompt: string | undefined,
-  latestUserMessage: Record<string, unknown> | null,
-): string {
-  if (currentPrompt) return currentPrompt;
-  return latestUserMessage ? formatMessageForPrompt(latestUserMessage) : '';
-}
-
-function isTerminalChatTurnStatus(status: unknown): boolean {
+function isNonStartableChatTurnStatus(status: unknown): boolean {
   return (
     status === 'completed' ||
     status === 'stopped' ||
@@ -2241,6 +2236,7 @@ function settleQueueItemForNonStartableTurn(
 ): void {
   const nowIso = new Date().toISOString();
   const turnStatus = turn?.status;
+
   if (turnStatus === 'completed') {
     store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
       status: 'completed',
@@ -2310,7 +2306,6 @@ interface AgentProcessOptions {
   };
   runKey: string;
   prompt: string;
-  triggerPrompt?: string | null;
   attachments?: RunnerAttachment[];
   imagePaths?: string[];
   filePaths?: string[];
@@ -2938,7 +2933,7 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       ) {
         throw new Error('Chat execution requires a durable turn linked to this conversation');
       }
-      if (isTerminalChatTurnStatus(turn.status)) {
+      if (isNonStartableChatTurnStatus(turn.status)) {
         throw new Error(
           `Chat execution cannot start for a ${describeNonStartableChatTurnStatus(turn.status)} turn`,
         );
@@ -2987,7 +2982,7 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       conversationId: options.triggerRef?.conversationId,
       cardId: options.triggerRef?.cardId,
       cronJobId: options.triggerRef?.cronJobId,
-      triggerPrompt: options.triggerPrompt ?? options.prompt,
+      triggerPrompt: options.prompt,
       responseParentId: options.responseParentId ?? null,
       turnId: options.turnId ?? null,
       executor: 'remote',
@@ -3107,6 +3102,52 @@ function readRunStdout(run: Record<string, unknown>): string {
   }
 }
 
+function linkRecoveredCompletedRunMessage(
+  run: Record<string, unknown>,
+  finalMessage: Record<string, unknown> | null,
+): boolean {
+  const runId = nonEmptyString(run.id);
+  const agentId = nonEmptyString(run.agentId);
+  const conversationId = nonEmptyString(run.conversationId);
+  const assistantMessageId = nonEmptyString(finalMessage?.id);
+  if (!runId || !agentId || !conversationId || !assistantMessageId) return false;
+
+  const turnId =
+    nonEmptyString(run.turnId) ??
+    nonEmptyString(
+      listAgentChatTurns(agentId, conversationId).find((turn) => turn.runId === runId)?.id,
+    );
+  if (!turnId) return false;
+
+  markAgentChatTurnCompleted(turnId, { assistantMessageId, runId });
+
+  const matchingQueueItems = store
+    .getAll(AGENT_CHAT_QUEUE_COLLECTION)
+    .filter(
+      (item: Record<string, unknown>) =>
+        item.agentId === agentId &&
+        item.conversationId === conversationId &&
+        (item.turnId === turnId || item.runId === runId || item.lastRunId === runId),
+    )
+    .sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+      return parseIsoDateMs(a.createdAt) - parseIsoDateMs(b.createdAt);
+    });
+  const queueItem = matchingQueueItems[matchingQueueItems.length - 1];
+  if (typeof queueItem?.id === 'string') {
+    store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItem.id, {
+      status: 'completed',
+      completedAt: nonEmptyString(queueItem.completedAt) ?? new Date().toISOString(),
+      nextAttemptAt: null,
+      runId: null,
+      lastRunId: runId,
+      responseMessageId: assistantMessageId,
+      errorMessage: null,
+    });
+  }
+
+  return true;
+}
+
 export function recoverCompletedChatRunsOnStartup(): number {
   const completedChatRuns = store
     .getAll('agent_runs')
@@ -3144,7 +3185,10 @@ export function recoverCompletedChatRunsOnStartup(): number {
         runId,
       },
     );
-    if (existingFinal) continue;
+    if (existingFinal) {
+      if (linkRecoveredCompletedRunMessage(run, existingFinal)) recoveredCount++;
+      continue;
+    }
 
     const recoveredMessage = resolveFinalMessageForCompletedRun(
       conversationId,
@@ -3156,7 +3200,7 @@ export function recoverCompletedChatRunsOnStartup(): number {
     );
 
     if (recoveredMessage) {
-      recoveredCount++;
+      if (linkRecoveredCompletedRunMessage(run, recoveredMessage)) recoveredCount++;
     }
   }
 
@@ -3223,14 +3267,12 @@ function spawnChatProcess(
     responseParentId?: string | null;
     targetMessageId?: string | null;
     turnId?: string | null;
-    triggerPrompt?: string | null;
   },
 ) {
   const isFallback = options?.isFallback ?? false;
   const responseParentId = options?.responseParentId ?? null;
   const targetMessageId = options?.targetMessageId ?? null;
   const turnId = options?.turnId ?? null;
-  const triggerPrompt = options?.triggerPrompt ?? null;
 
   void Promise.all([prepareAgentWorkspaceAccess(agentId), getFallbackModelConfig()])
     .then(([agent, globalFallback]) => {
@@ -3256,7 +3298,6 @@ function spawnChatProcess(
         agent: effectiveAgent!,
         runKey: key,
         prompt: fullPrompt,
-        triggerPrompt,
         attachments:
           attachmentPaths.attachments.length > 0 ? attachmentPaths.attachments : undefined,
         imagePaths: hasImages ? attachmentPaths.imagePaths : undefined,
@@ -3289,7 +3330,6 @@ function spawnChatProcess(
                   responseParentId,
                   targetMessageId,
                   turnId,
-                  triggerPrompt,
                 });
                 return;
               }
@@ -3313,7 +3353,6 @@ function spawnChatProcess(
                   responseParentId,
                   targetMessageId,
                   turnId,
-                  triggerPrompt,
                 });
                 return;
               }
@@ -3372,7 +3411,6 @@ function spawnChatProcess(
                 responseParentId,
                 targetMessageId,
                 turnId,
-                triggerPrompt,
               });
               return;
             }
@@ -3393,6 +3431,7 @@ export const __agentChatTestUtils = {
   shouldAttemptFallbackRetry,
   getPreviousUserMessageIdForPromptPath,
   canStartQueuedItemNow,
+  drainConversationQueue,
 };
 
 /**
@@ -3476,7 +3515,6 @@ export function executePrompt(
       {
         responseParentId: userMessage.id as string,
         turnId,
-        triggerPrompt: prompt,
       },
     );
   });
@@ -3518,7 +3556,6 @@ function executeRespondToMessage(
       reject(AgentChatError.notFound('message_not_found', 'Message not found'));
       return;
     }
-    const triggerPrompt = buildChatRunTriggerPrompt(undefined, parentMessage);
     const existingTurnId = options.turnId ?? null;
     const existingTurn =
       existingTurnId && getAgentChatTurn(existingTurnId)
@@ -3556,7 +3593,6 @@ function executeRespondToMessage(
         responseParentId: parentMessageId,
         targetMessageId: parentMessageId,
         turnId,
-        triggerPrompt,
       },
     );
   });
@@ -3910,11 +3946,13 @@ async function processQueueItem(
         'Queued execution item is missing its durable turn',
       );
     }
-    if (isTerminalChatTurnStatus(turn.status)) {
-      throw AgentChatError.conflict(
-        'queue_turn_not_startable',
-        `Queued execution item references a ${describeNonStartableChatTurnStatus(turn.status)} turn`,
+    if (isNonStartableChatTurnStatus(turn.status)) {
+      settleQueueItemForNonStartableTurn(
+        readyItemId,
+        turn,
+        'Queued execution item references a terminal or superseded turn',
       );
+      return;
     }
     let effectiveTargetId = targetMessageId;
     if (mode === 'append_prompt') {
@@ -3959,6 +3997,22 @@ async function processQueueItem(
   } catch (err) {
     const latestItem = store.getById(AGENT_CHAT_QUEUE_COLLECTION, readyItemId);
     if (!latestItem || latestItem.status !== 'processing') return;
+
+    const latestTurnId = getQueueItemTurnId(latestItem);
+    const latestTurn = latestTurnId ? getAgentChatTurn(latestTurnId) : null;
+    if (
+      latestTurn &&
+      latestTurn.agentId === agentId &&
+      latestTurn.conversationId === conversationId &&
+      isNonStartableChatTurnStatus(latestTurn.status)
+    ) {
+      settleQueueItemForNonStartableTurn(
+        readyItemId,
+        latestTurn,
+        'Queued execution item references a terminal or superseded turn',
+      );
+      return;
+    }
 
     const activeRunId =
       typeof latestItem.runId === 'string' && latestItem.runId ? latestItem.runId : spawnedRunId;
@@ -4196,10 +4250,7 @@ async function drainConversationQueue(agentId: string, conversationId: string): 
               readyTurn && readyTurn.agentId === agentId && readyTurn.conversationId === conversationId
                 ? readyTurn
                 : null;
-            if (
-              !validReadyTurn ||
-              isTerminalChatTurnStatus(validReadyTurn.status)
-            ) {
+            if (!validReadyTurn || isNonStartableChatTurnStatus(validReadyTurn.status)) {
               settleQueueItemForNonStartableTurn(
                 readyItemId,
                 validReadyTurn,
@@ -4340,15 +4391,13 @@ export async function initializeAgentChatQueue(options: InitializeAgentChatQueue
       !turn ||
       turn.agentId !== item.agentId ||
       turn.conversationId !== item.conversationId ||
-      isTerminalChatTurnStatus(turn.status)
+      isNonStartableChatTurnStatus(turn.status)
     ) {
-      const validTurn =
-        turn && turn.agentId === item.agentId && turn.conversationId === item.conversationId
-          ? turn
-          : null;
       settleQueueItemForNonStartableTurn(
         item.id as string,
-        validTurn,
+        turn && turn.agentId === item.agentId && turn.conversationId === item.conversationId
+          ? turn
+          : null,
         'Recovered queue item is missing its durable turn',
       );
       continue;

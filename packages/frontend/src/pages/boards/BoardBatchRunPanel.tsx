@@ -44,19 +44,32 @@ interface BoardBatchRunPanelProps {
     columnId?: string | null;
     columnName?: string | null;
   }>;
+  initialManualLayers?: BatchLayer[];
+  initialPlanName?: string | null;
   onClose: () => void;
 }
 
-export function BoardBatchRunPanel({ boardId, columns, availableCards, onClose }: BoardBatchRunPanelProps) {
+export function BoardBatchRunPanel({
+  boardId,
+  columns,
+  availableCards,
+  initialManualLayers,
+  initialPlanName,
+  onClose,
+}: BoardBatchRunPanelProps) {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [agentId, setAgentId] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [scopeMode, setScopeMode] = useState<'filters' | 'manual'>('filters');
+  const [scopeMode, setScopeMode] = useState<'filters' | 'manual'>(
+    () => initialManualLayers ? 'manual' : 'filters',
+  );
   const [selectedColumnIds, setSelectedColumnIds] = useState<Set<string>>(
     () => new Set(columns.map((c) => c.id)),
   );
   const [textFilter, setTextFilter] = useState('');
-  const [manualLayers, setManualLayers] = useState<BatchLayer[]>([{ cards: [] }]);
+  const [manualLayers, setManualLayers] = useState<BatchLayer[]>(
+    () => initialManualLayers ?? [{ cards: [] }],
+  );
   const [maxParallel, setMaxParallel] = useState(3);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
@@ -264,6 +277,7 @@ export function BoardBatchRunPanel({ boardId, columns, availableCards, onClose }
               <Zap size={14} />
             </div>
             <span className={styles.title}>Batch Run</span>
+            {initialPlanName && <span className={styles.planChip}>From {initialPlanName}</span>}
           </div>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
             <X size={16} />

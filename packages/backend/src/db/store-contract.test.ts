@@ -93,6 +93,35 @@ describe('store contract', () => {
 
     expect(store.getById('users', 'tx-failed-user')).toBeNull();
   });
+
+  it('normalizes native SQL timestamps to ISO strings when loading records', async () => {
+    const store = new SqlStoreAdapter(baseConfig(), staticRowsClient('users', [
+      {
+        id: 'sql-user',
+        email: 'sql-user@example.test',
+        password_hash: 'hash',
+        first_name: 'SQL',
+        last_name: 'User',
+        type: 'human',
+        is_active: true,
+        totp_secret: null,
+        totp_enabled: false,
+        recovery_codes: null,
+        created_at: new Date('2024-01-01T00:00:00.000Z'),
+        updated_at: new Date('2024-01-02T00:00:00.000Z'),
+        legacy_data: {
+          id: 'sql-user',
+          createdAt: 'legacy-created-at-should-not-win',
+        },
+      },
+    ]));
+    await store.init();
+
+    expect(store.getById('users', 'sql-user')).toMatchObject({
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    });
+  });
 });
 
 async function exerciseStoreContract(store: Store) {
@@ -276,6 +305,20 @@ function failingUsersClient(message: string) {
     },
     async begin<T>(operation: (client: { unsafe: (query: string) => Promise<StoreRecord[]> }) => Promise<T>) {
       return operation(this);
+    },
+  };
+}
+
+function staticRowsClient(table: string, rows: StoreRecord[]) {
+  return {
+    async unsafe(query: string): Promise<StoreRecord[]> {
+      if (query.includes('information_schema.tables')) {
+        return [{ table_name: table }];
+      }
+      if (query.startsWith(`select * from "${table}"`)) {
+        return rows;
+      }
+      return [];
     },
   };
 }

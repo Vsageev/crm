@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => {
     hasConnectedRemoteAgentRunner: vi.fn(),
     hasAvailableRemoteAgentRunner: vi.fn(),
     cancelRemoteAgentRun: vi.fn(),
+    dispatchRemoteAgentJob: vi.fn(),
   };
 });
 
@@ -101,7 +102,7 @@ vi.mock('./agents.js', () => ({
   })),
 }));
 vi.mock('./agent-runners.js', () => ({
-  dispatchRemoteAgentJob: vi.fn(),
+  dispatchRemoteAgentJob: mocks.dispatchRemoteAgentJob,
   getRemoteAgentRunnerUnavailableMessage: vi.fn(
     () => 'No remote agent runner is connected. Start or pair an OpenWork runner, then try again.',
   ),
@@ -129,6 +130,7 @@ import {
   editMessageAndBranch,
   enqueueAgentPrompt,
   initializeAgentChatQueue,
+  recoverCompletedChatRunsOnStartup,
   reorderQueueItems,
   retryQueueItem,
   switchBranch,
@@ -194,6 +196,7 @@ describe('agent chat turn write paths', () => {
     mocks.hasConnectedRemoteAgentRunner.mockReset();
     mocks.hasAvailableRemoteAgentRunner.mockReset();
     mocks.cancelRemoteAgentRun.mockReset();
+    mocks.dispatchRemoteAgentJob.mockReset();
     mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
     mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
     seedConversation();
@@ -218,7 +221,7 @@ describe('agent chat turn write paths', () => {
     ).toBe('message-1');
   });
 
-  it('keeps the current chat turn separate from prior context in queued-run prompts', () => {
+  it('puts the exact latest chat turn and user message at the top of queued-run prompts', () => {
     seedMessage('message-1', { content: 'First user message' });
     seedMessage('assistant-1', {
       direction: 'inbound',
@@ -241,14 +244,12 @@ describe('agent chat turn write paths', () => {
 
     expect(prompt).toContain('chatTurnId: turn-2');
     expect(prompt).toContain('latestUserMessageId: message-2');
-    expect(prompt.indexOf('Current User Message')).toBeLessThan(
-      prompt.indexOf('Conversation Context (prior turns only)'),
+    expect(prompt.indexOf('Latest User Message')).toBeLessThan(
+      prompt.indexOf('Continue the conversation below'),
     );
     expect(prompt.indexOf('User: Latest queued message')).toBeLessThan(
       prompt.indexOf('User: First user message'),
     );
-    expect(prompt.match(/User: Latest queued message/g)).toHaveLength(1);
-    expect(prompt).not.toContain('Continue the conversation below');
   });
 
   it('keeps branch switching working after editing a message that was initially queued', () => {
@@ -560,6 +561,8 @@ describe('agent chat turn write paths', () => {
 
     await initializeAgentChatQueue();
 
+    expect(mocks.dispatchRemoteAgentJob).not.toHaveBeenCalled();
+    expect(mocks.store.getAll('agent_runs')).toEqual([]);
     expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
       status: 'completed',
       responseMessageId: 'assistant-1',
@@ -569,6 +572,190 @@ describe('agent chat turn write paths', () => {
     expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
       status: 'completed',
       runId: 'run-1',
+    });
+  });
+
+  it('does not claim a queued item whose durable turn already completed', async () => {
+    seedMessage('message-1', { content: 'Already answered' });
+    seedMessage('assistant-1', {
+      direction: 'inbound',
+      content: 'Existing answer',
+      parentId: 'message-1',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: 'assistant-1',
+      status: 'completed',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      prompt: 'Already answered',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: null,
+      nextAttemptAt: null,
+    });
+
+    await __agentChatTestUtils.drainConversationQueue('agent-1', 'conversation-1');
+
+    expect(mocks.dispatchRemoteAgentJob).not.toHaveBeenCalled();
+    expect(mocks.store.getAll('agent_runs')).toEqual([]);
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      attempts: 1,
+      responseMessageId: 'assistant-1',
+      runId: null,
+      errorMessage: null,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'completed',
+      runId: 'run-1',
+    });
+  });
+
+  it('links recovered completed run messages back to canonical turns and queue rows', () => {
+    seedMessage('message-1', { content: 'Queued prompt' });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      status: 'completed',
+      runId: 'run-1',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      completedAt: '2026-05-16T12:01:00.000Z',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: '2026-05-16T12:01:00.000Z',
+      stdout: JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'openwork-final-message-run-1',
+          type: 'openwork_final_message',
+          text: 'Recovered final answer',
+        },
+      }),
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'completed',
+      turnId: 'turn-1',
+      runId: null,
+      lastRunId: 'run-1',
+      responseMessageId: null,
+      queuedMessageId: 'message-1',
+      attempts: 1,
+      maxAttempts: 4,
+      completedAt: '2026-05-16T12:01:00.000Z',
+    });
+
+    expect(recoverCompletedChatRunsOnStartup()).toBe(1);
+    const assistantMessage = mocks.store
+      .getAll('messages')
+      .find((message) => message.direction === 'inbound' && message.parentId === 'message-1');
+
+    expect(assistantMessage).toMatchObject({
+      content: 'Recovered final answer',
+      metadata: JSON.stringify({ runId: 'run-1', model: 'codex' }),
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      assistantMessageId: assistantMessage?.id,
+      status: 'completed',
+      runId: 'run-1',
+    });
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      responseMessageId: assistantMessage?.id,
+      lastRunId: 'run-1',
+      runId: null,
+      errorMessage: null,
+    });
+    expect(getAgentConversationChatView('agent-1', 'conversation-1').entries[0]).toMatchObject({
+      id: 'turn-1',
+      assistantMessage: {
+        id: assistantMessage?.id,
+        content: 'Recovered final answer',
+      },
+    });
+  });
+
+  it('links already-recovered final messages that were not attached to the turn', () => {
+    seedMessage('message-1', { content: 'Queued prompt' });
+    seedMessage('assistant-1', {
+      direction: 'inbound',
+      content: 'Existing recovered answer',
+      parentId: 'message-1',
+      metadata: JSON.stringify({ runId: 'run-1' }),
+      createdAt: '2026-05-16T12:02:00.000Z',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: null,
+      status: 'completed',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: '2026-05-16T12:01:00.000Z',
+      stdout: '',
+      responseText: 'Existing recovered answer',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'completed',
+      turnId: 'turn-1',
+      runId: null,
+      lastRunId: 'run-1',
+      responseMessageId: null,
+      queuedMessageId: 'message-1',
+      attempts: 1,
+      maxAttempts: 4,
+    });
+
+    expect(recoverCompletedChatRunsOnStartup()).toBe(1);
+
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      assistantMessageId: 'assistant-1',
+      status: 'completed',
+      runId: 'run-1',
+    });
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      responseMessageId: 'assistant-1',
+      lastRunId: 'run-1',
+    });
+    expect(getAgentConversationChatView('agent-1', 'conversation-1').entries[0]).toMatchObject({
+      assistantMessage: {
+        id: 'assistant-1',
+        content: 'Existing recovered answer',
+      },
     });
   });
 

@@ -40,4 +40,20 @@ describe('native repository legacy row normalization', () => {
       },
     ]);
   });
+
+  it('normalizes native timestamp values to ISO strings', () => {
+    expect(
+      recordFromLegacyRow({
+        id: 'comment-one',
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2024-01-02T00:00:00.000Z'),
+        legacyData: {
+          createdAt: 'legacy-created-at-should-not-win',
+        },
+      }),
+    ).toMatchObject({
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-02T00:00:00.000Z',
+    });
+  });
 });

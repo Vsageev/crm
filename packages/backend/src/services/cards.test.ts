@@ -55,7 +55,7 @@ vi.mock('./audit-log.js', () => ({ createAuditLog: mocks.createAuditLog }));
 vi.mock('./agents.js', () => ({ getAgent: mocks.getAgent }));
 vi.mock('./agent-chat.js', () => ({ executeCardTask: mocks.executeCardTask }));
 
-import { deleteCard } from './cards.js';
+import { deleteCard, listCardComments } from './cards.js';
 
 describe('deleteCard', () => {
   beforeEach(() => {
@@ -111,5 +111,36 @@ describe('deleteCard', () => {
     expect(mocks.store.update.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.store.delete.mock.invocationCallOrder[cardDeleteIndex],
     );
+  });
+
+  it('lists comments when SQL-backed records contain Date timestamps', async () => {
+    mocks.store.insert('users', {
+      id: 'user-1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      type: 'human',
+    });
+    mocks.store.insert('cardComments', {
+      id: 'comment-new',
+      cardId: 'card-1',
+      authorId: 'user-1',
+      content: 'Newer',
+      createdAt: new Date('2024-01-02T00:00:00.000Z'),
+    });
+    mocks.store.insert('cardComments', {
+      id: 'comment-old',
+      cardId: 'card-1',
+      authorId: 'user-1',
+      content: 'Older',
+      createdAt: new Date('2024-01-01T00:00:00.000Z'),
+    });
+
+    await expect(listCardComments('card-1')).resolves.toMatchObject({
+      total: 2,
+      entries: [
+        { id: 'comment-old', author: { id: 'user-1', type: 'user' } },
+        { id: 'comment-new', author: { id: 'user-1', type: 'user' } },
+      ],
+    });
   });
 });

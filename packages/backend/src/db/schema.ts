@@ -890,6 +890,26 @@ export const boardCronTemplates = pgTable('board_cron_templates', {
   ...legacyPayload,
 });
 
+export const boardExecutionPlans = pgTable(
+  'board_execution_plans',
+  {
+    id: text('id').primaryKey(),
+    boardId: text('board_id')
+      .notNull()
+      .references(() => boards.id),
+    name: text('name').notNull(),
+    description: text('description'),
+    status: text('status').notNull(),
+    layers: jsonb('layers').notNull(),
+    createdById: text('created_by_id').references(() => users.id),
+    ...timestamps,
+    ...legacyPayload,
+  },
+  (table) => [
+    index('board_execution_plans_board_id_idx').on(table.boardId),
+  ],
+);
+
 export const mediaObjects = pgTable('media_objects', {
   id: text('id').primaryKey(),
   storagePath: text('storage_path').notNull(),

@@ -384,7 +384,7 @@ export async function listCardComments(
   offset = 0,
 ) {
   const all = listCardCommentsByCardId(cardId) as unknown as CardComment[];
-  all.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  all.sort((a, b) => parseTimestampMs(a.createdAt) - parseTimestampMs(b.createdAt));
   const total = all.length;
   const entries = all.slice(offset, offset + limit).map((comment) => {
     let author: CardAssignee = null;
@@ -499,4 +499,9 @@ export async function deleteCardComment(
   }
 
   return deleted ?? null;
+}
+
+function parseTimestampMs(value: unknown): number {
+  const timestamp = new Date(String(value)).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }

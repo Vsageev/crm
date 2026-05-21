@@ -38,6 +38,20 @@ export interface BatchLayer {
   cards: BatchPlanCardLike[];
 }
 
+export type BoardExecutionPlanStatus = 'draft' | 'ready' | 'invalid';
+
+export interface BoardExecutionPlan {
+  id: string;
+  boardId: string;
+  name: string;
+  description: string | null;
+  status: BoardExecutionPlanStatus;
+  layers: BatchLayer[];
+  issues: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AgentBatchRunLike {
   id: string;
   status: AgentBatchRunStatus;
@@ -193,4 +207,14 @@ export function buildCardDependenciesFromLayers(layers: BatchLayer[]): AgentBatc
   });
 
   return dependencies;
+}
+
+export function countCardsInLayers(layers: BatchLayer[]): number {
+  return layers.reduce((count, layer) => count + layer.cards.length, 0);
+}
+
+export function countDependencyRulesInLayers(layers: BatchLayer[]): number {
+  return layers.reduce((count, layer, layerIdx) => (
+    count + layer.cards.filter((card) => resolveBatchDependencyIds(layers, layerIdx, card).length > 0).length
+  ), 0);
 }

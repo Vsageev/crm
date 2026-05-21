@@ -42,6 +42,13 @@ import {
   withBoardCronTemplateNextRun,
   syncBoardCronJobs,
 } from '../services/board-cron.js';
+import {
+  createBoardExecutionPlan,
+  deleteBoardExecutionPlan,
+  getBoardExecutionPlan,
+  listBoardExecutionPlans,
+  updateBoardExecutionPlan,
+} from '../services/board-execution-plans.js';
 import { runBoardAgentBatch, countBoardBatchCards } from '../services/board-batch.js';
 
 const columnSchema = z.object({
@@ -90,6 +97,17 @@ const batchCardDependencySchema = z.object({
   cardId: z.uuid(),
   dependsOnCardIds: z.array(z.uuid()).min(1),
   blockingMode: batchBlockingModeSchema.optional(),
+});
+const executionPlanDependencyRuleSchema = z.object({
+  mode: z.enum(['none', 'previous_layer', 'all_previous_layers', 'specific_cards']),
+  cardIds: z.array(z.uuid()).optional(),
+  blockingMode: batchBlockingModeSchema.optional(),
+});
+const executionPlanLayerSchema = z.object({
+  cards: z.array(z.object({
+    id: z.uuid(),
+    dependencyRule: executionPlanDependencyRuleSchema.optional(),
+  })),
 });
 
 export async function boardRoutes(app: FastifyInstance) {
@@ -529,6 +547,133 @@ export async function boardRoutes(app: FastifyInstance) {
       const updated = await updateBoardCronTemplate(request.params.templateId, request.body);
       if (!updated) return reply.notFound('Cron template not found');
       return reply.send(withBoardCronTemplateNextRun(updated));
+    },
+  );
+
+  // ── Execution Plans ───────────────────────────────────────────────
+
+  typedApp.get(
+    '/api/boards/:id/execution-plans',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:read')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'List execution plans for a board',
+        params: z.object({ id: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const entries = await listBoardExecutionPlans(request.params.id);
+      return reply.send({ entries, total: entries.length });
+    },
+  );
+
+  typedApp.post(
+    '/api/boards/:id/execution-plans',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Create an execution plan for a board',
+        params: z.object({ id: z.uuid() }),
+        body: z.object({
+          name: z.string().min(1).max(255),
+          description: z.string().max(2000).nullable().optional(),
+          layers: z.array(executionPlanLayerSchema).optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const plan = await createBoardExecutionPlan(
+        { ...request.body, boardId: request.params.id },
+        request.user.sub,
+      );
+
+      return reply.status(201).send(plan);
+    },
+  );
+
+  typedApp.get(
+    '/api/boards/:id/execution-plans/:planId',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:read')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Get a board execution plan',
+        params: z.object({ id: z.uuid(), planId: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const plan = await getBoardExecutionPlan(request.params.planId);
+      if (!plan || plan.boardId !== request.params.id) {
+        return reply.notFound('Execution plan not found');
+      }
+
+      return reply.send(plan);
+    },
+  );
+
+  typedApp.patch(
+    '/api/boards/:id/execution-plans/:planId',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Update a board execution plan',
+        params: z.object({ id: z.uuid(), planId: z.uuid() }),
+        body: z.object({
+          name: z.string().min(1).max(255).optional(),
+          description: z.string().max(2000).nullable().optional(),
+          layers: z.array(executionPlanLayerSchema).optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const existing = await getBoardExecutionPlan(request.params.planId);
+      if (!existing || existing.boardId !== request.params.id) {
+        return reply.notFound('Execution plan not found');
+      }
+
+      const updated = await updateBoardExecutionPlan(request.params.planId, request.body);
+      if (!updated) return reply.notFound('Execution plan not found');
+      return reply.send(updated);
+    },
+  );
+
+  typedApp.delete(
+    '/api/boards/:id/execution-plans/:planId',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Delete a board execution plan',
+        params: z.object({ id: z.uuid(), planId: z.uuid() }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) return reply.notFound('Board not found');
+
+      const existing = await getBoardExecutionPlan(request.params.planId);
+      if (!existing || existing.boardId !== request.params.id) {
+        return reply.notFound('Execution plan not found');
+      }
+
+      const deleted = await deleteBoardExecutionPlan(request.params.planId);
+      if (!deleted) return reply.notFound('Execution plan not found');
+      return reply.status(204).send();
     },
   );
 

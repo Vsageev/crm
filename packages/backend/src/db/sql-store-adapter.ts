@@ -555,6 +555,18 @@ const MAPPINGS: CollectionMapping[] = [
     'updatedAt',
     'legacyData',
   ]),
+  mapping('boardExecutionPlans', 'board_execution_plans', [
+    'id',
+    'boardId',
+    'name',
+    'description',
+    'status',
+    'layers',
+    'createdById',
+    'createdAt',
+    'updatedAt',
+    'legacyData',
+  ]),
   mapping('mediaObjects', 'media_objects', [
     'id',
     'storagePath',
@@ -917,7 +929,7 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
         if (field === 'legacyData') continue;
         const column = toSnake(field);
         if (column in row) {
-          record[field] = row[column];
+          record[field] = normalizeSqlValue(row[column]);
         }
       }
     }
@@ -1073,4 +1085,9 @@ function parseMaybeJson(value: string): unknown {
 function normalizeJson(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   return parseMaybeJson(value);
+}
+
+function normalizeSqlValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  return value;
 }

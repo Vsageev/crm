@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Bot, FolderOpen, ChevronDown, Check, Clock, Search, X, ExternalLink, ArrowRight, MoveRight, Copy, CopyPlus, SearchX, ChevronsLeft, ChevronsRight, SlidersHorizontal, Star, Tag, Users, ArrowUpDown, GripVertical, RefreshCw, MoreHorizontal, Layers, User, AlignLeft } from 'lucide-react';
+import { Plus, Trash2, Bot, FolderOpen, ChevronDown, Check, Clock, Search, X, SearchX, ChevronsLeft, SlidersHorizontal, Star, Tag, Users, ArrowUpDown, GripVertical, RefreshCw, MoreHorizontal, Layers, User, AlignLeft, GitBranch } from 'lucide-react';
 import { AnchoredOverlay, Button, EntitySwitcher, CreateCardModal, Modal } from '../../ui';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { ActiveBatchRunsBanner } from '../../components/ActiveBatchRunsBanner';
@@ -16,12 +16,13 @@ import { fetchProcessingCardAgents } from '../../lib/agent-batch';
 import { useWorkspace } from '../../stores/WorkspaceContext';
 import { BoardCronTemplatesPanel } from './BoardCronTemplatesPanel';
 import { BoardBatchRunPanel } from './BoardBatchRunPanel';
+import { BoardExecutionPlansPanel } from './BoardExecutionPlansPanel';
 import { CardQuickView } from './CardQuickView';
 import { CardContextMenu } from './CardContextMenu';
-import type { TagEntry as ContextMenuTagEntry } from './CardContextMenu';
 import { useFavorites } from '../../hooks/useFavorites';
 import styles from './BoardPage.module.css';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import type { BoardExecutionPlan } from '../../lib/agent-batch';
 
 const COLUMN_COLORS = ['#6B7280', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
 
@@ -218,7 +219,9 @@ export function BoardPage() {
   const [showCollectionPicker, setShowCollectionPicker] = useState(false);
   const collectionPickerOverlayRef = useRef<HTMLDivElement>(null);
   const [showCronPanel, setShowCronPanel] = useState(false);
+  const [showExecutionPlansPanel, setShowExecutionPlansPanel] = useState(false);
   const [showBatchRunPanel, setShowBatchRunPanel] = useState(false);
+  const [batchPlanSource, setBatchPlanSource] = useState<BoardExecutionPlan | null>(null);
   const [filterText, setFilterText] = useState(() => id ? getFilterState(id).text : '');
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(() => {
     if (!id) return new Set();
@@ -450,6 +453,19 @@ export function BoardPage() {
   const sortedColumns = useMemo(
     () => (board ? [...board.columns].sort((a, b) => a.position - b.position) : []),
     [board],
+  );
+  const availableBoardCards = useMemo(
+    () => board
+      ? board.cards
+          .filter((entry) => entry.card)
+          .map((entry) => ({
+            id: entry.cardId,
+            name: entry.card?.name ?? 'Untitled card',
+            columnId: entry.columnId,
+            columnName: sortedColumns.find((column) => column.id === entry.columnId)?.name ?? null,
+          }))
+      : [],
+    [board, sortedColumns],
   );
 
   // Restore filter state when navigating to a different board
@@ -1292,7 +1308,17 @@ export function BoardPage() {
             <Clock size={14} />
             Scheduled
           </Button>
-          <Button variant="secondary" onClick={() => setShowBatchRunPanel(true)}>
+          <Button variant="secondary" onClick={() => setShowExecutionPlansPanel(true)}>
+            <GitBranch size={14} />
+            Plans
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setBatchPlanSource(null);
+              setShowBatchRunPanel(true);
+            }}
+          >
             <Bot size={14} />
             Batch run
           </Button>
@@ -1506,19 +1532,30 @@ export function BoardPage() {
         />
       )}
 
+      {showExecutionPlansPanel && (
+        <BoardExecutionPlansPanel
+          boardId={board.id}
+          availableCards={availableBoardCards}
+          onClose={() => setShowExecutionPlansPanel(false)}
+          onRunPlan={(plan) => {
+            setBatchPlanSource(plan);
+            setShowExecutionPlansPanel(false);
+            setShowBatchRunPanel(true);
+          }}
+        />
+      )}
+
       {showBatchRunPanel && (
         <BoardBatchRunPanel
           boardId={board.id}
           columns={sortedColumns}
-          availableCards={board.cards
-            .filter((entry) => entry.card)
-            .map((entry) => ({
-              id: entry.cardId,
-              name: entry.card?.name ?? 'Untitled card',
-              columnId: entry.columnId,
-              columnName: sortedColumns.find((column) => column.id === entry.columnId)?.name ?? null,
-            }))}
-          onClose={() => setShowBatchRunPanel(false)}
+          availableCards={availableBoardCards}
+          initialManualLayers={batchPlanSource?.layers}
+          initialPlanName={batchPlanSource?.name}
+          onClose={() => {
+            setShowBatchRunPanel(false);
+            setBatchPlanSource(null);
+          }}
         />
       )}
 
