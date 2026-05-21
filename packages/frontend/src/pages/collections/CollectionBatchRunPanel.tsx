@@ -6,6 +6,7 @@ import { toast } from '../../stores/toast';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { BatchLayerPlanner, type BatchPlanCard } from '../../components/BatchLayerPlanner';
 import {
+  buildCardDependenciesFromLayers,
   buildStagesFromLayers,
   type BatchLayer,
 } from '../../lib/agent-batch';
@@ -146,6 +147,10 @@ export function CollectionBatchRunPanel({
     () => scopeMode === 'manual' ? buildStagesFromLayers(manualLayers) : [],
     [scopeMode, manualLayers],
   );
+  const configuredCardDependencies = useMemo(
+    () => scopeMode === 'manual' ? buildCardDependenciesFromLayers(manualLayers) : [],
+    [scopeMode, manualLayers],
+  );
 
   const loadManualOptions = useCallback(async (query: string): Promise<BatchPlanCard[]> => {
     const params = new URLSearchParams({
@@ -217,6 +222,7 @@ export function CollectionBatchRunPanel({
           cardIds: scopeMode === 'manual' ? manualLayers.flatMap((l) => l.cards.map((c) => c.id)) : undefined,
           cardFilters: scopeMode === 'filters' ? cardFilters : undefined,
           stages: configuredStages.length > 0 ? configuredStages : undefined,
+          cardDependencies: configuredCardDependencies.length > 0 ? configuredCardDependencies : undefined,
         }),
       });
       setResult(res);
@@ -475,7 +481,7 @@ export function CollectionBatchRunPanel({
             {scopeMode === 'manual' && manualCardCount > 0 && (
               <span className={styles.footerCount}>
                 {configuredStages.length > 1
-                  ? `${configuredStages.length} layers`
+                  ? `${configuredStages.length} layers, ${configuredCardDependencies.length} rule${configuredCardDependencies.length === 1 ? '' : 's'}`
                   : `${manualCardCount} card${manualCardCount !== 1 ? 's' : ''}`}
               </span>
             )}

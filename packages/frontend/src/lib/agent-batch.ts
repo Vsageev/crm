@@ -10,9 +10,28 @@ export interface AgentBatchStageInput {
   blockingMode?: AgentBatchBlockingMode;
 }
 
+export interface AgentBatchCardDependencyInput {
+  cardId: string;
+  dependsOnCardIds: string[];
+  blockingMode?: AgentBatchBlockingMode;
+}
+
+export type BatchDependencyMode =
+  | 'none'
+  | 'previous_layer'
+  | 'all_previous_layers'
+  | 'specific_cards';
+
+export interface BatchDependencyRule {
+  mode: BatchDependencyMode;
+  cardIds?: string[];
+  blockingMode?: AgentBatchBlockingMode;
+}
+
 export interface BatchPlanCardLike {
   id: string;
   name: string;
+  dependencyRule?: BatchDependencyRule;
 }
 
 export interface BatchLayer {
@@ -111,6 +130,67 @@ export function buildStagesFromLayers(layers: BatchLayer[]): AgentBatchStageInpu
   return nonEmpty.map((layer, idx) => ({
     id: `layer-${idx + 1}`,
     cardIds: layer.cards.map((c) => c.id),
-    dependsOnStageIndexes: idx === 0 ? undefined : [idx - 1],
+    dependsOnStageIndexes: [],
   }));
+}
+
+function uniqueIds(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function getEarlierLayerCardIds(layers: BatchLayer[], layerIdx: number): string[] {
+  return layers.slice(0, layerIdx).flatMap((layer) => layer.cards.map((card) => card.id));
+}
+
+function getPreviousLayerCardIds(layers: BatchLayer[], layerIdx: number): string[] {
+  if (layerIdx <= 0) return [];
+  return layers[layerIdx - 1]?.cards.map((card) => card.id) ?? [];
+}
+
+export function resolveBatchDependencyIds(
+  layers: BatchLayer[],
+  layerIdx: number,
+  card: BatchPlanCardLike,
+): string[] {
+  const rule = card.dependencyRule;
+  const mode = rule?.mode ?? (layerIdx > 0 ? 'previous_layer' : 'none');
+
+  if (mode === 'none') return [];
+  if (mode === 'previous_layer') {
+    return getPreviousLayerCardIds(layers, layerIdx).filter((cardId) => cardId !== card.id);
+  }
+  if (mode === 'all_previous_layers') {
+    return getEarlierLayerCardIds(layers, layerIdx).filter((cardId) => cardId !== card.id);
+  }
+
+  const earlierCardIds = new Set(getEarlierLayerCardIds(layers, layerIdx));
+  return uniqueIds(rule?.cardIds ?? []).filter((cardId) => (
+    cardId !== card.id && earlierCardIds.has(cardId)
+  ));
+}
+
+export function buildCardDependenciesFromLayers(layers: BatchLayer[]): AgentBatchCardDependencyInput[] {
+  const nonEmpty = layers.filter((l) => l.cards.length > 0);
+  const dependencies: AgentBatchCardDependencyInput[] = [];
+
+  nonEmpty.forEach((layer, layerIdx) => {
+    for (const card of layer.cards) {
+      const dependsOnCardIds = resolveBatchDependencyIds(nonEmpty, layerIdx, card);
+      if (dependsOnCardIds.length === 0) continue;
+      dependencies.push({
+        cardId: card.id,
+        dependsOnCardIds,
+        blockingMode: card.dependencyRule?.blockingMode,
+      });
+    }
+  });
+
+  return dependencies;
 }

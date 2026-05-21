@@ -3,6 +3,7 @@ import path from 'node:path';
 import { store } from '../db/index.js';
 import type { StoreRecord } from '../db/store.js';
 import {
+  clearAgentRunRetentionReferences,
   findAgentRunIdsForRetentionCleanup,
   findAgentRunsByListFilterPaged,
   findAgentRunsWithLegacyTriggerTypes,
@@ -734,30 +735,35 @@ export async function reconcileUnrecoveredRemoteRuns(): Promise<number> {
 }
 
 /**
- * Delete completed/error run records older than the given number of days.
+ * Delete terminal completed/error run records older than the given number of days.
  * Also removes their log directories from disk.
- * Running runs are never deleted.
+ * Queued/running runs are never deleted because they can still be claimed or completed.
  * Returns the number of records deleted.
  */
-export function cleanupOldRunRecords(olderThanDays: number): number {
+export async function cleanupOldRunRecords(olderThanDays: number): Promise<number> {
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
 
   const ids = findAgentRunIdsForRetentionCleanup(cutoff);
 
   let deleted = 0;
   for (const runId of ids) {
-    // Remove log directory if it exists
-    const logDir = path.join(RUNS_DIR, runId);
-    if (fs.existsSync(logDir)) {
-      try {
-        fs.rmSync(logDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort
-      }
-    }
+    const removed = await store.transaction(async () => {
+      await clearAgentRunRetentionReferences(runId);
+      return store.delete('agent_runs', runId);
+    });
 
-    store.delete('agent_runs', runId);
-    deleted++;
+    if (removed) {
+      // Remove log directory if it exists
+      const logDir = path.join(RUNS_DIR, runId);
+      if (fs.existsSync(logDir)) {
+        try {
+          fs.rmSync(logDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort
+        }
+      }
+      deleted++;
+    }
   }
 
   if (deleted > 0) {

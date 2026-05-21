@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { store } from '../db/index.js';
 import { maxAgentGroupOrder } from '../db/repositories/agents-query-repository.js';
+import { ApiError } from '../utils/api-errors.js';
 import { createAuditLog } from './audit-log.js';
 
 export interface WorkspaceListQuery {
@@ -391,7 +392,31 @@ export async function deleteWorkspace(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const deleted = store.delete('workspaces', id);
+  const deleted = await store.transaction(async () => {
+    try {
+      if (!store.getById('workspaces', id)) return null;
+      for (const pairing of store.getAll('agentRunnerPairingCodes')) {
+        if (pairing.workspaceId === id && typeof pairing.id === 'string') {
+          await store.delete('agentRunnerPairingCodes', pairing.id);
+        }
+      }
+      for (const runner of store.getAll('agentRunners')) {
+        if (runner.workspaceId === id && typeof runner.id === 'string') {
+          await store.delete('agentRunners', runner.id);
+        }
+      }
+      return await store.delete('workspaces', id);
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        throw ApiError.conflict(
+          'workspace_delete_blocked',
+          'Workspace cannot be deleted because related records still reference it',
+          'Remove related workspace records before retrying.',
+        );
+      }
+      throw error;
+    }
+  });
 
   if (deleted && audit) {
     await createAuditLog({
@@ -405,4 +430,11 @@ export async function deleteWorkspace(
   }
 
   return deleted ?? null;
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; cause?: unknown };
+  if (candidate.code === '23503') return true;
+  return isForeignKeyViolation(candidate.cause);
 }

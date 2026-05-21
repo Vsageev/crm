@@ -30,6 +30,7 @@ export const auditLogSchema = z
       'login_failed',
       'export',
       'import',
+      // Legacy 2FA audit values are retained for existing records only.
       'two_factor_enabled',
       'two_factor_disabled',
       'two_factor_failed',

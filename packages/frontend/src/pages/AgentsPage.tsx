@@ -206,6 +206,7 @@ interface Agent {
   avatarIcon: string;
   avatarBgColor: string;
   avatarLogoColor: string;
+  archivedAt?: string | null;
   createdAt: string;
 }
 
@@ -1971,6 +1972,7 @@ const AgentSidebarItem = memo(function AgentSidebarItem({
     (sum, conversation) => sum + toQueueCount(conversation.queuedCount),
     0,
   );
+  const isArchived = Boolean(agent.archivedAt);
 
   return (
     <div className={styles.agentGroup}>
@@ -2049,18 +2051,20 @@ const AgentSidebarItem = memo(function AgentSidebarItem({
               <Eraser size={14} />
             </button>
           </Tooltip>
-          <Tooltip label="New chat">
-            <button
-              className={styles.agentGroupIconBtn}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateConversation(agent.id);
-              }}
-              aria-label="New chat"
-            >
-              <Plus size={14} />
-            </button>
-          </Tooltip>
+          {!isArchived && (
+            <Tooltip label="New chat">
+              <button
+                className={styles.agentGroupIconBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateConversation(agent.id);
+                }}
+                aria-label="New chat"
+              >
+                <Plus size={14} />
+              </button>
+            </Tooltip>
+          )}
         </div>
       </div>
 
@@ -3853,7 +3857,18 @@ export function AgentsPage() {
       fetchColorPresets();
       fetchCliStatus();
       fetchRunnerDevices();
-      const entries = await fetchAgents();
+      let entries = await fetchAgents();
+      if (requestedAgentId && !entries.some((agent) => agent.id === requestedAgentId)) {
+        try {
+          const requestedAgent = await api<Agent>(`/agents/${requestedAgentId}`);
+          if (requestedAgent.archivedAt) {
+            entries = [...entries, requestedAgent];
+            setAgents(entries);
+          }
+        } catch {
+          /* keep the normal list when the linked agent no longer exists */
+        }
+      }
       if (cancelled || entries.length === 0) return;
 
       // Load conversations for all agents
@@ -8358,7 +8373,7 @@ export function AgentsPage() {
                       variant="danger"
                       onClick={() => handleDelete(settingsAgent.id)}
                     >
-                      Confirm Delete
+                      Confirm Archive
                     </Button>
                   </>
                 ) : (
@@ -8368,7 +8383,7 @@ export function AgentsPage() {
                     onClick={() => setDeletingId(settingsAgent.id)}
                   >
                     <Trash2 size={13} />
-                    Delete
+                    Archive
                   </Button>
                 )}
               </div>

@@ -599,7 +599,13 @@ function prepareRunEventsForDisplay(
   let hiddenFinalDraftDetail: string | null = null;
 
   if (options.hideFinalDraft) {
-    const lastDraftIndex = displayEvents.findLastIndex((event) => event.kind === 'assistant_text');
+    let lastDraftIndex = -1;
+    for (let index = displayEvents.length - 1; index >= 0; index -= 1) {
+      if (displayEvents[index]?.kind === 'assistant_text') {
+        lastDraftIndex = index;
+        break;
+      }
+    }
     if (lastDraftIndex >= 0) {
       hiddenFinalDraftDetail = displayEvents[lastDraftIndex]?.detail ?? null;
       displayEvents = displayEvents.filter((_, index) => index !== lastDraftIndex);

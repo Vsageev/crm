@@ -39,7 +39,6 @@
     "fastify-type-provider-zod": "^6.1.0",
     "node-cron": "^4.2.1",
     "openai": "^6.22.0",
-    "otpauth": "^9.5.0",
     "postgres": "^3.4.9",
     "shared": "workspace:*",
     "ws": "^8.20.1",

@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
-import { getAgent } from '../services/agents.js';
+import { getAgent, isAgentArchived } from '../services/agents.js';
 import { uploadFile } from '../services/storage.js';
 import { validateUploadedFile } from '../utils/file-validation.js';
 import { createAgentRateLimiter } from '../lib/api-helpers.js';
@@ -235,6 +235,14 @@ function requireAgentExists(agentId: string) {
   return agent;
 }
 
+function requireActiveAgent(agentId: string) {
+  const agent = requireAgentExists(agentId);
+  if (isAgentArchived(agent)) {
+    throw ApiError.conflict('agent_archived', 'Agent is archived');
+  }
+  return agent;
+}
+
 function requireConversationExists(conversationId: string, agentId: string) {
   const conversation = validateConversationOwnership(conversationId, agentId);
   if (!conversation) {
@@ -398,7 +406,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      requireAgentExists(request.params.id);
+      requireActiveAgent(request.params.id);
 
       const conv = createAgentConversation(request.params.id, request.body.subject);
       return reply.status(201).send(conv);

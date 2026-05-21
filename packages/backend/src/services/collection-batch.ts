@@ -1,7 +1,7 @@
 import { store } from '../db/index.js';
 import type { Card, Collection } from '../db/types.js';
 import { listCards } from './cards.js';
-import { getAgent } from './agents.js';
+import { getAgent, isAgentArchived } from './agents.js';
 import {
   enqueueAgentBatchRun,
   type AgentBatchCardDependencyInput,
@@ -54,7 +54,7 @@ export async function runCollectionAgentBatch(
   } = options;
 
   const agent = getAgent(agentId);
-  if (!agent) {
+  if (!agent || isAgentArchived(agent)) {
     throw new Error('Agent not found');
   }
 

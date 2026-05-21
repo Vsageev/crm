@@ -218,7 +218,7 @@ describe('agent chat turn write paths', () => {
     ).toBe('message-1');
   });
 
-  it('puts the exact latest chat turn and user message at the top of queued-run prompts', () => {
+  it('keeps the current chat turn separate from prior context in queued-run prompts', () => {
     seedMessage('message-1', { content: 'First user message' });
     seedMessage('assistant-1', {
       direction: 'inbound',
@@ -241,12 +241,14 @@ describe('agent chat turn write paths', () => {
 
     expect(prompt).toContain('chatTurnId: turn-2');
     expect(prompt).toContain('latestUserMessageId: message-2');
-    expect(prompt.indexOf('Latest User Message')).toBeLessThan(
-      prompt.indexOf('Continue the conversation below'),
+    expect(prompt.indexOf('Current User Message')).toBeLessThan(
+      prompt.indexOf('Conversation Context (prior turns only)'),
     );
     expect(prompt.indexOf('User: Latest queued message')).toBeLessThan(
       prompt.indexOf('User: First user message'),
     );
+    expect(prompt.match(/User: Latest queued message/g)).toHaveLength(1);
+    expect(prompt).not.toContain('Continue the conversation below');
   });
 
   it('keeps branch switching working after editing a message that was initially queued', () => {
@@ -529,6 +531,47 @@ describe('agent chat turn write paths', () => {
     });
   });
 
+  it('settles interrupted work without rerunning when the linked turn is already completed', async () => {
+    seedMessage('message-1', { content: 'Already answered' });
+    seedMessage('assistant-1', {
+      direction: 'inbound',
+      content: 'Existing answer',
+      parentId: 'message-1',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: 'assistant-1',
+      status: 'completed',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'processing',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: null,
+      nextAttemptAt: '2026-05-16T12:00:00.000Z',
+    });
+
+    await initializeAgentChatQueue();
+
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      responseMessageId: 'assistant-1',
+      runId: null,
+      errorMessage: null,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'completed',
+      runId: 'run-1',
+    });
+  });
+
   it('keeps stopped turns selectable and allows a follow-up child turn', () => {
     seedMessage('message-1', { content: 'Stop this prompt' });
     seedTurn('turn-1', {
@@ -634,6 +677,106 @@ describe('agent chat turn write paths', () => {
       parentTurnId: edit.queueItem.turnId,
       userMessageId: 'message-follow-up',
     });
+  });
+
+  it('allows append prompts on separate branches to start independently', () => {
+    seedMessage('message-original', {
+      content: 'Original prompt',
+      createdAt: '2026-05-16T12:00:00.000Z',
+    });
+    seedTurn('turn-original', {
+      userMessageId: 'message-original',
+      status: 'completed',
+      createdAt: '2026-05-16T12:00:01.000Z',
+    });
+
+    const editedMessage = editMessageAndBranch(
+      'conversation-1',
+      'message-original',
+      'Edited prompt',
+      {
+        newMessageId: 'message-edited',
+      },
+    );
+    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
+      mode: 'respond_to_message',
+      targetMessageId: String(editedMessage.id),
+      createdById: 'test-user',
+      turnType: 'edit',
+      supersedesMessageId: 'message-original',
+    });
+    mocks.store.update('agentChatTurns', String(edit.queueItem.turnId), {
+      status: 'completed',
+    });
+
+    seedMessage('message-edited-follow-up', {
+      content: 'Follow-up on edited branch',
+      parentId: String(editedMessage.id),
+      previousUserMessageId: String(editedMessage.id),
+      createdAt: '2026-05-16T12:00:02.000Z',
+    });
+    seedTurn('turn-edited-follow-up', {
+      parentTurnId: edit.queueItem.turnId,
+      userMessageId: 'message-edited-follow-up',
+      status: 'running',
+      runId: 'run-edited-follow-up',
+      createdAt: '2026-05-16T12:00:03.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-edited-follow-up',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'processing',
+      turnId: 'turn-edited-follow-up',
+      runId: 'run-edited-follow-up',
+      queuedMessageId: 'message-edited-follow-up',
+      attempts: 1,
+      maxAttempts: 4,
+      createdAt: '2026-05-16T12:00:04.000Z',
+    });
+
+    switchBranch('conversation-1', 'message-original');
+    const originalBranchFollowUp = enqueueAgentPrompt(
+      'agent-1',
+      'conversation-1',
+      'Follow-up on original branch',
+      {
+        queuedMessageId: 'message-original-follow-up',
+        previousUserMessageId: 'message-original',
+        createdById: 'test-user',
+      },
+    );
+    const sameBranchFollowUp = enqueueAgentPrompt(
+      'agent-1',
+      'conversation-1',
+      'Second follow-up on edited branch',
+      {
+        queuedMessageId: 'message-edited-second-follow-up',
+        previousUserMessageId: 'message-edited-follow-up',
+        createdById: 'test-user',
+      },
+    );
+
+    const queueItems = mocks.store.getAll('agentChatQueue');
+    expect(
+      __agentChatTestUtils.canStartQueuedItemNow(
+        'agent-1',
+        'conversation-1',
+        queueItems,
+        originalBranchFollowUp.queueItem,
+        Date.now(),
+      ),
+    ).toBe(true);
+    expect(
+      __agentChatTestUtils.canStartQueuedItemNow(
+        'agent-1',
+        'conversation-1',
+        queueItems,
+        sameBranchFollowUp.queueItem,
+        Date.now(),
+      ),
+    ).toBe(false);
   });
 
   it('does not cancel pending execution for a superseded message when queuing its edit', () => {

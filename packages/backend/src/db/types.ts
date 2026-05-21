@@ -10,6 +10,7 @@ export interface User {
   type?: 'human' | 'agent';
   agentId?: string | null;
   isActive: boolean;
+  /** Legacy 2FA columns retained for existing rows; auth runtime ignores them. */
   totpSecret: string | null;
   totpEnabled: boolean;
   recoveryCodes: string | null;
@@ -29,6 +30,7 @@ export interface AuditLog {
     | 'login_failed'
     | 'export'
     | 'import'
+    // Legacy 2FA audit values are retained for existing records only.
     | 'two_factor_enabled'
     | 'two_factor_disabled'
     | 'two_factor_failed';

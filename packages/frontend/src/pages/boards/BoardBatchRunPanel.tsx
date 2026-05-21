@@ -6,6 +6,7 @@ import { toast } from '../../stores/toast';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { BatchLayerPlanner, type BatchPlanCard } from '../../components/BatchLayerPlanner';
 import {
+  buildCardDependenciesFromLayers,
   buildStagesFromLayers,
   type BatchLayer,
 } from '../../lib/agent-batch';
@@ -147,6 +148,10 @@ export function BoardBatchRunPanel({ boardId, columns, availableCards, onClose }
     () => scopeMode === 'manual' ? buildStagesFromLayers(manualLayers) : [],
     [scopeMode, manualLayers],
   );
+  const configuredCardDependencies = useMemo(
+    () => scopeMode === 'manual' ? buildCardDependenciesFromLayers(manualLayers) : [],
+    [scopeMode, manualLayers],
+  );
 
   const loadManualOptions = useCallback(async (query: string): Promise<BatchPlanCard[]> => {
     const needle = query.toLowerCase();
@@ -221,6 +226,7 @@ export function BoardBatchRunPanel({ boardId, columns, availableCards, onClose }
           textFilter: scopeMode === 'filters' ? textFilter.trim() || undefined : undefined,
           maxParallel,
           stages: configuredStages.length > 0 ? configuredStages : undefined,
+          cardDependencies: configuredCardDependencies.length > 0 ? configuredCardDependencies : undefined,
         }),
       });
       setResult(res);
@@ -491,7 +497,7 @@ export function BoardBatchRunPanel({ boardId, columns, availableCards, onClose }
             {scopeMode === 'manual' && manualCardCount > 0 && (
               <span className={styles.footerColumns}>
                 {configuredStages.length > 1
-                  ? `${configuredStages.length} layers`
+                  ? `${configuredStages.length} layers, ${configuredCardDependencies.length} rule${configuredCardDependencies.length === 1 ? '' : 's'}`
                   : `${manualCardCount} card${manualCardCount !== 1 ? 's' : ''}`}
               </span>
             )}

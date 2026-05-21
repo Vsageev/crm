@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { store } from '../db/index.js';
 import {
+  deleteWebhookDeliveriesForWebhook,
   getWebhookRecordById,
   listActiveWebhooksForEvent,
   listWebhooksNative,
 } from '../db/repositories/webhooks-repository.js';
+import { ApiError } from '../utils/api-errors.js';
 import { createAuditLog } from './audit-log.js';
 
 export interface WebhookListQuery {
@@ -119,7 +121,23 @@ export async function deleteWebhook(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const deleted = store.delete('webhooks', id);
+  const deleted = await store.transaction(async () => {
+    try {
+      if (!store.getById('webhooks', id)) return null;
+      await deleteWebhookDeliveriesForWebhook(id);
+      return await store.delete('webhooks', id);
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        throw ApiError.conflict(
+          'webhook_delete_blocked',
+          'Webhook cannot be deleted because related records still reference it',
+          'Delete or archive related webhook delivery records before retrying.',
+        );
+      }
+      throw error;
+    }
+  });
+  if (deleted) await store.reload();
 
   if (deleted && audit) {
     await createAuditLog({
@@ -133,4 +151,11 @@ export async function deleteWebhook(
   }
 
   return deleted ?? null;
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; cause?: unknown };
+  if (candidate.code === '23503') return true;
+  return isForeignKeyViolation(candidate.cause);
 }

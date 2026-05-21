@@ -5,7 +5,9 @@ import { authenticateApiKeyOrJwt } from '../middleware/api-key-auth.js';
 
 declare module '@fastify/jwt' {
   interface FastifyJWT {
+    /** Legacy temporary 2FA marker; active auth rejects these tokens. */
     payload: { sub: string; twoFactor?: boolean };
+    /** Legacy temporary 2FA marker; active auth rejects these tokens. */
     user: { sub: string; twoFactor?: boolean };
   }
 }

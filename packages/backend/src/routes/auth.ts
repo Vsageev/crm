@@ -10,16 +10,6 @@ import {
   refreshAccessToken,
   revokeUserRefreshTokens,
 } from '../services/auth.js';
-import {
-  generateTotpSecret,
-  generateTotpUri,
-  verifyTotpToken,
-  generateRecoveryCodes,
-  enableTotp,
-  disableTotp,
-  consumeRecoveryCode,
-  regenerateRecoveryCodes,
-} from '../services/totp.js';
 import { createAuditLog } from '../services/audit-log.js';
 import { authRateLimitConfig } from '../plugins/rate-limit.js';
 import { validatePasswordStrength } from '../utils/password-policy.js';
@@ -41,19 +31,6 @@ const loginBody = z.object({
 
 const refreshBody = z.object({
   refreshToken: z.string().min(1),
-});
-
-const totpTokenBody = z.object({
-  token: z.string().length(6),
-});
-
-const twoFactorVerifyBody = z.object({
-  twoFactorToken: z.string().min(1),
-  code: z.string().min(1),
-});
-
-const disableTotpBody = z.object({
-  password: z.string().min(1),
 });
 
 export async function authRoutes(app: FastifyInstance) {
@@ -135,19 +112,6 @@ export async function authRoutes(app: FastifyInstance) {
       throw ApiError.unauthorized('invalid_credentials', 'Invalid email or password');
     }
 
-    // If 2FA is enabled, return a temporary token for 2FA verification
-    if (user.totpEnabled) {
-      const twoFactorToken = app.jwt.sign(
-        { sub: user.id as string, twoFactor: true },
-        { expiresIn: '5m' },
-      );
-
-      return reply.send({
-        twoFactorRequired: true,
-        twoFactorToken,
-      });
-    }
-
     const tokens = await generateTokens(app, user.id as string);
 
     // Audit successful login
@@ -156,78 +120,6 @@ export async function authRoutes(app: FastifyInstance) {
       action: 'login',
       entityType: 'user',
       entityId: user.id as string,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'],
-    }).catch(() => {});
-
-    return reply.send({
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        type: (user.type as string | undefined) ?? 'human',
-        createdAt: user.createdAt,
-      },
-      ...tokens,
-    });
-  });
-
-  // Verify 2FA during login
-  typedApp.post('/api/auth/2fa/verify', { config: { rateLimit: authRateLimitConfig() }, schema: { tags: ['Auth'], summary: 'Verify 2FA during login', body: twoFactorVerifyBody } }, async (request, reply) => {
-    const { twoFactorToken, code } = request.body;
-
-    let payload: { sub: string; twoFactor?: boolean };
-    try {
-      payload = app.jwt.verify(twoFactorToken);
-    } catch {
-      throw ApiError.unauthorized('invalid_2fa_token', 'Invalid or expired two-factor token', 'Re-authenticate via POST /api/auth/login to obtain a new twoFactorToken');
-    }
-
-    if (!payload.twoFactor) {
-      throw ApiError.unauthorized('invalid_2fa_token', 'Invalid two-factor token');
-    }
-
-    const user = await getUserRecordById(payload.sub);
-
-    if (!user || !user.isActive || !user.totpEnabled || !user.totpSecret) {
-      throw ApiError.unauthorized('2fa_not_configured', 'Two-factor authentication not configured', 'Enable 2FA first via POST /api/auth/2fa/setup');
-    }
-
-    // Try TOTP code first (6 digits), then try recovery code
-    let verified = false;
-    if (/^\d{6}$/.test(code)) {
-      verified = verifyTotpToken(user.totpSecret as string, code, user.email as string);
-    }
-
-    if (!verified) {
-      // Try as recovery code
-      verified = await consumeRecoveryCode(user.id as string, code);
-    }
-
-    if (!verified) {
-      // Audit failed 2FA attempt
-      createAuditLog({
-        userId: user.id as string,
-        action: 'two_factor_failed',
-        entityType: 'user',
-        entityId: user.id as string,
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'],
-      }).catch(() => {});
-
-      throw ApiError.unauthorized('invalid_2fa_code', 'Invalid two-factor code', 'Provide a valid 6-digit TOTP code from your authenticator app, or a recovery code');
-    }
-
-    const tokens = await generateTokens(app, user.id as string);
-
-    // Audit successful 2FA login
-    createAuditLog({
-      userId: user.id as string,
-      action: 'login',
-      entityType: 'user',
-      entityId: user.id as string,
-      changes: { method: 'totp_2fa' },
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'],
     }).catch(() => {});
@@ -273,7 +165,6 @@ export async function authRoutes(app: FastifyInstance) {
         lastName: user.lastName,
         type: (user.type as string | undefined) ?? 'human',
         isActive: user.isActive,
-        totpEnabled: user.totpEnabled,
         createdAt: user.createdAt,
       },
     });
@@ -373,116 +264,4 @@ export async function authRoutes(app: FastifyInstance) {
     });
   });
 
-  // --- TOTP 2FA Management (requires auth) ---
-
-  // Begin TOTP setup - generates secret and returns QR URI
-  typedApp.post('/api/auth/2fa/setup', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Begin TOTP 2FA setup' } }, async (request, reply) => {
-    const { sub } = request.user;
-
-    const user = await getUserRecordById(sub);
-
-    if (!user) {
-      throw ApiError.unauthorized('user_not_found', 'User not found');
-    }
-
-    if (user.totpEnabled) {
-      throw ApiError.conflict('2fa_already_enabled', 'Two-factor authentication is already enabled');
-    }
-
-    const secret = generateTotpSecret();
-    const otpauthUri = generateTotpUri(secret, user.email as string);
-
-    // Store the secret temporarily (not yet enabled)
-    await store.update('users', sub, { totpSecret: secret });
-
-    return reply.send({
-      secret,
-      otpauthUri,
-    });
-  });
-
-  // Confirm TOTP setup - verifies the user can generate valid codes
-  typedApp.post('/api/auth/2fa/confirm', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Confirm TOTP 2FA setup', body: totpTokenBody } }, async (request, reply) => {
-    const { sub } = request.user;
-
-    const user = await getUserRecordById(sub);
-
-    if (!user || !user.totpSecret) {
-      throw ApiError.badRequest('2fa_setup_not_initiated', 'TOTP setup has not been initiated', 'Call POST /api/auth/2fa/setup first to generate a secret');
-    }
-
-    if (user.totpEnabled) {
-      throw ApiError.conflict('2fa_already_enabled', 'Two-factor authentication is already enabled');
-    }
-
-    const valid = verifyTotpToken(user.totpSecret as string, request.body.token, user.email as string);
-    if (!valid) {
-      throw ApiError.unauthorized('invalid_totp_code', 'Invalid TOTP code', 'Enter the 6-digit code from your authenticator app');
-    }
-
-    const recoveryCodes = generateRecoveryCodes();
-    await enableTotp(sub, user.totpSecret as string, recoveryCodes);
-
-    await createAuditLog({
-      userId: sub,
-      action: 'two_factor_enabled',
-      entityType: 'user',
-      entityId: sub,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'],
-    });
-
-    return reply.send({
-      message: 'Two-factor authentication enabled',
-      recoveryCodes,
-    });
-  });
-
-  // Disable TOTP (requires password confirmation)
-  typedApp.post('/api/auth/2fa/disable', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Disable TOTP 2FA', body: disableTotpBody } }, async (request, reply) => {
-    const { sub } = request.user;
-
-    const user = await getUserRecordById(sub);
-
-    if (!user) {
-      throw ApiError.unauthorized('user_not_found', 'User not found');
-    }
-
-    if (!user.totpEnabled) {
-      throw ApiError.badRequest('2fa_not_enabled', 'Two-factor authentication is not enabled');
-    }
-
-    const valid = await verifyPassword(request.body.password, user.passwordHash as string);
-    if (!valid) {
-      throw ApiError.unauthorized('invalid_password', 'Invalid password');
-    }
-
-    await disableTotp(sub);
-
-    await createAuditLog({
-      userId: sub,
-      action: 'two_factor_disabled',
-      entityType: 'user',
-      entityId: sub,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'],
-    });
-
-    return reply.send({ message: 'Two-factor authentication disabled' });
-  });
-
-  // Regenerate recovery codes
-  typedApp.post('/api/auth/2fa/recovery-codes', { onRequest: [app.authenticate], schema: { tags: ['Auth'], summary: 'Regenerate recovery codes' } }, async (request, reply) => {
-    const { sub } = request.user;
-
-    const user = await getUserRecordById(sub);
-
-    if (!user || !user.totpEnabled) {
-      throw ApiError.badRequest('2fa_not_enabled', 'Two-factor authentication is not enabled', 'Enable 2FA first via POST /api/auth/2fa/setup and POST /api/auth/2fa/confirm');
-    }
-
-    const codes = await regenerateRecoveryCodes(sub);
-
-    return reply.send({ recoveryCodes: codes });
-  });
 }

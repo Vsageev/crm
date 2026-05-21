@@ -22,7 +22,7 @@ export async function registerRateLimit(app: FastifyInstance) {
 }
 
 /**
- * Route-level rate limit config for auth endpoints (login, register, 2FA).
+ * Route-level rate limit config for auth endpoints (login, register, refresh).
  * Apply via `{ config: { rateLimit: authRateLimitConfig() } }` on route options.
  */
 export function authRateLimitConfig() {

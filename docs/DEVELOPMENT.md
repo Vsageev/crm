@@ -136,3 +136,19 @@ applies the current Drizzle SQL migration, runs the contract, and drops the
 database. SQL preserves the same records after `reload()`, but mapped table row
 order is not treated as stable after updates unless callers add an explicit
 domain sort.
+
+## Backend Postgres Lifecycle Tests
+
+`pnpm --filter backend test` includes the delete-lifecycle regression suite under
+`packages/backend/src/services/postgres-delete-lifecycle.test.ts`. The suite is
+skipped unless a real Postgres admin URL is provided, then it creates a temporary
+database, applies the current Drizzle SQL migrations, runs the lifecycle checks,
+and drops the database.
+
+```bash
+LIFECYCLE_DATABASE_URL=postgres://openwork:openwork@localhost:5432/openwork \
+  pnpm --filter backend exec vitest run src/services/postgres-delete-lifecycle.test.ts
+```
+
+`STORE_CONTRACT_DATABASE_URL` is also accepted for CI jobs that already provide
+one throwaway Postgres server URL for SQL integration tests.

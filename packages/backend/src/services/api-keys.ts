@@ -1,6 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
 import {
-  deleteApiKeyRecord,
   filterApiKeysByCreatedById,
   findActiveApiKeyByKeyHash,
   getApiKeyRecord,
@@ -157,7 +156,10 @@ export async function deleteApiKey(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const deleted = await deleteApiKeyRecord(id);
+  const deleted = await updateApiKeyRecord(id, {
+    isActive: false,
+    lastUsedAt: null,
+  });
 
   if (!deleted) return false;
 

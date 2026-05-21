@@ -52,7 +52,7 @@ When authenticated via API key, requests are permission-scoped with
 ## Capability Map
 
 - [areas/auth-and-access.md](./areas/auth-and-access.md) — authentication, API keys,
-  permissions, 2FA, user profile.
+  permissions, user profile.
 - [areas/workspace-content.md](./areas/workspace-content.md) — workspaces, boards,
   collections, cards, tags.
 - [areas/communication.md](./areas/communication.md) — conversations, messages,

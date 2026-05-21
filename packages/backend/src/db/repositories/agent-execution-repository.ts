@@ -81,13 +81,14 @@ export function findLivePersistedChatRuns(options: {
 }
 
 /**
- * Non-running runs whose coalesce(finishedAt, startedAt) is before `cutoffTimestampMs`.
+ * Terminal runs whose coalesce(finishedAt, startedAt) is before `cutoffTimestampMs`.
+ * Queued/running runs are retained because they can still be claimed or completed.
  */
 export function findAgentRunIdsForRetentionCleanup(cutoffTimestampMs: number): string[] {
   return store
     .getAll(AGENT_RUNS_COLLECTION)
     .filter((r) => {
-      if (r.status === 'running') return false;
+      if (r.status !== 'completed' && r.status !== 'error') return false;
       const finished = r.finishedAt ?? r.startedAt;
       return new Date(finished as string).getTime() < cutoffTimestampMs;
     })
@@ -178,6 +179,34 @@ export async function clearAgentRunCardReferences(cardId: string): Promise<void>
     .filter(Boolean);
 
   await Promise.all(updates);
+}
+
+export async function clearAgentRunRetentionReferences(runId: string): Promise<void> {
+  const turnIds = store
+    .getAll(AGENT_CHAT_TURNS_COLLECTION)
+    .filter((turn) => turn.runId === runId)
+    .map((turn) => String(turn.id));
+  for (const turnId of turnIds) {
+    await store.update(AGENT_CHAT_TURNS_COLLECTION, turnId, { runId: null });
+  }
+
+  const queueItems = store
+    .getAll(AGENT_CHAT_QUEUE_COLLECTION)
+    .filter((item) => item.runId === runId || item.lastRunId === runId);
+  for (const item of queueItems) {
+    const patch: StoreRecord = {};
+    if (item.runId === runId) patch.runId = null;
+    if (item.lastRunId === runId) patch.lastRunId = null;
+    await store.update(AGENT_CHAT_QUEUE_COLLECTION, String(item.id), patch);
+  }
+
+  const batchItemIds = store
+    .getAll(AGENT_BATCH_RUN_ITEMS_COLLECTION)
+    .filter((item) => item.agentRunId === runId)
+    .map((item) => String(item.id));
+  for (const itemId of batchItemIds) {
+    await store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId, { agentRunId: null });
+  }
 }
 
 export function listConversationChatQueueItems(

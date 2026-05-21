@@ -104,9 +104,6 @@ importers:
       openai:
         specifier: ^6.22.0
         version: 6.22.0(ws@8.20.1)(zod@4.3.6)
-      otpauth:
-        specifier: ^9.5.0
-        version: 9.5.0
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -2286,9 +2283,6 @@ packages:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
 
-  otpauth@9.5.0:
-    resolution: {integrity: sha512-Ldhc6UYl4baR5toGr8nfKC+L/b8/RgHKoIixAebgoNGzUUCET02g04rMEZ2ZsPfeVQhMHcuaOgb28nwMr81zCA==}
-
   p-limit@3.1.0:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
@@ -3420,7 +3414,8 @@ snapshots:
 
   '@lukeed/ms@2.0.2': {}
 
-  '@noble/hashes@2.0.1': {}
+  '@noble/hashes@2.0.1':
+    optional: true
 
   '@pinojs/redact@0.4.0': {}
 
@@ -4911,10 +4906,6 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
       word-wrap: 1.2.5
-
-  otpauth@9.5.0:
-    dependencies:
-      '@noble/hashes': 2.0.1
 
   p-limit@3.1.0:
     dependencies:

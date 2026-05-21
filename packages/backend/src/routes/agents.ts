@@ -51,6 +51,10 @@ import { getProjectDefaultAgentKeyId } from '../services/project-settings.js';
 const avatarIconSchema = z.string().max(128);
 const avatarColorSchema = z.string().max(20);
 const avatarPresetNameSchema = z.string().trim().min(1).max(80);
+const queryBooleanSchema = z
+  .union([z.boolean(), z.enum(['true', 'false'])])
+  .optional()
+  .transform((value) => value === true || value === 'true');
 
 function serializePublicAgent(
   agent: ReturnType<typeof getAgent> extends infer T ? NonNullable<T> : never,
@@ -107,6 +111,7 @@ export async function agentRoutes(app: FastifyInstance) {
         summary: 'List agents',
         querystring: z.object({
           workspaceId: z.uuid().optional(),
+          includeArchived: queryBooleanSchema,
           limit: z.coerce.number().int().min(1).max(100).default(50),
           offset: z.coerce.number().int().min(0).default(0),
         }),
@@ -126,6 +131,10 @@ export async function agentRoutes(app: FastifyInstance) {
           const idSet = new Set(workspace.agentGroupIds);
           all = all.filter((agent) => agent.groupId && idSet.has(agent.groupId));
         }
+      }
+
+      if (!request.query.includeArchived) {
+        all = all.filter((agent) => !agent.archivedAt);
       }
 
       const { limit, offset } = request.query;
@@ -471,7 +480,7 @@ export async function agentRoutes(app: FastifyInstance) {
       onRequest: [app.authenticate, requirePermission('settings:update')],
       schema: {
         tags: ['Agents'],
-        summary: 'Delete an agent and its workspace',
+        summary: 'Archive an agent',
         params: z.object({
           id: z.string(),
         }),

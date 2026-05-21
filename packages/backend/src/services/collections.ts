@@ -1,10 +1,13 @@
 import {
+  countCollectionDeleteBlockersNative,
+  type CollectionDeleteBlockerCounts,
   listBoardsTouchingCollectionIds,
   listCardsWithCollectionIdIn,
   listWorkspacesTouchingCollectionIds,
 } from '../db/repositories/boards-cards-repository.js';
 import { store } from '../db/index.js';
 import type { Board, Card, Collection, Workspace } from '../db/types.js';
+import { ApiError } from '../utils/api-errors.js';
 import { createAuditLog } from './audit-log.js';
 
 const GENERAL_COLLECTION_NAMES = new Set(['general']);
@@ -364,11 +367,74 @@ export async function getOrCreateGeneralCollection(
   });
 }
 
+function hasCollectionDeleteBlockers(blockers: CollectionDeleteBlockerCounts): boolean {
+  return Object.values(blockers).some((count) => count > 0);
+}
+
+function formatCollectionDeleteBlockers(blockers: CollectionDeleteBlockerCounts): string {
+  const labels: Array<[keyof CollectionDeleteBlockerCounts, string]> = [
+    ['cards', 'cards'],
+    ['boards', 'boards'],
+    ['defaultBoards', 'boards using it as their default collection'],
+    ['agentBatchRunItems', 'agent batch run items'],
+  ];
+  return labels
+    .filter(([key]) => blockers[key] > 0)
+    .map(([key, label]) => `${blockers[key]} ${label}`)
+    .join(', ');
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; cause?: unknown };
+  if (candidate.code === '23503') return true;
+  return isForeignKeyViolation(candidate.cause);
+}
+
+/**
+ * Deletes only empty collections. Collections referenced by cards, boards,
+ * board defaults, or collection batch run items are rejected with a 409
+ * `collection_delete_blocked` conflict instead of moving content or cascading
+ * data loss.
+ */
 export async function deleteCollection(
   id: string,
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
-  const deleted = store.delete('collections', id);
+  const deleted = await store.transaction(async () => {
+    const blockers = await countCollectionDeleteBlockersNative(id);
+    if (hasCollectionDeleteBlockers(blockers)) {
+      throw ApiError.conflict(
+        'collection_delete_blocked',
+        `Collection cannot be deleted while it is still referenced by ${formatCollectionDeleteBlockers(blockers)}`,
+        'Move or delete cards, move boards to another collection/default collection, and wait for or remove related agent batch run items before deleting this collection',
+      );
+    }
+
+    const workspaces = listWorkspacesTouchingCollectionIds(new Set([id])) as unknown as Workspace[];
+    for (const workspace of workspaces) {
+      if (typeof workspace.id !== 'string') continue;
+      const currentIds = Array.isArray(workspace.collectionIds) ? workspace.collectionIds : [];
+      await store.update(
+        'workspaces',
+        workspace.id,
+        { collectionIds: currentIds.filter((collectionId) => collectionId !== id) },
+      );
+    }
+
+    try {
+      return await store.delete('collections', id);
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        throw ApiError.conflict(
+          'collection_delete_blocked',
+          'Collection cannot be deleted because it is still referenced by related records',
+          'Reload the collection and move or delete any cards, boards, default board collections, or agent batch run items before retrying',
+        );
+      }
+      throw error;
+    }
+  });
 
   if (deleted && audit) {
     await createAuditLog({

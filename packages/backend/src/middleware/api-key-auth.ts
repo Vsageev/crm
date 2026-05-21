@@ -51,6 +51,7 @@ export async function authenticateApiKeyOrJwt(
   // Otherwise, delegate to JWT verification
   try {
     await request.jwtVerify();
+    // Reject legacy temporary 2FA login tokens from being used as regular auth.
     if (request.user.twoFactor) {
       return reply.unauthorized('Two-factor verification required');
     }

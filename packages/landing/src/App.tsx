@@ -675,7 +675,7 @@ function SplitNarrative() {
             </li>
             <li>
               <Check size={14} strokeWidth={2} aria-hidden="true" />
-              Scoped keys and 2FA-ready auth
+              Scoped keys and audited auth
             </li>
             <li>
               <Check size={14} strokeWidth={2} aria-hidden="true" />
@@ -773,7 +773,7 @@ function Assurance() {
             <ShieldCheck size={20} strokeWidth={2} aria-hidden="true" />
           </span>
           <h3>Permissions first</h3>
-          <p>JWT sessions, scoped API keys, optional 2FA, and backups as part of the platform shape.</p>
+          <p>JWT sessions, scoped API keys, audit logs, and backups as part of the platform shape.</p>
         </article>
         <article className="trust-item">
           <span className="trust-item__icon">

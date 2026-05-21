@@ -3,7 +3,7 @@ import {
   deleteBoardCardsByBoardId,
   deleteBoardCardsByBoardIdNative,
   deleteBoardCardsByColumnId,
-  deleteBoardColumnsByBoardId,
+  deleteBoardColumnsByBoardIdNative,
   getBoardCardByBoardAndCardNative,
   countBoardCardsByBoardAndColumnNative,
   listBoardCardsByBoardIdNative,
@@ -13,6 +13,7 @@ import {
   listBoardsNative,
   listGeneralBoardsNative,
 } from '../db/repositories/boards-cards-repository.js';
+import { deleteBoardCronTemplatesForBoard } from '../db/repositories/board-cron-templates-repository.js';
 import { store } from '../db/index.js';
 import type { Board, BoardCard, BoardColumn, Card, CardTag, Tag, User } from '../db/types.js';
 import { createAuditLog } from './audit-log.js';
@@ -354,9 +355,9 @@ export async function deleteBoard(
   audit?: { userId: string; ipAddress?: string; userAgent?: string },
 ) {
   const deleted = await store.transaction(async () => {
-    // Remove board columns and board cards
-    deleteBoardColumnsByBoardId(id);
     await deleteBoardCardsByBoardIdNative(id);
+    await deleteBoardCronTemplatesForBoard(id);
+    await deleteBoardColumnsByBoardIdNative(id);
     return store.delete('boards', id);
   });
   if (deleted) await store.reload();

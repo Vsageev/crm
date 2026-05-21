@@ -143,3 +143,22 @@ export async function getWebhookDeliveryRecordById(id: string): Promise<StoreRec
     .limit(1);
   return rows[0] ? recordFromLegacyRow(rows[0]) : null;
 }
+
+export async function deleteWebhookDeliveriesForWebhook(webhookId: string): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) {
+    const removed: StoreRecord[] = [];
+    for (const delivery of store.getAll('webhookDeliveries')) {
+      if (delivery.webhookId !== webhookId || typeof delivery.id !== 'string') continue;
+      const deleted = await store.delete('webhookDeliveries', delivery.id);
+      if (deleted) removed.push(deleted);
+    }
+    return removed;
+  }
+
+  const rows = await db
+    .delete(schema.webhookDeliveries)
+    .where(eq(schema.webhookDeliveries.webhookId, webhookId))
+    .returning();
+  return recordsFromLegacyRows(rows);
+}

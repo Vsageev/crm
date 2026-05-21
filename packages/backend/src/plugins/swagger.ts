@@ -35,7 +35,7 @@ export async function registerSwagger(app: FastifyInstance) {
       servers: [{ url: '/', description: 'Current server' }],
       tags: [
         { name: 'Health', description: 'Health check' },
-        { name: 'Auth', description: 'Authentication and 2FA' },
+        { name: 'Auth', description: 'Authentication and session management' },
         { name: 'Contacts', description: 'Manage contacts' },
         { name: 'Cards', description: 'Manage cards on boards' },
         { name: 'Boards', description: 'Manage boards and columns' },

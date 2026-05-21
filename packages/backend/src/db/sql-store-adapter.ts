@@ -86,6 +86,7 @@ const MAPPINGS: CollectionMapping[] = [
     'avatarBgColor',
     'avatarLogoColor',
     'lastActivity',
+    'archivedAt',
     'createdAt',
     'updatedAt',
     'legacyData',

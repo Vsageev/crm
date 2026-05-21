@@ -76,9 +76,9 @@ REST API server handling all workspace logic. Built with Fastify 5 and fastify-t
 Key areas:
 
 - **21 route files** — auth, cards, boards, folders, tags, conversations, messages, agents, agent chat, connectors, Telegram, webhooks, media, storage, API keys, permissions, audit logs, backups, message drafts, health, and widget
-- **23 services** — agents & agent chat, Telegram bot/webhook/outbound, webhook delivery, event bus, backup, storage, connectors, audit logging, TOTP 2FA, and core CRUD for cards, boards, folders, conversations, messages, tags
+- **23 services** — agents & agent chat, Telegram bot/webhook/outbound, webhook delivery, event bus, backup, storage, connectors, audit logging, and core CRUD for cards, boards, folders, conversations, messages, tags
 - **20 data collections** — users, cards, boards, folders, tags, conversations, messages, connectors, Telegram bots, webhooks, API keys, audit logs, message drafts, and more
-- **Security** — JWT auth with refresh tokens, API key scoped permissions, 2FA (TOTP), rate limiting, audit logging
+- **Security** — JWT auth with refresh tokens, API key scoped permissions, rate limiting, audit logging
 
 ### `packages/frontend`
 
@@ -86,7 +86,7 @@ React 19 single-page application. All pages are lazy-loaded via React Router for
 
 Key areas:
 
-- **Pages** — Dashboard, Boards (list/detail), Cards (detail), Folders (list/detail), Inbox, Agents, Connectors, Storage, Settings (API keys, backups), Auth (login/register/2FA)
+- **Pages** — Dashboard, Boards (list/detail), Cards (detail), Folders (list/detail), Inbox, Agents, Connectors, Storage, Settings (API keys, backups), Auth (login/register)
 - **State** — React Context for auth, custom hooks for data fetching
 - **API client** (`src/lib/api.ts`) — centralized fetch wrapper with JWT auto-refresh on 401
 
@@ -142,7 +142,7 @@ Usage example:
 - **Embeddable Widgets** — web forms and chat widgets for external sites
 - **Webhooks** — webhook subscriptions with delivery tracking
 - **Storage** — file upload and media management
-- **Security** — JWT auth, API key scoped permissions, 2FA (TOTP), rate limiting, audit logging, backups
+- **Security** — JWT auth, API key scoped permissions, rate limiting, audit logging, backups
 
 ## Bootstrap Data
 

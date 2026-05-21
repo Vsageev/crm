@@ -11,7 +11,7 @@ import {
   listOrderedBatchRunItemsForRun,
 } from '../db/repositories/agent-execution-repository.js';
 import { ApiError } from '../utils/api-errors.js';
-import { getAgent } from './agents.js';
+import { getAgent, isAgentArchived } from './agents.js';
 import { executeCardTask } from './agent-chat.js';
 import { killAgentRun } from './agent-runs.js';
 
@@ -963,7 +963,7 @@ export function enqueueAgentBatchRun(options: EnqueueAgentBatchRunOptions): Agen
   const trimmedPrompt = prompt.trim();
 
   const agent = getAgent(agentId);
-  if (!agent) {
+  if (!agent || isAgentArchived(agent)) {
     throw new Error('Agent not found');
   }
   if (cards.length === 0) {

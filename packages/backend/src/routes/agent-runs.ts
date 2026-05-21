@@ -100,7 +100,7 @@ export async function agentRunRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { olderThanDays } = request.query;
-      const deleted = cleanupOldRunRecords(olderThanDays);
+      const deleted = await cleanupOldRunRecords(olderThanDays);
       return reply.send({ deleted, olderThanDays });
     },
   );

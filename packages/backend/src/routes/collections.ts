@@ -472,7 +472,7 @@ export async function collectionRoutes(app: FastifyInstance) {
     },
   );
 
-  // Delete collection
+  // Delete an empty collection. Non-empty or referenced collections return 409.
   typedApp.delete(
     '/api/collections/:id',
     {

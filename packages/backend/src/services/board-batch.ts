@@ -1,7 +1,7 @@
 import { listBoardCardsByBoardId } from '../db/repositories/boards-cards-repository.js';
 import { store } from '../db/index.js';
 import type { Board, BoardCard, Card } from '../db/types.js';
-import { getAgent } from './agents.js';
+import { getAgent, isAgentArchived } from './agents.js';
 import {
   enqueueAgentBatchRun,
   type AgentBatchCardDependencyInput,
@@ -75,7 +75,7 @@ export async function runBoardAgentBatch(options: BoardBatchOptions): Promise<Bo
   } = options;
 
   const agent = getAgent(agentId);
-  if (!agent) {
+  if (!agent || isAgentArchived(agent)) {
     throw new Error('Agent not found');
   }
 

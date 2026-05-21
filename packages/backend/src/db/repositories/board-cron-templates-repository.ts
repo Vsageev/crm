@@ -19,6 +19,25 @@ export async function listBoardCronTemplatesForBoard(boardId: string): Promise<S
   return recordsFromLegacyRows(rows);
 }
 
+export async function deleteBoardCronTemplatesForBoard(boardId: string): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) {
+    const removed: StoreRecord[] = [];
+    for (const r of store.getAll(COLLECTION)) {
+      if (r.boardId !== boardId || typeof r.id !== 'string') continue;
+      const del = await store.delete(COLLECTION, r.id);
+      if (del) removed.push(del);
+    }
+    return removed;
+  }
+
+  const rows = await db
+    .delete(schema.boardCronTemplates)
+    .where(eq(schema.boardCronTemplates.boardId, boardId))
+    .returning();
+  return recordsFromLegacyRows(rows);
+}
+
 export async function getBoardCronTemplateRecordById(id: string): Promise<StoreRecord | null> {
   const db = await getFlushedNativeDb();
   if (!db) return store.getById(COLLECTION, id);

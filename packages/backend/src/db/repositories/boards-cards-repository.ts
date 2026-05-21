@@ -128,6 +128,26 @@ export function deleteBoardColumnsByBoardId(boardId: string): void {
   }
 }
 
+export async function deleteBoardColumnsByBoardIdNative(boardId: string): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) {
+    const removed: StoreRecord[] = [];
+    for (const r of listBoardColumnsByBoardId(boardId)) {
+      if (typeof r.id === 'string') {
+        const del = await store.delete(BOARD_COLUMNS, r.id);
+        if (del) removed.push(del);
+      }
+    }
+    return removed;
+  }
+
+  const removed = await db
+    .delete(schema.boardColumns)
+    .where(eq(schema.boardColumns.boardId, boardId))
+    .returning();
+  return recordsFromLegacyRows(removed);
+}
+
 export function deleteBoardCardsByBoardId(boardId: string): StoreRecord[] {
   const removed: StoreRecord[] = [];
   for (const r of listBoardCardsByBoardId(boardId)) {
@@ -423,4 +443,55 @@ export function listWorkspacesTouchingCollectionIds(collectionIds: Set<string>):
       typeof collectionId === 'string' ? collectionIds.has(collectionId) : false,
     );
   });
+}
+
+export interface CollectionDeleteBlockerCounts {
+  cards: number;
+  boards: number;
+  defaultBoards: number;
+  agentBatchRunItems: number;
+}
+
+export async function countCollectionDeleteBlockersNative(
+  collectionId: string,
+): Promise<CollectionDeleteBlockerCounts> {
+  const db = await getFlushedNativeDb();
+  if (!db) {
+    return {
+      cards: store.getAll(CARDS).filter((card) => card.collectionId === collectionId).length,
+      boards: store.getAll(BOARDS).filter((board) => board.collectionId === collectionId).length,
+      defaultBoards: store
+        .getAll(BOARDS)
+        .filter((board) => board.defaultCollectionId === collectionId).length,
+      agentBatchRunItems: store
+        .getAll('agentBatchRunItems')
+        .filter((item) => item.cardCollectionId === collectionId).length,
+    };
+  }
+
+  const [cards, boards, defaultBoards, agentBatchRunItems] = await Promise.all([
+    db
+      .select({ count: count() })
+      .from(schema.cards)
+      .where(eq(schema.cards.collectionId, collectionId)),
+    db
+      .select({ count: count() })
+      .from(schema.boards)
+      .where(eq(schema.boards.collectionId, collectionId)),
+    db
+      .select({ count: count() })
+      .from(schema.boards)
+      .where(eq(schema.boards.defaultCollectionId, collectionId)),
+    db
+      .select({ count: count() })
+      .from(schema.agentBatchRunItems)
+      .where(eq(schema.agentBatchRunItems.cardCollectionId, collectionId)),
+  ]);
+
+  return {
+    cards: cards[0]?.count ?? 0,
+    boards: boards[0]?.count ?? 0,
+    defaultBoards: defaultBoards[0]?.count ?? 0,
+    agentBatchRunItems: agentBatchRunItems[0]?.count ?? 0,
+  };
 }

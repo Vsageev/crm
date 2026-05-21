@@ -5,7 +5,7 @@ import { RequireAuth, RequireGuest } from './guards';
 import { PageLoader } from '../ui';
 
 // Auth pages — small, loaded eagerly for fast initial paint
-import { LoginPage, RegisterPage, TwoFactorSetupPage } from '../pages/auth';
+import { LoginPage, RegisterPage } from '../pages/auth';
 
 // Lazy-loaded app pages — code-split per route
 const DashboardPage = lazy(() =>
@@ -82,12 +82,6 @@ export const router = createBrowserRouter([
       {
         element: <RequireAuth />,
         children: [
-          {
-            element: <SuspenseWrapper><AuthLayout /></SuspenseWrapper>,
-            children: [
-              { path: '2fa/setup', element: <TwoFactorSetupPage /> },
-            ],
-          },
           {
             element: <SuspenseWrapper><AppLayout /></SuspenseWrapper>,
             children: [

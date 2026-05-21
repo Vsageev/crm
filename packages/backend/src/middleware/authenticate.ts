@@ -14,7 +14,7 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
   try {
     const payload = await request.jwtVerify<JwtPayload & { twoFactor?: boolean }>();
 
-    // Reject 2FA temporary tokens from being used as regular auth
+    // Reject legacy temporary 2FA login tokens from being used as regular auth.
     if (payload.twoFactor) {
       return reply.unauthorized('Two-factor verification required');
     }

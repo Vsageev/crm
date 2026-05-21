@@ -31,7 +31,7 @@ import {
   hasConnectedRemoteAgentRunner,
   RemoteAgentJobError,
 } from './agent-runners.js';
-import { getAgent, listAgents, prepareAgentWorkspaceAccess } from './agents.js';
+import { getAgent, isAgentArchived, listAgents, prepareAgentWorkspaceAccess } from './agents.js';
 import { runnerRoutingScopesForAgentGroup } from './runner-devices.js';
 import {
   ensureConversationSubfolderWorkspace,
@@ -683,6 +683,9 @@ export async function searchAgentMessages(query: string, limit = 20) {
  */
 export function createAgentConversation(agentId: string, subject?: string) {
   const agent = getAgent(agentId);
+  if (!agent || isAgentArchived(agent)) {
+    throw AgentChatError.notFound('agent_not_found', 'Agent not found');
+  }
   const useSubfolder = agent?.separateFolderPerChat === true;
   const conversationId = crypto.randomUUID();
   const meta: Record<string, unknown> = {
@@ -2154,9 +2157,9 @@ function formatMessageForPrompt(msg: Record<string, unknown>): string {
 }
 
 /**
- * Build the full prompt string from conversation history.
- * If currentPrompt is provided, it is appended as the latest User turn (for text messages).
- * If omitted, the history itself is the complete conversation (used when image is the last turn).
+ * Build the full prompt string from the current user message plus prior context.
+ * The current message is kept out of the history block so run monitors and
+ * model instructions do not treat old rounds as part of the latest turn.
  */
 function buildPromptWithHistory(
   agentId: string,
@@ -2180,6 +2183,7 @@ function buildPromptWithHistory(
 
   const lines: string[] = [];
   for (const msg of history) {
+    if (!currentPrompt && leafMessageId && msg.id === leafMessageId) continue;
     const metadata = parseMetadata(msg.metadata);
     const isProgressUpdate = metadata?.agentChatUpdate === true && metadata?.isFinal === false;
     if (isProgressUpdate) continue;
@@ -2187,18 +2191,16 @@ function buildPromptWithHistory(
     lines.push(formatMessageForPrompt(msg));
   }
 
-  if (currentPrompt) {
-    lines.push(`User: ${currentPrompt}`);
-  }
-
   const latestUserMessage = currentPrompt
     ? `User: ${currentPrompt}`
     : formatLatestUserMessageForPrompt(history);
   const latestUserSection = latestUserMessage
-    ? `Latest User Message\n${latestUserMessage}\n\n`
+    ? `Current User Message\n${latestUserMessage}\n\n`
     : '';
+  const historySection =
+    lines.length > 0 ? `Conversation Context (prior turns only)\n${lines.join('\n\n')}\n\n` : '';
 
-  return `${triggerContext}${latestUserSection}Continue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
+  return `${triggerContext}${latestUserSection}${historySection}Instructions\nAnswer only the Current User Message. Use Conversation Context only as background; do not continue or answer prior turns.`;
 }
 
 function formatLatestUserMessageForPrompt(history: Record<string, unknown>[]): string | null {
@@ -2209,6 +2211,64 @@ function formatLatestUserMessageForPrompt(history: Record<string, unknown>[]): s
     }
   }
   return null;
+}
+
+function buildChatRunTriggerPrompt(
+  currentPrompt: string | undefined,
+  latestUserMessage: Record<string, unknown> | null,
+): string {
+  if (currentPrompt) return currentPrompt;
+  return latestUserMessage ? formatMessageForPrompt(latestUserMessage) : '';
+}
+
+function isTerminalChatTurnStatus(status: unknown): boolean {
+  return (
+    status === 'completed' ||
+    status === 'stopped' ||
+    status === 'failed' ||
+    status === 'superseded'
+  );
+}
+
+function describeNonStartableChatTurnStatus(status: unknown): string {
+  return typeof status === 'string' && status ? status : 'non-startable';
+}
+
+function settleQueueItemForNonStartableTurn(
+  queueItemId: string,
+  turn: Record<string, unknown> | null,
+  fallbackErrorMessage: string,
+): void {
+  const nowIso = new Date().toISOString();
+  const turnStatus = turn?.status;
+  if (turnStatus === 'completed') {
+    store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
+      status: 'completed',
+      completedAt: nowIso,
+      nextAttemptAt: null,
+      runId: null,
+      errorMessage: null,
+      responseMessageId:
+        typeof turn?.assistantMessageId === 'string' ? (turn.assistantMessageId as string) : null,
+    });
+    return;
+  }
+
+  const errorMessage =
+    turnStatus === 'superseded'
+      ? 'Queued execution item references a superseded turn'
+      : turnStatus === 'stopped'
+        ? 'Cancelled by user'
+        : turnStatus === 'failed'
+          ? 'Queued execution item references a failed turn'
+          : fallbackErrorMessage;
+  store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
+    status: turnStatus === 'stopped' ? 'cancelled' : 'failed',
+    completedAt: nowIso,
+    nextAttemptAt: null,
+    runId: null,
+    errorMessage,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2250,6 +2310,7 @@ interface AgentProcessOptions {
   };
   runKey: string;
   prompt: string;
+  triggerPrompt?: string | null;
   attachments?: RunnerAttachment[];
   imagePaths?: string[];
   filePaths?: string[];
@@ -2877,8 +2938,10 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       ) {
         throw new Error('Chat execution requires a durable turn linked to this conversation');
       }
-      if (turn.status === 'stopped' || turn.status === 'failed' || turn.status === 'superseded') {
-        throw new Error('Chat execution cannot start for a terminal or superseded turn');
+      if (isTerminalChatTurnStatus(turn.status)) {
+        throw new Error(
+          `Chat execution cannot start for a ${describeNonStartableChatTurnStatus(turn.status)} turn`,
+        );
       }
     }
 
@@ -2924,7 +2987,7 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       conversationId: options.triggerRef?.conversationId,
       cardId: options.triggerRef?.cardId,
       cronJobId: options.triggerRef?.cronJobId,
-      triggerPrompt: options.prompt,
+      triggerPrompt: options.triggerPrompt ?? options.prompt,
       responseParentId: options.responseParentId ?? null,
       turnId: options.turnId ?? null,
       executor: 'remote',
@@ -3160,12 +3223,14 @@ function spawnChatProcess(
     responseParentId?: string | null;
     targetMessageId?: string | null;
     turnId?: string | null;
+    triggerPrompt?: string | null;
   },
 ) {
   const isFallback = options?.isFallback ?? false;
   const responseParentId = options?.responseParentId ?? null;
   const targetMessageId = options?.targetMessageId ?? null;
   const turnId = options?.turnId ?? null;
+  const triggerPrompt = options?.triggerPrompt ?? null;
 
   void Promise.all([prepareAgentWorkspaceAccess(agentId), getFallbackModelConfig()])
     .then(([agent, globalFallback]) => {
@@ -3191,6 +3256,7 @@ function spawnChatProcess(
         agent: effectiveAgent!,
         runKey: key,
         prompt: fullPrompt,
+        triggerPrompt,
         attachments:
           attachmentPaths.attachments.length > 0 ? attachmentPaths.attachments : undefined,
         imagePaths: hasImages ? attachmentPaths.imagePaths : undefined,
@@ -3223,6 +3289,7 @@ function spawnChatProcess(
                   responseParentId,
                   targetMessageId,
                   turnId,
+                  triggerPrompt,
                 });
                 return;
               }
@@ -3246,6 +3313,7 @@ function spawnChatProcess(
                   responseParentId,
                   targetMessageId,
                   turnId,
+                  triggerPrompt,
                 });
                 return;
               }
@@ -3304,6 +3372,7 @@ function spawnChatProcess(
                 responseParentId,
                 targetMessageId,
                 turnId,
+                triggerPrompt,
               });
               return;
             }
@@ -3323,6 +3392,7 @@ export const __agentChatTestUtils = {
   buildPromptWithHistory,
   shouldAttemptFallbackRetry,
   getPreviousUserMessageIdForPromptPath,
+  canStartQueuedItemNow,
 };
 
 /**
@@ -3355,6 +3425,10 @@ export function executePrompt(
     const agent = getAgent(agentId);
     if (!agent) {
       reject(AgentChatError.notFound('agent_not_found', 'Agent not found'));
+      return;
+    }
+    if (isAgentArchived(agent)) {
+      reject(AgentChatError.conflict('agent_archived', 'Agent is archived'));
       return;
     }
 
@@ -3402,6 +3476,7 @@ export function executePrompt(
       {
         responseParentId: userMessage.id as string,
         turnId,
+        triggerPrompt: prompt,
       },
     );
   });
@@ -3423,6 +3498,10 @@ function executeRespondToMessage(
       reject(AgentChatError.notFound('agent_not_found', 'Agent not found'));
       return;
     }
+    if (isAgentArchived(agent)) {
+      reject(AgentChatError.conflict('agent_archived', 'Agent is archived'));
+      return;
+    }
 
     if (hasRunningProcessForTargetMessage(agentId, conversationId, parentMessageId)) {
       reject(
@@ -3439,6 +3518,7 @@ function executeRespondToMessage(
       reject(AgentChatError.notFound('message_not_found', 'Message not found'));
       return;
     }
+    const triggerPrompt = buildChatRunTriggerPrompt(undefined, parentMessage);
     const existingTurnId = options.turnId ?? null;
     const existingTurn =
       existingTurnId && getAgentChatTurn(existingTurnId)
@@ -3476,6 +3556,7 @@ function executeRespondToMessage(
         responseParentId: parentMessageId,
         targetMessageId: parentMessageId,
         turnId,
+        triggerPrompt,
       },
     );
   });
@@ -3829,10 +3910,10 @@ async function processQueueItem(
         'Queued execution item is missing its durable turn',
       );
     }
-    if (turn.status === 'stopped' || turn.status === 'failed' || turn.status === 'superseded') {
+    if (isTerminalChatTurnStatus(turn.status)) {
       throw AgentChatError.conflict(
         'queue_turn_not_startable',
-        'Queued execution item references a terminal or superseded turn',
+        `Queued execution item references a ${describeNonStartableChatTurnStatus(turn.status)} turn`,
       );
     }
     let effectiveTargetId = targetMessageId;
@@ -3905,6 +3986,57 @@ function getQueuedItemBlockedDependency(
   return isPendingQueueItem(dependency) ? dependency : null;
 }
 
+function getQueueItemTurnForBranchCheck(
+  agentId: string,
+  conversationId: string,
+  queueItem: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const turnId = getQueueItemTurnId(queueItem);
+  const turn = turnId ? getAgentChatTurn(turnId) : null;
+  if (!turn || turn.agentId !== agentId || turn.conversationId !== conversationId) return null;
+  return turn;
+}
+
+function isTurnAncestorOf(
+  agentId: string,
+  conversationId: string,
+  ancestorTurnId: string,
+  descendantTurnId: string,
+): boolean {
+  const visited = new Set<string>();
+  let currentId: string | null = descendantTurnId;
+
+  while (currentId && !visited.has(currentId)) {
+    if (currentId === ancestorTurnId) return true;
+    visited.add(currentId);
+    const current = getAgentChatTurn(currentId);
+    if (!current || current.agentId !== agentId || current.conversationId !== conversationId) {
+      return false;
+    }
+    currentId = typeof current.parentTurnId === 'string' ? (current.parentTurnId as string) : null;
+  }
+
+  return false;
+}
+
+function isSameAppendPromptBranch(
+  agentId: string,
+  conversationId: string,
+  firstItem: Record<string, unknown>,
+  secondItem: Record<string, unknown>,
+): boolean {
+  const firstTurn = getQueueItemTurnForBranchCheck(agentId, conversationId, firstItem);
+  const secondTurn = getQueueItemTurnForBranchCheck(agentId, conversationId, secondItem);
+  const firstTurnId = nonEmptyString(firstTurn?.id);
+  const secondTurnId = nonEmptyString(secondTurn?.id);
+  if (!firstTurnId || !secondTurnId) return false;
+
+  return (
+    isTurnAncestorOf(agentId, conversationId, firstTurnId, secondTurnId) ||
+    isTurnAncestorOf(agentId, conversationId, secondTurnId, firstTurnId)
+  );
+}
+
 function canStartQueuedItemNow(
   agentId: string,
   conversationId: string,
@@ -3939,7 +4071,8 @@ function canStartQueuedItemNow(
       (item) =>
         item.id !== queueItem.id &&
         item.status === 'processing' &&
-        getQueueItemMode(item) === 'append_prompt',
+        getQueueItemMode(item) === 'append_prompt' &&
+        isSameAppendPromptBranch(agentId, conversationId, item, queueItem),
     );
     if (hasProcessingAppendPrompt) return false;
   }
@@ -4053,6 +4186,24 @@ async function drainConversationQueue(agentId: string, conversationId: string): 
               markAgentChatTurnFailed(
                 typeof readyItem.turnId === 'string' ? (readyItem.turnId as string) : null,
                 { errorMessage: 'Queued branch target is missing' },
+              );
+              continue;
+            }
+
+            const readyTurnId = getQueueItemTurnId(readyItem);
+            const readyTurn = readyTurnId ? getAgentChatTurn(readyTurnId) : null;
+            const validReadyTurn =
+              readyTurn && readyTurn.agentId === agentId && readyTurn.conversationId === conversationId
+                ? readyTurn
+                : null;
+            if (
+              !validReadyTurn ||
+              isTerminalChatTurnStatus(validReadyTurn.status)
+            ) {
+              settleQueueItemForNonStartableTurn(
+                readyItemId,
+                validReadyTurn,
+                'Queued execution item is missing its durable turn',
               );
               continue;
             }
@@ -4189,23 +4340,17 @@ export async function initializeAgentChatQueue(options: InitializeAgentChatQueue
       !turn ||
       turn.agentId !== item.agentId ||
       turn.conversationId !== item.conversationId ||
-      turn.status === 'stopped' ||
-      turn.status === 'failed' ||
-      turn.status === 'superseded'
+      isTerminalChatTurnStatus(turn.status)
     ) {
-      store.update(AGENT_CHAT_QUEUE_COLLECTION, item.id as string, {
-        status: turn?.status === 'stopped' ? 'cancelled' : 'failed',
-        nextAttemptAt: null,
-        completedAt: nowIso,
-        runId: null,
-        errorMessage: !turn
-          ? 'Recovered queue item is missing its durable turn'
-          : turn.status === 'superseded'
-            ? 'Recovered queue item references a superseded turn'
-            : turn.status === 'stopped'
-              ? 'Cancelled by user'
-              : 'Recovered queue item references a failed turn',
-      });
+      const validTurn =
+        turn && turn.agentId === item.agentId && turn.conversationId === item.conversationId
+          ? turn
+          : null;
+      settleQueueItemForNonStartableTurn(
+        item.id as string,
+        validTurn,
+        'Recovered queue item is missing its durable turn',
+      );
       continue;
     }
 

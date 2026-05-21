@@ -78,6 +78,13 @@
       "when": 1778922000000,
       "tag": "0010_prune_agent_run_legacy_data",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778976000000,
+      "tag": "0011_archive_agents",
+      "breakpoints": true
     }
   ]
 }

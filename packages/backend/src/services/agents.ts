@@ -543,6 +543,7 @@ export interface AgentRecord {
   workspaceApiKeyId: string | null;
   serviceUserId: string | null;
   lastActivity: string | null;
+  archivedAt: string | null;
   avatarIcon: string;
   avatarBgColor: string;
   avatarLogoColor: string;
@@ -666,6 +667,12 @@ function asAgent(rec: Record<string, unknown>): AgentRecord {
     avatarIcon: typeof rec.avatarIcon === 'string' ? rec.avatarIcon : 'spark',
     avatarBgColor: typeof rec.avatarBgColor === 'string' ? rec.avatarBgColor : '#1a1a2e',
     avatarLogoColor: typeof rec.avatarLogoColor === 'string' ? rec.avatarLogoColor : '#e94560',
+    archivedAt:
+      typeof rec.archivedAt === 'string'
+        ? rec.archivedAt
+        : rec.archivedAt instanceof Date
+          ? rec.archivedAt.toISOString()
+          : null,
   } as unknown as AgentRecord;
 }
 
@@ -909,6 +916,7 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
       workspaceApiKeyId: wsKeyId,
       serviceUserId,
       lastActivity: null,
+      archivedAt: null,
       avatarIcon: params.avatarIcon ?? 'spark',
       avatarBgColor: params.avatarBgColor ?? '#1a1a2e',
       avatarLogoColor: params.avatarLogoColor ?? '#e94560',
@@ -987,6 +995,10 @@ export async function listAgents(): Promise<AgentRecord[]> {
   return rows.map(asAgent);
 }
 
+export function isAgentArchived(agent: Pick<AgentRecord, 'archivedAt'> | null | undefined): boolean {
+  return Boolean(agent?.archivedAt);
+}
+
 export function getAgent(id: string): AgentRecord | null {
   const rec = store.getById('agents', id);
   return rec ? asAgent(rec) : null;
@@ -1017,6 +1029,9 @@ export async function updateAgent(
   const current = store.getById('agents', id);
   if (!current) return null;
   const currentAgent = asAgent(current);
+  if (isAgentArchived(currentAgent)) {
+    throw new Error('Archived agents cannot be updated');
+  }
 
   const patch: Record<string, unknown> = {};
   if (data.name !== undefined) patch.name = data.name;
@@ -1077,15 +1092,12 @@ export async function updateAgent(
 export async function deleteAgent(id: string): Promise<boolean> {
   const agent = store.getById('agents', id);
   if (!agent) return false;
-  const workspaceDir = resolveAgentWorkspacePathFromRecord(agent, id);
+  if (agent.archivedAt) return true;
 
-  // Stop any running cron tasks for this agent
   stopAllAgentCronJobs(id);
-
-  // Delete the auto-created workspace API key
-  if (agent.workspaceApiKeyId) {
-    await deleteApiKey(agent.workspaceApiKeyId as string).catch(() => {});
-  }
+  const archivedAt = new Date().toISOString();
+  const workspaceApiKeyId =
+    typeof agent.workspaceApiKeyId === 'string' ? agent.workspaceApiKeyId : null;
 
   await store.transaction(async () => {
     const serviceUserId = agent.serviceUserId as string | null | undefined;
@@ -1128,14 +1140,74 @@ export async function deleteAgent(id: string): Promise<boolean> {
       });
     }
 
-    await deleteAgentEnvVarsByAgentId(id);
-    await store.delete('agents', id);
-  });
+    for (const column of store.getAll('boardColumns')) {
+      if (column.assignAgentId !== id) continue;
+      await store.update('boardColumns', column.id as string, {
+        assignAgentId: null,
+        assignAgentPrompt: null,
+      });
+    }
 
-  // Remove workspace folder
-  if (fs.existsSync(workspaceDir)) {
-    fs.rmSync(workspaceDir, { recursive: true, force: true });
-  }
+    for (const template of store.getAll('boardCronTemplates')) {
+      if (template.agentId !== id && template.assigneeId !== id) continue;
+      await store.update('boardCronTemplates', template.id as string, {
+        agentId: template.agentId === id ? null : template.agentId,
+        assigneeId: template.assigneeId === id ? null : template.assigneeId,
+        enabled: false,
+      });
+    }
+
+    for (const queueItem of store.getAll('agentChatQueue')) {
+      if (queueItem.agentId !== id) continue;
+      if (queueItem.status !== 'queued' && queueItem.status !== 'processing') continue;
+      await store.update('agentChatQueue', queueItem.id as string, {
+        status: 'cancelled',
+        completedAt: archivedAt,
+        nextAttemptAt: null,
+        runId: null,
+        errorMessage: 'Agent archived',
+      });
+    }
+
+    for (const batchRun of store.getAll('agentBatchRuns')) {
+      if (batchRun.agentId !== id) continue;
+      if (batchRun.status !== 'queued' && batchRun.status !== 'running') continue;
+      await store.update('agentBatchRuns', batchRun.id as string, {
+        status: 'cancelled',
+        finishedAt: archivedAt,
+        errorMessage: 'Agent archived',
+      });
+    }
+
+    for (const batchItem of store.getAll('agentBatchRunItems')) {
+      if (batchItem.agentId !== id) continue;
+      if (batchItem.status !== 'queued' && batchItem.status !== 'processing') continue;
+      await store.update('agentBatchRunItems', batchItem.id as string, {
+        status: 'cancelled',
+        completedAt: archivedAt,
+        errorMessage: 'Agent archived',
+      });
+    }
+
+    await deleteAgentEnvVarsByAgentId(id);
+    for (const externalKey of store.getAll('agentExternalApiKeys')) {
+      if (externalKey.agentId === id && typeof externalKey.id === 'string') {
+        await store.delete('agentExternalApiKeys', externalKey.id);
+      }
+    }
+
+    await store.update('agents', id, {
+      status: 'inactive',
+      archivedAt,
+      cronJobs: [],
+      workspaceApiKeyId: null,
+      workspaceApiKey: null,
+    });
+
+    if (workspaceApiKeyId) {
+      await deleteApiKey(workspaceApiKeyId).catch(() => {});
+    }
+  });
 
   return true;
 }
@@ -1146,6 +1218,7 @@ async function syncAgentWorkspaceAccess(
 ): Promise<AgentRecord | null> {
   const rawAgent = store.getById('agents', agentId);
   if (!rawAgent) return null;
+  if (rawAgent.archivedAt) return asAgent(rawAgent);
 
   const agentName = String(rawAgent.name ?? 'Agent');
   const directServiceUserId = rawAgent.serviceUserId as string | null | undefined;

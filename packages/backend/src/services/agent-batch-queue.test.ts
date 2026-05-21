@@ -60,7 +60,10 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('../db/index.js', () => ({ store: mocks.store }));
 vi.mock('../db/connection.js', () => ({ store: mocks.store }));
-vi.mock('./agents.js', () => ({ getAgent: mocks.getAgent }));
+vi.mock('./agents.js', () => ({
+  getAgent: mocks.getAgent,
+  isAgentArchived: (agent: { archivedAt?: unknown } | null | undefined) => Boolean(agent?.archivedAt),
+}));
 vi.mock('./agent-chat.js', () => ({ executeCardTask: mocks.executeCardTask }));
 vi.mock('./agent-runs.js', () => ({ killAgentRun: mocks.killAgentRun }));
 

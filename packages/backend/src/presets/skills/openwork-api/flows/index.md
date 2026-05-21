@@ -2,14 +2,12 @@
 
 Practical examples for consumers that need quick implementation guidance.
 
-## 1) Human login flow with optional 2FA
+## 1) Human login flow
 
 1. `POST /api/auth/login` with `email`, `password`.
-2. If response is `{ twoFactorRequired: true, twoFactorToken }`, call
-   `POST /api/auth/2fa/verify` with token + code.
-3. Store `accessToken` / `refreshToken`.
-4. Call `GET /api/auth/me` and keep `Authorization: Bearer <accessToken>`.
-5. Refresh with `POST /api/auth/refresh` before expiry.
+2. Store `accessToken` / `refreshToken`.
+3. Call `GET /api/auth/me` and keep `Authorization: Bearer <accessToken>`.
+4. Refresh with `POST /api/auth/refresh` before expiry.
 
 ## 2) Conversation-to-response flow
 

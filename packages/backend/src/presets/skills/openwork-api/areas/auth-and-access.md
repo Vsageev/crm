@@ -5,11 +5,9 @@ This area covers every flow required to authenticate and authorize API calls.
 ## Core flow
 
 1. `POST /api/auth/login` with email/password.
-2. If response has `twoFactorRequired`, call `POST /api/auth/2fa/verify`
-   with `twoFactorToken` and a code.
-3. Use returned `accessToken` in `Authorization: Bearer <token>`.
-4. Use `POST /api/auth/refresh` to rotate access tokens when needed.
-5. `POST /api/auth/logout` revokes refresh tokens.
+2. Use returned `accessToken` in `Authorization: Bearer <token>`.
+3. Use `POST /api/auth/refresh` to rotate access tokens when needed.
+4. `POST /api/auth/logout` revokes refresh tokens.
 
 ## Password and profile endpoints
 
@@ -17,17 +15,13 @@ This area covers every flow required to authenticate and authorize API calls.
 - `POST /api/auth/login`
 - `GET /api/auth/me`
 - `POST /api/auth/refresh`
-- `POST /api/auth/2fa/verify`
 - `PATCH /api/auth/password`
 - `PATCH /api/auth/profile`
 - `POST /api/auth/logout`
 
 ## 2FA and recovery
 
-- `POST /api/auth/2fa/setup`
-- `POST /api/auth/2fa/confirm`
-- `POST /api/auth/2fa/disable`
-- `POST /api/auth/2fa/recovery-codes`
+2FA/TOTP endpoints are currently disabled and are not part of the active API.
 
 ## API keys and permission checks
 

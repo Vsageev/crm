@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GripVertical, Layers, Plus, Search, Trash2, X } from 'lucide-react';
+import { Check, GitBranch, GripVertical, Layers, Link2, Plus, Search, Trash2, X } from 'lucide-react';
+import type { BatchDependencyMode, BatchDependencyRule } from '../lib/agent-batch';
 import styles from './BatchLayerPlanner.module.css';
 
 export interface BatchPlanCard {
   id: string;
   name: string;
   subtitle?: string | null;
+  dependencyRule?: BatchDependencyRule;
 }
 
 export interface BatchLayer {
@@ -20,18 +22,53 @@ interface BatchLayerPlannerProps {
   emptySearchLabel?: string;
 }
 
-/** Compact unique-enough id for internal keying */
-let _nextSep = 0;
-function sepId() {
-  return `sep-${++_nextSep}`;
-}
-
 // ─── Drag payload types ──────────────────────────────────────────────
 type DragPayload = {
   cardId: string;
   fromLayer: number;
   fromIndex: number;
 };
+
+function getEffectiveDependencyMode(card: BatchPlanCard, layerIdx: number): BatchDependencyMode {
+  return card.dependencyRule?.mode ?? (layerIdx > 0 ? 'previous_layer' : 'none');
+}
+
+function summarizeCardNames(cards: BatchPlanCard[]): string {
+  if (cards.length === 0) return 'No dependency';
+  const names = cards.slice(0, 2).map((card) => card.name).join(', ');
+  return cards.length > 2 ? `${names} +${cards.length - 2}` : names;
+}
+
+function sanitizeDependencyRules(layers: BatchLayer[]): BatchLayer[] {
+  return layers.map((layer, layerIdx) => {
+    const earlierIds = new Set(
+      layers.slice(0, layerIdx).flatMap((earlierLayer) => earlierLayer.cards.map((card) => card.id)),
+    );
+
+    return {
+      cards: layer.cards.map((card) => {
+        const rule = card.dependencyRule;
+        if (!rule) return card;
+
+        if (layerIdx === 0 && rule.mode !== 'none') {
+          return { ...card, dependencyRule: { mode: 'none' } };
+        }
+
+        if (rule.mode !== 'specific_cards') return card;
+
+        return {
+          ...card,
+          dependencyRule: {
+            ...rule,
+            cardIds: (rule.cardIds ?? []).filter((cardId, index, values) => (
+              cardId !== card.id && earlierIds.has(cardId) && values.indexOf(cardId) === index
+            )),
+          },
+        };
+      }),
+    };
+  });
+}
 
 export function BatchLayerPlanner({
   layers,
@@ -45,6 +82,7 @@ export function BatchLayerPlanner({
   const [options, setOptions] = useState<BatchPlanCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [editingDependencyCardId, setEditingDependencyCardId] = useState<string | null>(null);
   const comboRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -77,24 +115,93 @@ export function BatchLayerPlanner({
   );
 
   const totalCards = useMemo(() => layers.reduce((s, l) => s + l.cards.length, 0), [layers]);
+  const flatCards = useMemo(
+    () => layers.flatMap((layer, layerIdx) => layer.cards.map((card) => ({ card, layerIdx }))),
+    [layers],
+  );
+  const layerCount = useMemo(
+    () => layers.filter((l) => l.cards.length > 0).length,
+    [layers],
+  );
+
+  function emitChange(nextLayers: BatchLayer[]) {
+    onChange(sanitizeDependencyRules(nextLayers));
+  }
+
+  function getDependencySummary(card: BatchPlanCard, layerIdx: number): string {
+    const mode = getEffectiveDependencyMode(card, layerIdx);
+    if (mode === 'none') return 'No dependency';
+
+    const previousCards = layerIdx > 0 ? layers[layerIdx - 1]?.cards ?? [] : [];
+    const earlierCards = flatCards
+      .filter((entry) => entry.layerIdx < layerIdx)
+      .map((entry) => entry.card);
+
+    if (mode === 'previous_layer') {
+      if (previousCards.length === 0) return 'No dependency';
+      return `Layer ${layerIdx}: ${previousCards.length} card${previousCards.length === 1 ? '' : 's'}`;
+    }
+    if (mode === 'all_previous_layers') {
+      return `All earlier: ${earlierCards.length} card${earlierCards.length === 1 ? '' : 's'}`;
+    }
+
+    const specificIds = new Set(card.dependencyRule?.cardIds ?? []);
+    const specificCards = earlierCards.filter((entry) => specificIds.has(entry.id));
+    return specificCards.length > 0 ? summarizeCardNames(specificCards) : 'Choose dependencies';
+  }
+
+  function setCardDependencyRule(layerIdx: number, cardIdx: number, rule: BatchDependencyRule) {
+    emitChange(layers.map((layer, li) => {
+      if (li !== layerIdx) return layer;
+      return {
+        cards: layer.cards.map((card, ci) => (
+          ci === cardIdx ? { ...card, dependencyRule: rule } : card
+        )),
+      };
+    }));
+  }
+
+  function setDependencyMode(layerIdx: number, cardIdx: number, mode: BatchDependencyMode) {
+    const card = layers[layerIdx]?.cards[cardIdx];
+    if (!card) return;
+    setCardDependencyRule(layerIdx, cardIdx, {
+      mode,
+      cardIds: mode === 'specific_cards' ? card.dependencyRule?.cardIds ?? [] : undefined,
+    });
+  }
+
+  function toggleSpecificDependency(layerIdx: number, cardIdx: number, dependencyCardId: string) {
+    const card = layers[layerIdx]?.cards[cardIdx];
+    if (!card) return;
+    const selected = new Set(card.dependencyRule?.cardIds ?? []);
+    if (selected.has(dependencyCardId)) {
+      selected.delete(dependencyCardId);
+    } else {
+      selected.add(dependencyCardId);
+    }
+    setCardDependencyRule(layerIdx, cardIdx, {
+      mode: 'specific_cards',
+      cardIds: [...selected],
+    });
+  }
 
   function addCard(card: BatchPlanCard) {
     // Add to last layer (or create the first one)
     const next = layers.length === 0
       ? [{ cards: [card] }]
       : layers.map((l, i) => i === layers.length - 1 ? { cards: [...l.cards, card] } : l);
-    onChange(next);
+    emitChange(next);
   }
 
   function removeCard(layerIdx: number, cardIdx: number) {
     const next = layers.map((l, li) =>
       li === layerIdx ? { cards: l.cards.filter((_, ci) => ci !== cardIdx) } : l,
     ).filter((l) => l.cards.length > 0);
-    onChange(next.length === 0 ? [{ cards: [] }] : next);
+    emitChange(next.length === 0 ? [{ cards: [] }] : next);
   }
 
   function clearAll() {
-    onChange([{ cards: [] }]);
+    emitChange([{ cards: [] }]);
   }
 
   // ── Split / merge layers ─────────────────────────────────────────
@@ -109,7 +216,7 @@ export function BatchLayerPlanner({
       { cards: after },
       ...layers.slice(layerIdx + 1),
     ];
-    onChange(next);
+    emitChange(next);
   }
 
   function mergeLayers(layerIdx: number) {
@@ -122,7 +229,7 @@ export function BatchLayerPlanner({
       { cards: [...prev.cards, ...cur.cards] },
       ...layers.slice(layerIdx + 1),
     ];
-    onChange(next);
+    emitChange(next);
   }
 
   // ── Drag and drop ────────────────────────────────────────────────
@@ -199,7 +306,7 @@ export function BatchLayerPlanner({
     next = next.filter((l) => l.cards.length > 0);
     if (next.length === 0) next = [{ cards: [card] }];
 
-    onChange(next);
+    emitChange(next);
   }
 
   // ── Separator drop zone (drop between layers to create new layer) ──
@@ -240,11 +347,59 @@ export function BatchLayerPlanner({
     next = next.filter((l) => l.cards.length > 0);
     if (next.length === 0) next = [{ cards: [card] }];
 
-    onChange(next);
+    emitChange(next);
   }
 
   // ── Render ───────────────────────────────────────────────────────
-  const hasMultipleLayers = layers.length > 1 || (layers.length === 1 && layers[0].cards.length === 0);
+  function renderDependencyEditor(card: BatchPlanCard, layerIdx: number, cardIdx: number) {
+    const mode = getEffectiveDependencyMode(card, layerIdx);
+    const earlierCards = flatCards.filter((entry) => entry.layerIdx < layerIdx);
+    const selectedSpecificIds = new Set(card.dependencyRule?.cardIds ?? []);
+    const modeOptions: Array<{ mode: BatchDependencyMode; label: string; disabled?: boolean }> = [
+      { mode: 'previous_layer', label: 'Previous layer', disabled: layerIdx === 0 },
+      { mode: 'specific_cards', label: 'Specific cards', disabled: earlierCards.length === 0 },
+      { mode: 'all_previous_layers', label: 'All earlier', disabled: earlierCards.length === 0 },
+      { mode: 'none', label: 'No dependency' },
+    ];
+
+    return (
+      <div className={styles.dependencyEditor}>
+        <div className={styles.dependencyModes}>
+          {modeOptions.map((option) => (
+            <button
+              key={option.mode}
+              type="button"
+              className={`${styles.dependencyModeBtn} ${mode === option.mode ? styles.dependencyModeBtnActive : ''}`}
+              disabled={option.disabled}
+              onClick={() => setDependencyMode(layerIdx, cardIdx, option.mode)}
+            >
+              {mode === option.mode && <Check size={11} />}
+              <span>{option.label}</span>
+            </button>
+          ))}
+        </div>
+        {mode === 'specific_cards' && (
+          <div className={styles.specificDependencyList}>
+            {earlierCards.length === 0 ? (
+              <div className={styles.specificDependencyEmpty}>Move this card below another layer first.</div>
+            ) : (
+              earlierCards.map(({ card: dependencyCard, layerIdx: dependencyLayerIdx }) => (
+                <label key={dependencyCard.id} className={styles.specificDependencyOption}>
+                  <input
+                    type="checkbox"
+                    checked={selectedSpecificIds.has(dependencyCard.id)}
+                    onChange={() => toggleSpecificDependency(layerIdx, cardIdx, dependencyCard.id)}
+                  />
+                  <span className={styles.specificDependencyName}>{dependencyCard.name}</span>
+                  <span className={styles.specificDependencyLayer}>L{dependencyLayerIdx + 1}</span>
+                </label>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={styles.root}>
@@ -292,8 +447,8 @@ export function BatchLayerPlanner({
         <div className={styles.listHeader}>
           <span className={styles.listLabel}>
             {totalCards} card{totalCards !== 1 ? 's' : ''}
-            {layers.filter((l) => l.cards.length > 0).length > 1
-              ? ` in ${layers.filter((l) => l.cards.length > 0).length} layers`
+            {layerCount > 1
+              ? ` in ${layerCount} layers`
               : ''}
           </span>
           <button type="button" className={styles.clearBtn} onClick={clearAll}>
@@ -346,61 +501,87 @@ export function BatchLayerPlanner({
                   onDrop={(e) => handleDrop(e, layerIdx, layer.cards.length)}
                 >
                   {/* Layer label */}
-                  {layers.filter((l) => l.cards.length > 0).length > 1 && (
+                  {layerCount > 1 && (
                     <div className={styles.layerLabel}>
                       <Layers size={11} />
                       <span>Layer {layerNumber}</span>
                       {layerNumber === 1 && <span className={styles.layerHint}>runs first</span>}
                       {layerNumber > 1 && (
                         <span className={styles.layerHint}>
-                          waits for layer {layerNumber - 1}
+                          defaults to layer {layerNumber - 1}
                         </span>
                       )}
                     </div>
                   )}
 
                   {layer.cards.map((card, cardIdx) => (
-                    <div
-                      key={card.id}
-                      className={`${styles.card} ${
-                        dropTarget?.layerIdx === layerIdx && dropTarget?.cardIdx === cardIdx
-                          ? styles.cardDropBefore
-                          : ''
-                      }`}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, layerIdx, cardIdx, card)}
-                      onDragEnd={handleDragEnd}
-                      onDragOver={(e) => handleDragOver(e, layerIdx, cardIdx)}
-                      onDrop={(e) => { e.stopPropagation(); handleDrop(e, layerIdx, cardIdx); }}
-                    >
-                      <div className={styles.cardGrip}>
-                        <GripVertical size={14} />
-                      </div>
-                      <div className={styles.cardBody}>
-                        <div className={styles.cardName}>{card.name}</div>
-                        {card.subtitle && <div className={styles.cardSub}>{card.subtitle}</div>}
-                      </div>
-                      <div className={styles.cardActions}>
-                        {/* Split: creates a new layer boundary after this card */}
-                        {cardIdx < layer.cards.length - 1 && (
+                    <div key={card.id} className={styles.cardWrap}>
+                      <div
+                        className={`${styles.card} ${
+                          dropTarget?.layerIdx === layerIdx && dropTarget?.cardIdx === cardIdx
+                            ? styles.cardDropBefore
+                            : ''
+                        }`}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, layerIdx, cardIdx, card)}
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) => handleDragOver(e, layerIdx, cardIdx)}
+                        onDrop={(e) => { e.stopPropagation(); handleDrop(e, layerIdx, cardIdx); }}
+                      >
+                        <div className={styles.cardGrip}>
+                          <GripVertical size={14} />
+                        </div>
+                        <div className={styles.cardBody}>
+                          <div className={styles.cardName}>{card.name}</div>
+                          {card.subtitle && <div className={styles.cardSub}>{card.subtitle}</div>}
+                          {totalCards > 1 && (
+                            <button
+                              type="button"
+                              className={styles.dependencySummary}
+                              onClick={() => setEditingDependencyCardId((current) => (
+                                current === card.id ? null : card.id
+                              ))}
+                            >
+                              <GitBranch size={11} />
+                              <span>Blocked by: {getDependencySummary(card, layerIdx)}</span>
+                            </button>
+                          )}
+                        </div>
+                        <div className={styles.cardActions}>
+                          {totalCards > 1 && (
+                            <button
+                              type="button"
+                              className={styles.dependencyBtn}
+                              onClick={() => setEditingDependencyCardId((current) => (
+                                current === card.id ? null : card.id
+                              ))}
+                              aria-label="Edit dependencies"
+                            >
+                              <Link2 size={13} />
+                            </button>
+                          )}
+                          {/* Split: creates a new layer boundary after this card */}
+                          {cardIdx < layer.cards.length - 1 && (
+                            <button
+                              type="button"
+                              className={styles.splitBtn}
+                              onClick={() => splitAfter(layerIdx, cardIdx)}
+                              title="Split into new layer after this card"
+                            >
+                              <Layers size={12} />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            className={styles.splitBtn}
-                            onClick={() => splitAfter(layerIdx, cardIdx)}
-                            title="Split into new layer after this card"
+                            className={styles.removeBtn}
+                            onClick={() => removeCard(layerIdx, cardIdx)}
+                            aria-label="Remove"
                           >
-                            <Layers size={12} />
+                            <Trash2 size={14} />
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          className={styles.removeBtn}
-                          onClick={() => removeCard(layerIdx, cardIdx)}
-                          aria-label="Remove"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        </div>
                       </div>
+                      {editingDependencyCardId === card.id && renderDependencyEditor(card, layerIdx, cardIdx)}
                     </div>
                   ))}
                 </div>

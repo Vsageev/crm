@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   boolean,
   doublePrecision,
   index,
@@ -37,6 +38,7 @@ export const users = pgTable(
     type: text('type'),
     agentId: text('agent_id'),
     isActive: boolean('is_active').notNull(),
+    // Legacy 2FA columns retained for existing rows; auth runtime ignores them.
     totpSecret: text('totp_secret'),
     totpEnabled: boolean('totp_enabled').notNull(),
     recoveryCodes: text('recovery_codes'),
@@ -109,6 +111,7 @@ export const agents = pgTable(
     avatarBgColor: text('avatar_bg_color'),
     avatarLogoColor: text('avatar_logo_color'),
     lastActivity: timestamp('last_activity', { withTimezone: true }),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     ...timestamps,
     ...legacyPayload,
   },
@@ -116,6 +119,7 @@ export const agents = pgTable(
     index('agents_api_key_id_idx').on(table.apiKeyId),
     index('agents_group_id_idx').on(table.groupId),
     index('agents_service_user_id_idx').on(table.serviceUserId),
+    index('agents_archived_at_idx').on(table.archivedAt),
   ],
 );
 
@@ -591,7 +595,7 @@ export const agentRuns = pgTable(
     errorMessage: text('error_message'),
     responseText: text('response_text'),
     responseParentId: text('response_parent_id'),
-    turnId: text('turn_id'),
+    turnId: text('turn_id').references((): AnyPgColumn => agentChatTurns.id),
     killedByUser: boolean('killed_by_user'),
     avatarIcon: text('avatar_icon'),
     avatarBgColor: text('avatar_bg_color'),
@@ -625,7 +629,7 @@ export const agentChatTurns = pgTable(
     agentId: text('agent_id')
       .notNull()
       .references(() => agents.id),
-    parentTurnId: text('parent_turn_id'),
+    parentTurnId: text('parent_turn_id').references((): AnyPgColumn => agentChatTurns.id),
     userMessageId: text('user_message_id').references(() => messages.id),
     assistantMessageId: text('assistant_message_id').references(() => messages.id),
     status: text('status').notNull(),
@@ -633,7 +637,7 @@ export const agentChatTurns = pgTable(
     source: text('source').notNull(),
     createdById: text('created_by_id').references(() => users.id),
     turnType: text('turn_type').notNull(),
-    supersedesTurnId: text('supersedes_turn_id'),
+    supersedesTurnId: text('supersedes_turn_id').references((): AnyPgColumn => agentChatTurns.id),
     metadata: jsonb('metadata').notNull(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
