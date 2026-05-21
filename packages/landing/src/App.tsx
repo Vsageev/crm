@@ -302,7 +302,7 @@ function InterfaceShowcase() {
                   <span className="inbox-mock__time">2m</span>
                 </div>
                 <p className="inbox-mock__preview">Checkout fails on mobile Safari…</p>
-                <span className="inbox-mock__ch">Telegram</span>
+                <span className="inbox-mock__ch">Web Chat</span>
               </div>
             </div>
             <div className="inbox-mock__row">
@@ -366,7 +366,7 @@ function InterfaceShowcase() {
                 <Check size={12} strokeWidth={2.5} aria-hidden="true" />
               </span>
               <div>
-                <p className="run-mock__t">ingest/telegram</p>
+                <p className="run-mock__t">message.received</p>
                 <p className="run-mock__m">Webhook · 201 · 32ms</p>
               </div>
               <Webhook size={13} className="run-mock__trig" strokeWidth={2} aria-hidden="true" />
@@ -461,7 +461,7 @@ function CapPreviewWebhooks() {
     <div className="cap-preview cap-preview--code" aria-hidden="true">
       <div className="cap-code__bar">
         <span className="cap-code__method">POST</span>
-        <span className="cap-code__path">/v1/hooks/ingest/telegram</span>
+        <span className="cap-code__path">/api/webhooks/events</span>
       </div>
       <pre className="cap-code__block">
 {`{
@@ -627,7 +627,6 @@ function SplitNarrative() {
             <div className="split-mock__row">
               <span className="split-mock__label">Triage</span>
               <span className="split-mock__chips">
-                <span>Telegram</span>
                 <span>Slack</span>
                 <span>Email</span>
               </span>

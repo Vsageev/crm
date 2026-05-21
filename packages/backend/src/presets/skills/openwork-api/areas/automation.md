@@ -16,16 +16,6 @@ Use this section for external systems and event-driven workflows.
 
 Webhook delivery events include retries and status tracking to support replay debugging.
 
-## Telegram
-
-- `GET /api/telegram/bots`
-- `GET /api/telegram/bots/:id`
-- `POST /api/telegram/bots`
-- `PATCH /api/telegram/bots/:id/auto-greeting`
-- `POST /api/telegram/bots/:id/refresh-webhook`
-- `DELETE /api/telegram/bots/:id`
-- `POST /api/telegram/webhook/:botId` (inbound webhook endpoint from Telegram)
-
 ## Generic event flow
 
 1. Inspect event options: `GET /api/webhooks/events`.
@@ -36,5 +26,4 @@ Webhook delivery events include retries and status tracking to support replay de
 ## Where to verify exact schemas
 
 - `packages/backend/src/routes/webhooks.ts`
-- `packages/backend/src/routes/telegram.ts`
 - `packages/backend/src/services/webhook-delivery.ts`

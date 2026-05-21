@@ -168,7 +168,7 @@ export const conversationSchema = z
     id: z.string(),
     contactId: z.string(),
     assigneeId: z.string().nullable().optional(),
-    channelType: z.enum(['telegram', 'internal', 'other', 'agent', 'email', 'web_chat']),
+    channelType: z.enum(['internal', 'other', 'agent', 'email', 'web_chat']),
     status: z.enum(['open', 'closed', 'archived']),
     subject: z.string().nullable(),
     externalId: z.string().nullable(),
@@ -196,25 +196,6 @@ export const messageSchema = z
     externalId: z.string().nullable().optional(),
     attachments: z.unknown(),
     metadata: z.string().nullable(),
-    createdAt: z.string(),
-    updatedAt: z.string(),
-  })
-  .passthrough();
-
-export const telegramBotSchema = z
-  .object({
-    id: z.string(),
-    token: z.string(),
-    botId: z.string(),
-    botUsername: z.string(),
-    botFirstName: z.string(),
-    webhookUrl: z.string().nullable(),
-    webhookSecret: z.string().nullable(),
-    status: z.enum(['active', 'inactive', 'error']),
-    statusMessage: z.string().nullable(),
-    autoGreetingEnabled: z.boolean(),
-    autoGreetingText: z.string().nullable(),
-    createdById: z.string().nullable(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -386,7 +367,6 @@ export const collectionSchemas: Record<string, z.ZodType> = {
   board_cards: boardCardSchema,
   conversations: conversationSchema,
   messages: messageSchema,
-  telegram_bots: telegramBotSchema,
   webhooks: webhookSchema,
   webhook_deliveries: webhookDeliverySchema,
   api_keys: apiKeySchema,

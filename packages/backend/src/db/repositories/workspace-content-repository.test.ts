@@ -102,7 +102,7 @@ describe('workspace content repositories', () => {
     const { listMessageDraftsNative } = await import('./message-drafts-repository.js');
     records.set('contacts', [{ id: 'contact-1', firstName: 'Ada', lastName: 'Lovelace' }]);
     records.set('conversations', [
-      { id: 'conv-1', contactId: 'contact-1', channelType: 'telegram', subject: 'Ada case', status: 'open', isUnread: true, lastMessageAt: '2024-02-01T00:00:00.000Z', createdAt: '2024-01-01T00:00:00.000Z' },
+      { id: 'conv-1', contactId: 'contact-1', channelType: 'email', subject: 'Ada case', status: 'open', isUnread: true, lastMessageAt: '2024-02-01T00:00:00.000Z', createdAt: '2024-01-01T00:00:00.000Z' },
       { id: 'conv-agent', contactId: 'contact-1', channelType: 'agent', subject: 'Ada agent', status: 'open', isUnread: true, lastMessageAt: '2024-03-01T00:00:00.000Z', createdAt: '2024-01-01T00:00:00.000Z' },
     ]);
     records.set('messageDrafts', [

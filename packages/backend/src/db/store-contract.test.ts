@@ -214,7 +214,7 @@ async function exerciseStoreContract(store: Store) {
     id: 'contact-one',
     firstName: 'Mapped',
     lastName: 'Contact',
-    telegramId: 'tg-1',
+    email: 'mapped@example.test',
   });
   expect(contact.id).toBe('contact-one');
   expect(store.getById('contacts', 'contact-one')).toMatchObject({ firstName: 'Mapped' });
@@ -227,7 +227,7 @@ async function exerciseStoreContract(store: Store) {
   await store.reload();
 
   expect(store.getById('users', 'many-one')).toMatchObject({ firstName: 'Updated' });
-  expect(store.getById('contacts', 'contact-one')).toMatchObject({ telegramId: 'tg-1' });
+  expect(store.getById('contacts', 'contact-one')).toMatchObject({ email: 'mapped@example.test' });
   const usersAfterReload = store.getAll('users').map((record) => record.id);
   expect(new Set(usersAfterReload)).toEqual(
     new Set(['imported-user', generated.id, 'many-one', 'many-two']),
@@ -236,7 +236,7 @@ async function exerciseStoreContract(store: Store) {
   expect(await store.delete('users', 'many-two')).toMatchObject({ id: 'many-two' });
   expect(store.delete('users', 'missing')).toBeNull();
   expect(await deleteMatching(store, 'users', (record) => record.firstName === 'Many')).toHaveLength(0);
-  expect(await deleteMatching(store, 'contacts', (record) => record.telegramId === 'tg-1')).toHaveLength(
+  expect(await deleteMatching(store, 'contacts', (record) => record.email === 'mapped@example.test')).toHaveLength(
     1,
   );
   expect(

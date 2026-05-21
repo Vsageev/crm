@@ -359,12 +359,10 @@ export const contacts = pgTable(
     email: text('email'),
     phone: text('phone'),
     source: text('source'),
-    telegramId: text('telegram_id'),
     notes: text('notes'),
     ...timestamps,
     ...legacyPayload,
   },
-  (table) => [index('contacts_telegram_id_idx').on(table.telegramId)],
 );
 
 export const conversations = pgTable(
@@ -495,27 +493,6 @@ export const auditLogs = pgTable(
     ...legacyPayload,
   },
   (table) => [index('audit_logs_user_id_idx').on(table.userId)],
-);
-
-export const telegramBots = pgTable(
-  'telegram_bots',
-  {
-    id: text('id').primaryKey(),
-    token: text('token').notNull(),
-    botId: text('bot_id').notNull(),
-    botUsername: text('bot_username').notNull(),
-    botFirstName: text('bot_first_name').notNull(),
-    webhookUrl: text('webhook_url'),
-    webhookSecret: text('webhook_secret'),
-    status: text('status').notNull(),
-    statusMessage: text('status_message'),
-    autoGreetingEnabled: boolean('auto_greeting_enabled').notNull(),
-    autoGreetingText: text('auto_greeting_text'),
-    createdById: text('created_by_id').references(() => users.id),
-    ...timestamps,
-    ...legacyPayload,
-  },
-  (table) => [index('telegram_bots_created_by_id_idx').on(table.createdById)],
 );
 
 export const webhooks = pgTable(

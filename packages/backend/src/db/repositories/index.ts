@@ -14,6 +14,5 @@ export * from './refresh-tokens-repository.js';
 export * from './settings-repository.js';
 export * from './skills-repository.js';
 export * from './tags-repository.js';
-export * from './telegram-bots-repository.js';
 export * from './users-repository.js';
 export * from './webhooks-repository.js';

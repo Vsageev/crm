@@ -55,7 +55,6 @@ describe('agent execution row locking', () => {
           email: null,
           phone: null,
           source: null,
-          telegramId: null,
           notes: null,
         });
 

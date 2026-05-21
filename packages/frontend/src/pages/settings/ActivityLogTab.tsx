@@ -58,7 +58,6 @@ const ENTITY_LABELS: Record<string, string> = {
   workspace: 'Workspace',
   tag: 'Tag',
   quick_reply_template: 'Template',
-  telegram_message_template: 'Telegram template',
   backup: 'Backup',
 };
 

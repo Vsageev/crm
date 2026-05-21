@@ -164,7 +164,6 @@ function getContactInitials(contact: ConversationContact | null): string {
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
-  telegram: 'Telegram',
   internal: 'Internal',
   email: 'Email',
   web_chat: 'Web Chat',

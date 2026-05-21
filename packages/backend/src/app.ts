@@ -17,7 +17,6 @@ import { auditLogRoutes } from './routes/audit-logs.js';
 import { tagRoutes } from './routes/tags.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { messageRoutes } from './routes/messages.js';
-import { telegramRoutes } from './routes/telegram.js';
 import { mediaRoutes } from './routes/media.js';
 import { widgetRoutes } from './routes/widget.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
@@ -158,7 +157,6 @@ export async function buildApp() {
   await app.register(conversationRoutes);
   await app.register(messageRoutes);
   await app.register(messageDraftRoutes);
-  await app.register(telegramRoutes);
   await app.register(mediaRoutes);
   await app.register(widgetRoutes);
   await app.register(apiKeyRoutes);

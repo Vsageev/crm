@@ -9,10 +9,8 @@ import {
   deleteDraft,
 } from '../services/message-drafts.js';
 import { sendMessage } from '../services/messages.js';
-import { getConversationById } from '../services/conversations.js';
-import { sendTelegramMessage } from '../services/telegram-outbound.js';
 import { ApiError } from '../utils/api-errors.js';
-import type { Conversation, Message } from '../db/types.js';
+import type { Message } from '../db/types.js';
 
 const upsertDraftBody = z.object({
   conversationId: z.uuid(),
@@ -161,20 +159,6 @@ export async function messageDraftRoutes(app: FastifyInstance) {
 
       // Delete the draft
       await deleteDraft(request.params.id);
-
-      // Fire-and-forget channel delivery
-      const conversation = await getConversationById(conversationId) as Conversation | null;
-      if (conversation && content) {
-        if (conversation.channelType === 'telegram') {
-          sendTelegramMessage({
-            conversationId,
-            messageId: message.id,
-            text: content,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send Telegram message from draft');
-          });
-        }
-      }
 
       return reply.status(201).send(message);
     },

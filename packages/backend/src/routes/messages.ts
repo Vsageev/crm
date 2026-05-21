@@ -8,16 +8,9 @@ import {
   sendMessage,
   updateMessageStatus,
 } from '../services/messages.js';
-import { sendTelegramMessage } from '../services/telegram-outbound.js';
 import { eventBus } from '../services/event-bus.js';
 import { getConversationById } from '../services/conversations.js';
 import type { Conversation, Message } from '../db/types.js';
-
-const inlineKeyboardButtonSchema = z.object({
-  text: z.string().min(1),
-  url: z.string().url().optional(),
-  callback_data: z.string().max(64).optional(),
-});
 
 const sendMessageBody = z.object({
   conversationId: z.uuid(),
@@ -29,8 +22,6 @@ const sendMessageBody = z.object({
   externalId: z.string().optional(),
   attachments: z.any().optional(),
   metadata: z.string().optional(),
-  parseMode: z.enum(['HTML', 'MarkdownV2']).optional(),
-  inlineKeyboard: z.array(z.array(inlineKeyboardButtonSchema)).optional(),
 });
 
 const updateStatusBody = z.object({
@@ -107,21 +98,9 @@ export async function messageRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { parseMode, inlineKeyboard, ...messageData } = request.body;
-
-      // Store inline keyboard and parse mode in metadata if provided
-      let metadata = messageData.metadata;
-      if (parseMode || inlineKeyboard) {
-        const existing = metadata ? JSON.parse(metadata) as Record<string, unknown> : {};
-        if (parseMode) existing.parseMode = parseMode;
-        if (inlineKeyboard) existing.inlineKeyboard = inlineKeyboard;
-        metadata = JSON.stringify(existing);
-      }
-
       const message = await sendMessage(
         {
-          ...messageData,
-          metadata,
+          ...request.body,
           senderId: request.user.sub,
         },
         {
@@ -144,23 +123,6 @@ export async function messageRoutes(app: FastifyInstance) {
             conversationId: conversation.id,
             contactId: conversation.contactId,
             message: message as unknown as Record<string, unknown>,
-          });
-        }
-      }
-
-      // For outbound messages, attempt to deliver via the appropriate channel
-      if (request.body.direction === 'outbound' && message.content) {
-        const conversation = await getConversationById(request.body.conversationId) as Conversation | null;
-
-        if (conversation?.channelType === 'telegram') {
-          sendTelegramMessage({
-            conversationId: request.body.conversationId,
-            messageId: message.id,
-            text: message.content,
-            parseMode,
-            inlineKeyboard,
-          }).catch((err: unknown) => {
-            app.log.error(err, 'Failed to send Telegram message');
           });
         }
       }

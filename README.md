@@ -64,7 +64,7 @@ packages/
   frontend/    React 19 SPA, Vite, React Router
   landing/     Public OpenWork landing page
   shared/      Shared TypeScript types
-  widget/      Embeddable web form & chat widgets
+  widget/      Embeddable web form widget
 scripts/       Dev utility scripts (certs, stale process check — see docs/RUNBOOK.md)
 docs/          Design system and developer guides
 ```
@@ -96,12 +96,9 @@ TypeScript type definitions shared between backend and frontend: permission type
 
 ### `packages/widget`
 
-Standalone JavaScript widgets embedded on external websites via a `<script>` tag. Built as IIFE bundles with no dependencies, rendered inside Shadow DOM for style isolation.
-
-Two widgets:
+Standalone JavaScript widget embedded on external websites via a `<script>` tag. Built as an IIFE bundle with no dependencies, rendered inside Shadow DOM for style isolation.
 
 - **`ws-form.js`** — embeddable web form. Fetches form config from the backend by ID, renders fields dynamically, submits data back. Auto-initializes from `data-ws-form` / `data-ws-api-url` HTML attributes, or via `WsForm.init()`.
-- **`ws-chat.js`** — embedded chat widget for real-time conversations with visitors.
 
 Usage example:
 
@@ -138,7 +135,7 @@ Usage example:
 - **Unified Inbox** — all conversations in one place
 - **Telegram** — workspace-managed bot setup, media support, webhook handling
 - **AI Agents** — configurable agents with preset system, file workspaces, and chat interface
-- **Embeddable Widgets** — web forms and chat widgets for external sites
+- **Embeddable Widget** — web forms for external sites
 - **Webhooks** — webhook subscriptions with delivery tracking
 - **Storage** — file upload and media management
 - **Security** — JWT auth, API key scoped permissions, rate limiting, audit logging, backups

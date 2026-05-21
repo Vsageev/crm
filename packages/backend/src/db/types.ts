@@ -130,7 +130,7 @@ export interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'telegram' | 'internal' | 'other';
+  channelType: 'internal' | 'other' | 'email' | 'web_chat';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;
@@ -156,23 +156,6 @@ export interface Message {
   externalId: string | null;
   attachments: unknown;
   metadata: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface TelegramBot {
-  id: string;
-  token: string;
-  botId: string;
-  botUsername: string;
-  botFirstName: string;
-  webhookUrl: string | null;
-  webhookSecret: string | null;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  autoGreetingEnabled: boolean;
-  autoGreetingText: string | null;
-  createdById: string | null;
   createdAt: string;
   updatedAt: string;
 }

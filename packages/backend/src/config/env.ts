@@ -36,9 +36,6 @@ const envSchema = z.object({
   TLS_CERT_PATH: z.string().optional(),
   TLS_KEY_PATH: z.string().optional(),
 
-  // Telegram
-  TELEGRAM_WEBHOOK_BASE_URL: z.string().url().optional(),
-
   // WhatsApp Business API
   WHATSAPP_WEBHOOK_BASE_URL: z.string().url().optional(),
 
@@ -77,12 +74,6 @@ const envSchema = z.object({
   /** When a runner WebSocket drops, keep in-flight jobs pending this long for reconnect (0 = fail immediately). */
   REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS: z.coerce.number().int().nonnegative().default(120_000),
 
-  // Email sync
-  EMAIL_SYNC_CRON: z.string().default('*/2 * * * *'),
-  EMAIL_SYNC_ENABLED: z
-    .string()
-    .default('true')
-    .transform((v) => v !== 'false'),
 });
 
 const parsed = envSchema.safeParse(process.env);

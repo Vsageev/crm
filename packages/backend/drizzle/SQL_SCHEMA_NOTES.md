@@ -29,7 +29,7 @@ database cascades without first changing this policy and the delete tests.
 | `agent_chat_turns` | Manual cleanup for conversation deletion: clear self-references (`parent_turn_id`, `supersedes_turn_id`) before deleting turns; clear `agent_runs.turn_id` and delete queue rows first. |
 | `agent_runs` | Preserve run history by default. Parents such as cards/conversations clear nullable run references before deletion. Explicit run deletion must first clear/delete dependent queue rows, chat-turn `run_id`, and batch items. |
 | `agent_batch_runs` | Manual cleanup: delete `agent_batch_run_items` before deleting the batch run. |
-| `workspaces`, `settings`, `contacts`, `telegram_bots`, `board_cron_templates` | Reject deletion while referenced unless a service implements explicit unlink, reassignment, or child cleanup. |
+| `workspaces`, `settings`, `contacts`, `board_cron_templates` | Reject deletion while referenced unless a service implements explicit unlink, reassignment, or child cleanup. |
 
 ## Intentional Non-FK Legacy Columns
 

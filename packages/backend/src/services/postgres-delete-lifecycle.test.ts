@@ -544,7 +544,6 @@ describe('Postgres delete lifecycle regressions', () => {
       email: null,
       phone: null,
       source: null,
-      telegramId: null,
       notes: null,
     });
     return id;

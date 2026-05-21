@@ -22,7 +22,7 @@ guidance.
 
 - **Swagger / OpenAPI**: `GET /docs` on the backend.
 - **Public service check**: `GET /health`.
-- **Embeddable widgets**: `GET /widget.js` and `GET /chat-widget.js`.
+- **Embeddable widget**: `GET /widget.js`.
 
 ## Baseline Convention
 

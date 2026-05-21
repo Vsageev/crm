@@ -12,12 +12,6 @@ import {
   CheckCircle2,
   RotateCcw,
   User,
-  Bold,
-  Italic,
-  Code,
-  Link,
-  Grid3X3,
-  Plus,
   Trash2,
   Paperclip,
   FileText,
@@ -114,19 +108,6 @@ interface QuickReplyTemplate {
   updatedAt: string;
 }
 
-interface TelegramTemplate {
-  id: string;
-  name: string;
-  content: string;
-  parseMode?: string | null;
-  inlineKeyboard?: InlineKeyboardButton[][] | null;
-  category: string | null;
-  isGlobal: boolean;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 interface PaginatedResponse<T> {
   total: number;
   limit: number;
@@ -143,7 +124,6 @@ interface InlineKeyboardButton {
 /* ── Channel labels ── */
 
 const CHANNEL_LABELS: Record<string, string> = {
-  telegram: 'Telegram',
   internal: 'Internal',
   other: 'Other',
   email: 'Email',
@@ -320,7 +300,7 @@ function getMessageInlineKeyboard(msg: Message): InlineKeyboardButton[][] | null
 
 /**
  * Render HTML-formatted message content safely.
- * Supports Telegram HTML tags: <b>, <i>, <code>, <pre>, <a>, <s>, <u>.
+ * Supports common HTML tags: <b>, <i>, <code>, <pre>, <a>, <s>, <u>.
  * Uses DOMPurify for proper XSS protection.
  */
 function renderFormattedContent(content: string): string {
@@ -409,14 +389,8 @@ export function InboxPage() {
 
   // Templates state
   const [templates, setTemplates] = useState<QuickReplyTemplate[]>([]);
-  const [telegramTemplates, setTelegramTemplates] = useState<TelegramTemplate[]>([]);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [templateSearch, setTemplateSearch] = useState('');
-  const [templateTab, setTemplateTab] = useState<'quick' | 'telegram'>('quick');
-
-  // Inline keyboard builder state
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const [keyboardRows, setKeyboardRows] = useState<InlineKeyboardButton[][]>([]);
 
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
@@ -468,10 +442,7 @@ export function InboxPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
   const templatesRef = useRef<HTMLDivElement>(null);
-  const keyboardRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const isTelegram = activeConversation?.channelType === 'telegram';
 
   /* ── Fetch conversations ── */
   const fetchConversations = useCallback(async (options?: { silent?: boolean }) => {
@@ -713,15 +684,12 @@ export function InboxPage() {
         setTemplatesOpen(false);
         setTemplateSearch('');
       }
-      if (keyboardRef.current && !keyboardRef.current.contains(e.target as Node)) {
-        setKeyboardOpen(false);
-      }
     }
-    if (templatesOpen || keyboardOpen) {
+    if (templatesOpen) {
       document.addEventListener('mousedown', handleClick);
       return () => document.removeEventListener('mousedown', handleClick);
     }
-  }, [templatesOpen, keyboardOpen]);
+  }, [templatesOpen]);
 
   /* ── Sort conversations: pinned first, then by original order ── */
   const sortedConversations = useMemo(() => {
@@ -748,12 +716,7 @@ export function InboxPage() {
     api<PaginatedResponse<QuickReplyTemplate>>('/quick-reply-templates?limit=100')
       .then((data) => setTemplates(data.entries))
       .catch(() => setTemplates([]));
-    if (isTelegram) {
-      api<PaginatedResponse<TelegramTemplate>>('/telegram-message-templates?limit=100')
-        .then((data) => setTelegramTemplates(data.entries))
-        .catch(() => setTelegramTemplates([]));
-    }
-  }, [templatesOpen, isTelegram]);
+  }, [templatesOpen]);
 
   /* ── Select conversation ── */
   function selectConversation(id: string) {
@@ -761,122 +724,7 @@ export function InboxPage() {
     setAttachedFile(null);
     setTemplatesOpen(false);
     setTemplateSearch('');
-    setKeyboardOpen(false);
-    setKeyboardRows([]);
     setDraftSavedIndicator(false);
-  }
-
-  /* ── Formatting helpers ── */
-  function wrapSelection(openTag: string, closeTag: string) {
-    const ta = replyInputRef.current;
-    if (!ta) return;
-
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const selected = replyText.substring(start, end);
-    const before = replyText.substring(0, start);
-    const after = replyText.substring(end);
-
-    if (selected) {
-      setReplyText(before + openTag + selected + closeTag + after);
-      // Move cursor to after the closing tag
-      requestAnimationFrame(() => {
-        ta.focus();
-        ta.setSelectionRange(start + openTag.length, end + openTag.length);
-      });
-    } else {
-      // Insert tags at cursor with cursor between them
-      setReplyText(before + openTag + closeTag + after);
-      requestAnimationFrame(() => {
-        ta.focus();
-        const pos = start + openTag.length;
-        ta.setSelectionRange(pos, pos);
-      });
-    }
-  }
-
-  function insertBold() {
-    wrapSelection('<b>', '</b>');
-  }
-
-  function insertItalic() {
-    wrapSelection('<i>', '</i>');
-  }
-
-  function insertCode() {
-    wrapSelection('<code>', '</code>');
-  }
-
-  function insertLink() {
-    const ta = replyInputRef.current;
-    if (!ta) return;
-
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const selected = replyText.substring(start, end);
-    const before = replyText.substring(0, start);
-    const after = replyText.substring(end);
-
-    const linkText = selected || 'link text';
-    const insertion = `<a href="url">${linkText}</a>`;
-    setReplyText(before + insertion + after);
-
-    requestAnimationFrame(() => {
-      ta.focus();
-      // Select the "url" part for easy replacement
-      const urlStart = start + '<a href="'.length;
-      const urlEnd = urlStart + 'url'.length;
-      ta.setSelectionRange(urlStart, urlEnd);
-    });
-  }
-
-  /* ── Inline keyboard builder ── */
-  function addKeyboardRow() {
-    setKeyboardRows((prev) => [...prev, [{ text: '', callback_data: '' }]]);
-  }
-
-  function addButtonToRow(rowIndex: number) {
-    setKeyboardRows((prev) =>
-      prev.map((row, i) =>
-        i === rowIndex ? [...row, { text: '', callback_data: '' }] : row,
-      ),
-    );
-  }
-
-  function updateButton(rowIndex: number, btnIndex: number, field: keyof InlineKeyboardButton, value: string) {
-    setKeyboardRows((prev) =>
-      prev.map((row, ri) =>
-        ri === rowIndex
-          ? row.map((btn, bi) =>
-              bi === btnIndex ? { ...btn, [field]: value } : btn,
-            )
-          : row,
-      ),
-    );
-  }
-
-  function removeButton(rowIndex: number, btnIndex: number) {
-    setKeyboardRows((prev) =>
-      prev
-        .map((row, ri) =>
-          ri === rowIndex ? row.filter((_, bi) => bi !== btnIndex) : row,
-        )
-        .filter((row) => row.length > 0),
-    );
-  }
-
-  function removeKeyboardRow(rowIndex: number) {
-    setKeyboardRows((prev) => prev.filter((_, i) => i !== rowIndex));
-  }
-
-  function getValidKeyboard(): InlineKeyboardButton[][] | undefined {
-    const valid = keyboardRows
-      .map((row) =>
-        row.filter((btn) => btn.text.trim() && (btn.callback_data?.trim() || btn.url?.trim())),
-      )
-      .filter((row) => row.length > 0);
-
-    return valid.length > 0 ? valid : undefined;
   }
 
   /* ── Send message ── */
@@ -902,37 +750,20 @@ export function InboxPage() {
 
         msg = await apiUpload<Message>('/media/upload', formData);
       } else {
-        // Text-only message
-        const content = replyText.trim();
-        const inlineKeyboard = getValidKeyboard();
-        const useHtml = isTelegram && hasHtmlFormatting(content);
-
-        const body: Record<string, unknown> = {
-          conversationId: selectedId,
-          direction: 'outbound',
-          type: 'text',
-          content,
-        };
-
-        if (useHtml) {
-          body.parseMode = 'HTML';
-        }
-
-        if (inlineKeyboard) {
-          body.inlineKeyboard = inlineKeyboard;
-        }
-
         msg = await api<Message>('/messages', {
           method: 'POST',
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            conversationId: selectedId,
+            direction: 'outbound',
+            type: 'text',
+            content: replyText.trim(),
+          }),
         });
       }
 
       setMessages((prev) => [...prev, { ...msg, sender: user ? { id: user.id, firstName: user.firstName, lastName: user.lastName } : null }]);
       setReplyText('');
       setAttachedFile(null);
-      setKeyboardRows([]);
-      setKeyboardOpen(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       replyInputRef.current?.focus();
 
@@ -1045,15 +876,6 @@ export function InboxPage() {
     replyInputRef.current?.focus();
   }
 
-  function selectTelegramTemplate(template: TelegramTemplate) {
-    setReplyText(template.content);
-    if (template.inlineKeyboard && (template.inlineKeyboard as InlineKeyboardButton[][]).length > 0) {
-      setKeyboardRows(template.inlineKeyboard as InlineKeyboardButton[][]);
-    }
-    setTemplatesOpen(false);
-    replyInputRef.current?.focus();
-  }
-
   /* ── Filter templates ── */
   const filteredTemplates = templates.filter(
     (t) =>
@@ -1061,13 +883,6 @@ export function InboxPage() {
       t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
       t.content.toLowerCase().includes(templateSearch.toLowerCase()) ||
       (t.shortcut && t.shortcut.toLowerCase().includes(templateSearch.toLowerCase())),
-  );
-
-  const filteredTelegramTemplates = telegramTemplates.filter(
-    (t) =>
-      !templateSearch ||
-      t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
-      t.content.toLowerCase().includes(templateSearch.toLowerCase()),
   );
 
   /* ── Mark all conversations as read ── */
@@ -1342,7 +1157,6 @@ export function InboxPage() {
               <option value="">All channels</option>
               <option value="email">Email</option>
               <option value="web_chat">Web Chat</option>
-              <option value="telegram">Telegram</option>
               <option value="internal">Internal</option>
               <option value="other">Other</option>
             </select>
@@ -1885,157 +1699,6 @@ export function InboxPage() {
 
             {/* Reply box */}
             <div className={styles.replyBox}>
-              {/* Formatting toolbar — only for Telegram conversations */}
-              {isTelegram && (
-                <div className={styles.formattingToolbar}>
-                  <Tooltip label="Bold" position="bottom">
-                    <button
-                      className={styles.fmtBtn}
-                      onClick={insertBold}
-                      type="button"
-                    >
-                      <Bold size={14} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip label="Italic" position="bottom">
-                    <button
-                      className={styles.fmtBtn}
-                      onClick={insertItalic}
-                      type="button"
-                    >
-                      <Italic size={14} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip label="Code" position="bottom">
-                    <button
-                      className={styles.fmtBtn}
-                      onClick={insertCode}
-                      type="button"
-                    >
-                      <Code size={14} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip label="Insert link" position="bottom">
-                    <button
-                      className={styles.fmtBtn}
-                      onClick={insertLink}
-                      type="button"
-                    >
-                      <Link size={14} />
-                    </button>
-                  </Tooltip>
-                  <span className={styles.fmtSep} />
-                  <div className={styles.keyboardAnchor} ref={keyboardRef}>
-                    <Tooltip label="Inline keyboard" position="bottom">
-                      <button
-                        className={[
-                          styles.fmtBtn,
-                          keyboardRows.length > 0 ? styles.fmtBtnActive : '',
-                        ].join(' ')}
-                        onClick={() => setKeyboardOpen((v) => !v)}
-                        type="button"
-                      >
-                        <Grid3X3 size={14} />
-                      </button>
-                    </Tooltip>
-                    {keyboardOpen && (
-                      <div className={styles.keyboardPopover}>
-                        <div className={styles.keyboardPopoverHeader}>
-                          <span className={styles.templatesTitle}>Inline Keyboard</span>
-                          <button
-                            className={styles.iconBtn}
-                            onClick={() => setKeyboardOpen(false)}
-                            style={{ border: 'none', width: 24, height: 24 }}
-                            type="button"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                        <div className={styles.keyboardPopoverBody}>
-                          {keyboardRows.length === 0 ? (
-                            <div className={styles.keyboardEmpty}>
-                              No buttons yet. Add a row to get started.
-                            </div>
-                          ) : (
-                            keyboardRows.map((row, ri) => (
-                              <div key={ri} className={styles.keyboardRowEditor}>
-                                <div className={styles.keyboardRowLabel}>
-                                  <span>Row {ri + 1}</span>
-                                  <Tooltip label="Remove row">
-                                    <button
-                                      className={styles.keyboardRemoveRow}
-                                      onClick={() => removeKeyboardRow(ri)}
-                                      type="button"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </Tooltip>
-                                </div>
-                                {row.map((btn, bi) => (
-                                  <div key={bi} className={styles.keyboardBtnEditor}>
-                                    <input
-                                      type="text"
-                                      placeholder="Button text"
-                                      value={btn.text}
-                                      onChange={(e) => updateButton(ri, bi, 'text', e.target.value)}
-                                      className={styles.keyboardInput}
-                                    />
-                                    <input
-                                      type="text"
-                                      placeholder="Callback data or URL"
-                                      value={btn.url || btn.callback_data || ''}
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        if (val.startsWith('http://') || val.startsWith('https://')) {
-                                          updateButton(ri, bi, 'url', val);
-                                          updateButton(ri, bi, 'callback_data', '');
-                                        } else {
-                                          updateButton(ri, bi, 'callback_data', val);
-                                          updateButton(ri, bi, 'url', '');
-                                        }
-                                      }}
-                                      className={styles.keyboardInput}
-                                    />
-                                    <Tooltip label="Remove button">
-                                      <button
-                                        className={styles.keyboardRemoveBtn}
-                                        onClick={() => removeButton(ri, bi)}
-                                        type="button"
-                                      >
-                                        <X size={12} />
-                                      </button>
-                                    </Tooltip>
-                                  </div>
-                                ))}
-                                <button
-                                  className={styles.keyboardAddBtn}
-                                  onClick={() => addButtonToRow(ri)}
-                                  type="button"
-                                >
-                                  <Plus size={12} /> Add button
-                                </button>
-                              </div>
-                            ))
-                          )}
-                          <button
-                            className={styles.keyboardAddRow}
-                            onClick={addKeyboardRow}
-                            type="button"
-                          >
-                            <Plus size={14} /> Add row
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  {keyboardRows.length > 0 && (
-                    <span className={styles.fmtHint}>
-                      {keyboardRows.reduce((sum, r) => sum + r.length, 0)} button(s)
-                    </span>
-                  )}
-                </div>
-              )}
-
               <div className={styles.replyRow}>
                 <div className={styles.templatesAnchor} ref={templatesRef}>
                   <Tooltip label="Quick replies">
@@ -2060,22 +1723,6 @@ export function InboxPage() {
                           </button>
                         </Tooltip>
                       </div>
-                      {isTelegram && (
-                        <div className={styles.templatesTabs}>
-                          <button
-                            className={[styles.templatesTabBtn, templateTab === 'quick' && styles.templatesTabBtnActive].filter(Boolean).join(' ')}
-                            onClick={() => setTemplateTab('quick')}
-                          >
-                            Quick Replies
-                          </button>
-                          <button
-                            className={[styles.templatesTabBtn, templateTab === 'telegram' && styles.templatesTabBtnActive].filter(Boolean).join(' ')}
-                            onClick={() => setTemplateTab('telegram')}
-                          >
-                            Telegram
-                          </button>
-                        </div>
-                      )}
                       <input
                         type="text"
                         placeholder="Search templates..."
@@ -2085,53 +1732,24 @@ export function InboxPage() {
                         autoFocus
                       />
                       <div className={styles.templatesList}>
-                        {(!isTelegram || templateTab === 'quick') ? (
-                          filteredTemplates.length === 0 ? (
-                            <div className={styles.templatesEmpty}>No templates found</div>
-                          ) : (
-                            filteredTemplates.map((tpl) => (
-                              <button
-                                key={tpl.id}
-                                className={styles.templateItem}
-                                onClick={() => selectTemplate(tpl)}
-                              >
-                                <div className={styles.templateName}>
-                                  {tpl.name}
-                                  {tpl.shortcut && (
-                                    <span className={styles.templateShortcut}>/{tpl.shortcut}</span>
-                                  )}
-                                </div>
-                                <div className={styles.templatePreview}>{tpl.content}</div>
-                              </button>
-                            ))
-                          )
+                        {filteredTemplates.length === 0 ? (
+                          <div className={styles.templatesEmpty}>No templates found</div>
                         ) : (
-                          filteredTelegramTemplates.length === 0 ? (
-                            <div className={styles.templatesEmpty}>No Telegram templates found</div>
-                          ) : (
-                            filteredTelegramTemplates.map((tpl) => (
-                              <button
-                                key={tpl.id}
-                                className={styles.templateItem}
-                                onClick={() => selectTelegramTemplate(tpl)}
-                              >
-                                <div className={styles.templateName}>
-                                  {tpl.name}
-                                  {tpl.parseMode && (
-                                    <span className={styles.templateShortcut}>{tpl.parseMode}</span>
-                                  )}
-                                </div>
-                                <div className={styles.templatePreview}>
-                                  {tpl.content}
-                                  {tpl.inlineKeyboard && (tpl.inlineKeyboard as InlineKeyboardButton[][]).length > 0 && (
-                                    <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-                                      [{(tpl.inlineKeyboard as InlineKeyboardButton[][]).reduce((s, r) => s + r.length, 0)} btn]
-                                    </span>
-                                  )}
-                                </div>
-                              </button>
-                            ))
-                          )
+                          filteredTemplates.map((tpl) => (
+                            <button
+                              key={tpl.id}
+                              className={styles.templateItem}
+                              onClick={() => selectTemplate(tpl)}
+                            >
+                              <div className={styles.templateName}>
+                                {tpl.name}
+                                {tpl.shortcut && (
+                                  <span className={styles.templateShortcut}>/{tpl.shortcut}</span>
+                                )}
+                              </div>
+                              <div className={styles.templatePreview}>{tpl.content}</div>
+                            </button>
+                          ))
                         )}
                       </div>
                     </div>
