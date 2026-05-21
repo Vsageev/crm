@@ -53,7 +53,6 @@ const ENTITY_LABELS: Record<string, string> = {
   conversation_message: 'Message',
   agent: 'Agent',
   agent_run: 'Agent run',
-  connector: 'Connector',
   api_key: 'API key',
   user: 'Account',
   workspace: 'Workspace',
@@ -66,7 +65,7 @@ const ENTITY_LABELS: Record<string, string> = {
 const ENTITY_TYPE_OPTIONS = [
   '', 'card', 'card_comment', 'collection', 'board', 'board_column', 'board_card',
   'conversation', 'conversation_message', 'agent', 'agent_run',
-  'connector', 'api_key', 'user', 'workspace', 'tag',
+  'api_key', 'user', 'workspace', 'tag',
 ];
 
 const ACTION_OPTIONS = ['', 'create', 'update', 'delete', 'login', 'logout'];

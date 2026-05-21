@@ -38,7 +38,6 @@ const envSchema = z.object({
 
   // Telegram
   TELEGRAM_WEBHOOK_BASE_URL: z.string().url().optional(),
-  TELEGRAM_MANAGED_BOT_TOKEN: z.string().min(1).optional(),
 
   // WhatsApp Business API
   WHATSAPP_WEBHOOK_BASE_URL: z.string().url().optional(),

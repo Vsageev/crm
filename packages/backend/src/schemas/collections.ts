@@ -269,21 +269,6 @@ export const apiKeySchema = z
   })
   .passthrough();
 
-export const connectorSchema = z
-  .object({
-    id: z.string(),
-    type: z.enum(['telegram']),
-    name: z.string(),
-    status: z.enum(['active', 'inactive', 'error']),
-    statusMessage: z.string().nullable(),
-    capabilities: z.array(z.string()),
-    integrationId: z.string(),
-    config: z.record(z.string(), z.unknown()),
-    createdAt: z.string(),
-    updatedAt: z.string(),
-  })
-  .passthrough();
-
 export const cardCommentSchema = z
   .object({
     id: z.string(),
@@ -405,7 +390,6 @@ export const collectionSchemas: Record<string, z.ZodType> = {
   webhooks: webhookSchema,
   webhook_deliveries: webhookDeliverySchema,
   api_keys: apiKeySchema,
-  connectors: connectorSchema,
   card_comments: cardCommentSchema,
   message_drafts: messageDraftSchema,
   agent_runs: agentRunSchema,

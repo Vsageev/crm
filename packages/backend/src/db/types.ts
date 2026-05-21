@@ -220,19 +220,6 @@ export interface ApiKey {
   updatedAt: string;
 }
 
-export interface Connector {
-  id: string;
-  type: 'telegram';
-  name: string;
-  status: 'active' | 'inactive' | 'error';
-  statusMessage: string | null;
-  capabilities: string[];
-  integrationId: string;
-  config: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface CardComment {
   id: string;
   cardId: string;

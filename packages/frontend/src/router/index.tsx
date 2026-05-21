@@ -38,9 +38,6 @@ const AgentsPage = lazy(() =>
 const AgentMonitorPage = lazy(() =>
   import('../pages/AgentMonitorPage').then((m) => ({ default: m.AgentMonitorPage })),
 );
-const ConnectorsPage = lazy(() =>
-  import('../pages/ConnectorsPage').then((m) => ({ default: m.ConnectorsPage })),
-);
 const StoragePage = lazy(() =>
   import('../pages/StoragePage').then((m) => ({ default: m.StoragePage })),
 );
@@ -94,7 +91,6 @@ export const router = createBrowserRouter([
               { path: 'inbox', element: <SuspenseWrapper><InboxPage /></SuspenseWrapper> },
               { path: 'agents', element: <SuspenseWrapper><AgentsPage /></SuspenseWrapper> },
               { path: 'monitor', element: <SuspenseWrapper><AgentMonitorPage /></SuspenseWrapper> },
-              { path: 'connectors', element: <SuspenseWrapper><ConnectorsPage /></SuspenseWrapper> },
               { path: 'storage', element: <SuspenseWrapper><StoragePage /></SuspenseWrapper> },
               { path: 'settings', element: <SuspenseWrapper><SettingsPage /></SuspenseWrapper> },
               { path: 'my-cards', element: <SuspenseWrapper><MyCardsPage /></SuspenseWrapper> },

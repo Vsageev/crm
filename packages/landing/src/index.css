@@ -1649,60 +1649,6 @@ main {
   color: var(--text-tertiary);
 }
 
-/* Connectors */
-
-.conn-head {
-  max-width: 640px;
-  margin-bottom: 32px;
-}
-
-.conn-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.conn-tile {
-  display: flex;
-  gap: 12px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--card);
-  transition:
-    border-color 0.2s ease,
-    background-color 0.2s ease;
-}
-
-.conn-tile:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
-}
-
-.conn-tile__icon {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--r);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.conn-tile strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.conn-tile p {
-  margin-top: 4px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
 /* Trust */
 
 .trust-row {
@@ -1914,10 +1860,6 @@ main {
   }
 
   .cap-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .conn-grid {
     grid-template-columns: 1fr;
   }
 

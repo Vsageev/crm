@@ -1,7 +1,6 @@
 import { type ReactNode } from 'react';
 import {
   ArrowRight,
-  ArrowUpRight,
   Bot,
   Check,
   ChevronDown,
@@ -41,7 +40,6 @@ export function App() {
         <CapabilityGrid />
         <OperatingLoop />
         <SplitNarrative />
-        <Connectors />
         <Assurance />
         <ClosingCta />
       </main>
@@ -72,7 +70,6 @@ function Header() {
         <nav className="topbar__nav" aria-label="Primary">
           <a href="#capabilities">Capabilities</a>
           <a href="#loop">How it runs</a>
-          <a href="#connectors">Connectors</a>
         </nav>
         <div className="topbar__cta">
           <a className="link-quiet" href={`${APP_URL}/login`}>
@@ -713,51 +710,6 @@ function SplitNarrative() {
   );
 }
 
-const CONNECTOR_ITEMS: { icon: LucideIcon; name: string; blurb: string }[] = [
-  { icon: MessageSquare, name: 'Telegram', blurb: 'Threads that open cards with transcripts.' },
-  { icon: Webhook, name: 'Webhooks', blurb: 'Inbound and outbound with delivery records.' },
-  { icon: Terminal, name: 'CLI & HTTP API', blurb: 'Scriptable routes for workspace data.' },
-  { icon: KeyRound, name: 'Access control', blurb: 'Scoped keys, roles, and audit-friendly auth.' },
-  { icon: Link2, name: 'Embeds', blurb: 'Customer-facing surfaces that feed the same inbox.' },
-  { icon: Layers, name: 'Collections', blurb: 'Shared shapes for files, tags, and links.' },
-];
-
-function Connectors() {
-  return (
-    <section className="section" id="connectors" aria-labelledby="conn-heading">
-      <div className="conn-head">
-        <div>
-          <p className="kicker">Connectors</p>
-          <h2 id="conn-heading" className="section__title">
-            Meet the systems you already run.
-          </h2>
-          <p className="section__lede section__lede--tight">
-            Everything is observable: deliveries, agent runs, and scheduled jobs leave a trail on the
-            records they touch.
-          </p>
-          <a className="link-arrow" href={`${APP_URL}/register`}>
-            Open a workspace
-            <ArrowUpRight size={14} strokeWidth={2} aria-hidden="true" />
-          </a>
-        </div>
-      </div>
-      <ul className="conn-grid">
-        {CONNECTOR_ITEMS.map(({ icon: Icon, name, blurb }) => (
-          <li className="conn-tile" key={name}>
-            <span className="conn-tile__icon">
-              <Icon size={18} strokeWidth={2} aria-hidden="true" />
-            </span>
-            <div>
-              <strong>{name}</strong>
-              <p>{blurb}</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 function Assurance() {
   return (
     <section className="section section--tight" aria-labelledby="trust-heading">
@@ -836,7 +788,6 @@ function Footer() {
             links={[
               ['Capabilities', '#capabilities'],
               ['Operating loop', '#loop'],
-              ['Connectors', '#connectors'],
             ]}
           />
           <FooterColumn

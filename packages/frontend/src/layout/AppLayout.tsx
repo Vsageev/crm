@@ -23,7 +23,6 @@ const PAGE_TITLES: Record<string, string> = {
   '/inbox': 'Inbox',
   '/agents': 'Agents',
   '/monitor': 'Monitor',
-  '/connectors': 'Connectors',
   '/storage': 'Storage',
   '/settings': 'Settings',
 };
@@ -213,7 +212,6 @@ export function AppLayout() {
           </button>
           <Sidebar
             onNavigate={() => setSidebarOpen(false)}
-            onQuickCreateCard={() => setQuickCreateOpen(true)}
             unreadCount={unreadCount ?? 0}
             activeRunsCount={activeRunsCount ?? 0}
             collapsed={isSidebarCollapsed}

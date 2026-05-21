@@ -52,7 +52,6 @@ Actual files under `packages/backend/data/*.json`:
 | `cardTags` | 0 | `CardTag` in `db/types.ts`; `cardTagSchema` exists but key is `card_tags`, not `cardTags`; schema lacks `id` even though store can add one | `cards`, `tags` |
 | `cards` | 165 | `Card` in `db/types.ts`; `cardSchema`; `cardCustomFieldsSchema` | `collections`, `users` or `agents`, `boards`, tags/comments/links |
 | `collections` | 1 | `Collection` in `db/types.ts`; `collectionSchema` | `cards`, `boards`, `workspaces`, agent batch config |
-| `connectors` | 0 | `Connector` in `db/types.ts`; `connectorSchema` | Telegram integration records |
 | `conversations` | 670 | `Conversation` in `db/types.ts`; `conversationSchema` | `messages`, `messageDrafts`, `users`, `agents`, Telegram/contact flow |
 | `messageDrafts` | 0 | `MessageDraft` in `db/types.ts`; `messageDraftSchema` exists but key is `message_drafts`, not `messageDrafts` | `conversations` |
 | `messages` | 3790 | `Message` in `db/types.ts`; `messageSchema` | `conversations`, `users`, agent chat tree fields |
@@ -61,7 +60,7 @@ Actual files under `packages/backend/data/*.json`:
 | `settings` | 2 | `ProjectSettings` in `services/project-settings.ts`; route-local `RateLimitSettings`; no Zod schema | `apiKeys`; global project/rate-limit settings |
 | `skills` | 11 | `SkillRecord` in `services/skills.ts`; no Zod schema | `agents.skillIds`; skill files on disk |
 | `tags` | 0 | `Tag` in `db/types.ts`; `tagSchema` | `cardTags`, board cron templates |
-| `telegramBots` | 0 | `TelegramBot` in `db/types.ts`; `telegramBotSchema` exists but key is `telegram_bots`, not `telegramBots` | Telegram webhook/outbound/media/connectors |
+| `telegramBots` | 0 | `TelegramBot` in `db/types.ts`; `telegramBotSchema` exists but key is `telegram_bots`, not `telegramBots` | Telegram webhook/outbound/media |
 | `users` | 106 | `User` in `db/types.ts`; `userSchema` | auth, agents service users, audit, API keys |
 | `webhookDeliveries` | 0 | `WebhookDelivery` in `db/types.ts`; `webhookDeliverySchema` exists but key is `webhook_deliveries`, not `webhookDeliveries` | `webhooks` |
 | `workspaces` | 1 | `Workspace` in `db/types.ts`; no Zod schema | `users`, `boards`, `collections`, `agentGroups` |
@@ -121,7 +120,6 @@ Collection call counts after resolving local collection constants:
 | `tags` | 9 | get/getAll/findOne/insert/update/delete |
 | `agentEnvVars` | 10 | get/find/insert/update/delete/deleteWhere |
 | `workspaces` | 9 | get/getAll/find/findOne/insert/update/delete |
-| `connectors` | 10 | get/getAll/insert/update/delete |
 | `cardTags` | 10 | getAll/find/findOne/insert/deleteWhere |
 | `cardComments` | 8 | find/insert/update/delete/deleteWhere |
 | `cardLinks` | 6 | find/findOne/insert/delete/deleteWhere |
@@ -238,7 +236,7 @@ Do not guess these during migration; resolve before schema finalization:
 4. Migrate workspace/navigation foundations: `collections`, `workspaces`, `agentGroups`, `skills`.
 5. Migrate agents and agent-owned records: `agents`, `agentEnvVars`, `agentAvatarPresets`, `agentColorPresets`, `agentExternalApiKeys`.
 6. Migrate board/card graph: `boards`, `boardColumns`, `cards`, `boardCards`, `tags`, `cardTags`, `cardLinks`, `cardComments`, `boardCronTemplates`.
-7. Migrate conversation/message graph: `contacts`, `conversations`, `messages`, `messageDrafts`, `telegramBots`, `connectors`.
+7. Migrate conversation/message graph: `contacts`, `conversations`, `messages`, `messageDrafts`, `telegramBots`.
 8. Migrate runtime queues and run history last: `agent_runs`, `agentChatQueue`, `agentBatchRuns`, `agentBatchRunItems`, `webhooks`, `webhookDeliveries`, `migrations`.
 9. Port predicate-heavy services one flow at a time and verify through API behavior: auth, cards/boards, conversations/messages, agent chat, batch queue, backup/restore.
 10. Only after all reads/writes are dual-verified, switch runtime behavior to SQL only.

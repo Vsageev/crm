@@ -12,8 +12,8 @@ const MAX_ATTEMPTS = 50;
 /** Ports currently handed out (released when agent process exits). */
 const allocated = new Set<number>();
 
-/** Well-known ports to never allocate (backend, frontend dev, postgres, redis, ngrok). */
-const RESERVED = new Set([3847, 5173, 4040, 5432, 6379]);
+/** Well-known ports to never allocate (backend, frontend dev, postgres, redis). */
+const RESERVED = new Set([3847, 5173, 5432, 6379]);
 
 function randomPort(): number {
   return MIN_PORT + Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1));

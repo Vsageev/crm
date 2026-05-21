@@ -58,7 +58,7 @@ When authenticated via API key, requests are permission-scoped with
 - [areas/communication.md](./areas/communication.md) — conversations, messages,
   message drafts, media.
 - [areas/agents.md](./areas/agents.md) — agents, agent chat, runs, and batch runs.
-- [areas/automation.md](./areas/automation.md) — webhooks, connectors, Telegram.
+- [areas/automation.md](./areas/automation.md) — webhooks and Telegram.
 - [areas/storage-media.md](./areas/storage-media.md) — storage filesystem and
   upload/download flows.
 - [areas/platform.md](./areas/platform.md) — settings, backups, audit logs, health.

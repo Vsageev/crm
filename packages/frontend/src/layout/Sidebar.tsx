@@ -1,12 +1,11 @@
 import { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   FolderOpen,
   Kanban,
   MessageSquare,
   Cpu,
-  Cable,
   HardDrive,
   Settings,
   CheckSquare,
@@ -37,20 +36,17 @@ import styles from './Sidebar.module.css';
 
 interface SidebarProps {
   onNavigate?: () => void;
-  onQuickCreateCard?: () => void;
   unreadCount?: number;
   activeRunsCount?: number;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }
 
-export function Sidebar({ onNavigate, onQuickCreateCard, unreadCount = 0, activeRunsCount = 0, collapsed = false, onToggleCollapse }: SidebarProps) {
+export function Sidebar({ onNavigate, unreadCount = 0, activeRunsCount = 0, collapsed = false, onToggleCollapse }: SidebarProps) {
   const { user, logout } = useAuth();
   const { workspaces, activeWorkspace, activeWorkspaceId, setActiveWorkspace, refetchWorkspaces } = useWorkspace();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { favorites, removeFavorite } = useFavorites();
-  const location = useLocation();
-
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -76,7 +72,6 @@ export function Sidebar({ onNavigate, onQuickCreateCard, unreadCount = 0, active
     { to: '/inbox', icon: MessageSquare, label: 'Inbox', badge: unreadCount },
     { to: '/agents', icon: Cpu, label: 'Agents' },
     { to: '/monitor', icon: Activity, label: 'Monitor', badge: activeRunsCount, badgePulsing: true },
-    { to: '/connectors', icon: Cable, label: 'Connectors' },
     { to: '/storage', icon: HardDrive, label: 'Storage' },
   ];
 

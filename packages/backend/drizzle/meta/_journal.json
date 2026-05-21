@@ -92,6 +92,13 @@
       "when": 1779321600000,
       "tag": "0012_board_execution_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1779365656175,
+      "tag": "0013_remove_connectors",
+      "breakpoints": true
     }
   ]
 }

@@ -518,19 +518,6 @@ export const telegramBots = pgTable(
   (table) => [index('telegram_bots_created_by_id_idx').on(table.createdById)],
 );
 
-export const connectors = pgTable('connectors', {
-  id: text('id').primaryKey(),
-  type: text('type').notNull(),
-  name: text('name').notNull(),
-  status: text('status').notNull(),
-  statusMessage: text('status_message'),
-  capabilities: jsonb('capabilities').notNull(),
-  integrationId: text('integration_id').notNull(),
-  config: jsonb('config').notNull(),
-  ...timestamps,
-  ...legacyPayload,
-});
-
 export const webhooks = pgTable(
   'webhooks',
   {

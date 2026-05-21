@@ -28,7 +28,7 @@ Runtime persistence is PostgreSQL (`DATABASE_URL`). See `docs/DEVELOPMENT.md` â€
 - `GET /api/settings/fallback-model`
 - `PATCH /api/settings/fallback-model`
 
-## Skills, connectors, and operational controls
+## Skills and operational controls
 
 - `GET /api/skills`, `POST /api/skills`, `GET /api/skills/:id`,
   `PATCH /api/skills/:id`, `DELETE /api/skills/:id`

@@ -16,15 +16,6 @@ Use this section for external systems and event-driven workflows.
 
 Webhook delivery events include retries and status tracking to support replay debugging.
 
-## Connectors
-
-- `GET /api/connectors`
-- `POST /api/connectors`
-- `GET /api/connectors/:id`
-- `DELETE /api/connectors/:id`
-- `POST /api/connectors/:id/refresh`
-- `PATCH /api/connectors/:id/settings`
-
 ## Telegram
 
 - `GET /api/telegram/bots`
@@ -45,8 +36,5 @@ Webhook delivery events include retries and status tracking to support replay de
 ## Where to verify exact schemas
 
 - `packages/backend/src/routes/webhooks.ts`
-- `packages/backend/src/routes/connectors.ts`
 - `packages/backend/src/routes/telegram.ts`
 - `packages/backend/src/services/webhook-delivery.ts`
-- `packages/backend/src/services/connectors.ts`
-

@@ -44,7 +44,6 @@ export async function registerSwagger(app: FastifyInstance) {
         { name: 'Conversations', description: 'Manage conversations' },
         { name: 'Messages', description: 'Send and retrieve messages within conversations' },
         { name: 'Telegram', description: 'Telegram bot integration' },
-        { name: 'Connectors', description: 'External service connectors' },
         { name: 'Storage', description: 'File storage management' },
         { name: 'Audit Logs', description: 'System audit logs' },
         { name: 'Media', description: 'File uploads and media management' },

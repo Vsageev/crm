@@ -6,7 +6,6 @@ export * from './api-keys-repository.js';
 export * from './audit-logs-repository.js';
 export * from './board-cron-templates-repository.js';
 export * from './boards-cards-repository.js';
-export * from './connectors-repository.js';
 export * from './conversations-repository.js';
 export * from './message-drafts-repository.js';
 export * from './messages-repository.js';

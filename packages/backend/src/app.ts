@@ -30,7 +30,6 @@ import { registerSecurityMiddleware } from './middleware/security.js';
 import { registerErrorHandler } from './plugins/error-handler.js';
 import { initWebhookDeliveryEngine } from './services/webhook-delivery.js';
 import { messageDraftRoutes } from './routes/message-drafts.js';
-import { connectorRoutes } from './routes/connectors.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { registerIdempotency } from './middleware/idempotency.js';
 import { collectionRoutes } from './routes/collections.js';
@@ -61,7 +60,6 @@ import {
 } from './services/agent-chat.js';
 import { backfillLegacyAgentChatTurns } from './services/agent-chat-turns.js';
 import { initializeAgentBatchQueue } from './services/agent-batch-queue.js';
-import { restoreManagedTelegramWebhooks } from './services/telegram.js';
 import { seedBuiltinSkills } from './services/skills.js';
 import { onRemoteAgentRunnerAvailable, registerAgentRunnerServer } from './services/agent-runners.js';
 
@@ -165,7 +163,6 @@ export async function buildApp() {
   await app.register(widgetRoutes);
   await app.register(apiKeyRoutes);
   await app.register(webhookRoutes);
-  await app.register(connectorRoutes);
   await app.register(permissionRoutes);
   await app.register(collectionRoutes);
   await app.register(cardRoutes);
@@ -201,9 +198,6 @@ export async function buildApp() {
 
   // Apply persisted rate-limit settings to the in-memory limiter
   await initRateLimiterFromSettings();
-
-  // Restore Telegram webhooks for bots using backend-managed ngrok tunnels.
-  await restoreManagedTelegramWebhooks();
 
   // Initialize agent cron jobs
   await initAllCronJobs();

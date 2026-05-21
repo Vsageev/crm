@@ -313,17 +313,6 @@
       "elapsedMs": 0
     },
     {
-      "collection": "connectors",
-      "table": "connectors",
-      "sourceCount": 0,
-      "insertedCount": 0,
-      "skippedCount": 0,
-      "validationSkipped": 0,
-      "constraintSkipped": 0,
-      "schema": "validated",
-      "elapsedMs": 0
-    },
-    {
       "collection": "webhookDeliveries",
       "table": "webhook_deliveries",
       "sourceCount": 0,

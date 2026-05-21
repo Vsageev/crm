@@ -75,9 +75,9 @@ REST API server handling all workspace logic. Built with Fastify 5 and fastify-t
 
 Key areas:
 
-- **21 route files** — auth, cards, boards, folders, tags, conversations, messages, agents, agent chat, connectors, Telegram, webhooks, media, storage, API keys, permissions, audit logs, backups, message drafts, health, and widget
-- **23 services** — agents & agent chat, Telegram bot/webhook/outbound, webhook delivery, event bus, backup, storage, connectors, audit logging, and core CRUD for cards, boards, folders, conversations, messages, tags
-- **20 data collections** — users, cards, boards, folders, tags, conversations, messages, connectors, Telegram bots, webhooks, API keys, audit logs, message drafts, and more
+- **20 route files** — auth, cards, boards, folders, tags, conversations, messages, agents, agent chat, Telegram, webhooks, media, storage, API keys, permissions, audit logs, backups, message drafts, health, and widget
+- **22 services** — agents & agent chat, Telegram bot/webhook/outbound, webhook delivery, event bus, backup, storage, audit logging, and core CRUD for cards, boards, folders, conversations, messages, tags
+- **19 data collections** — users, cards, boards, folders, tags, conversations, messages, Telegram bots, webhooks, API keys, audit logs, message drafts, and more
 - **Security** — JWT auth with refresh tokens, API key scoped permissions, rate limiting, audit logging
 
 ### `packages/frontend`
@@ -86,7 +86,7 @@ React 19 single-page application. All pages are lazy-loaded via React Router for
 
 Key areas:
 
-- **Pages** — Dashboard, Boards (list/detail), Cards (detail), Folders (list/detail), Inbox, Agents, Connectors, Storage, Settings (API keys, backups), Auth (login/register)
+- **Pages** — Dashboard, Boards (list/detail), Cards (detail), Folders (list/detail), Inbox, Agents, Storage, Settings (API keys, backups), Auth (login/register)
 - **State** — React Context for auth, custom hooks for data fetching
 - **API client** (`src/lib/api.ts`) — centralized fetch wrapper with JWT auto-refresh on 401
 
@@ -138,7 +138,6 @@ Usage example:
 - **Unified Inbox** — all conversations in one place
 - **Telegram** — workspace-managed bot setup, media support, webhook handling
 - **AI Agents** — configurable agents with preset system, file workspaces, and chat interface
-- **Connectors** — external service integrations
 - **Embeddable Widgets** — web forms and chat widgets for external sites
 - **Webhooks** — webhook subscriptions with delivery tracking
 - **Storage** — file upload and media management
@@ -169,13 +168,10 @@ See `packages/backend/.env.example` for all backend config.
 
 ### Telegram setup
 
-OpenWork can provide the Telegram bot for the workspace so end users do not need to create one in BotFather.
+OpenWork can register a Telegram bot created in BotFather and route its webhook traffic into the unified inbox.
 
-1. Set `TELEGRAM_MANAGED_BOT_TOKEN` in `packages/backend/.env`.
-2. Set `TELEGRAM_WEBHOOK_BASE_URL` or use ngrok from the Connectors admin UI.
-3. In the app, open `Connectors` and add Telegram using the recommended managed-bot option.
-
-If you prefer, admins can still connect a custom Telegram bot manually.
+1. Set `TELEGRAM_WEBHOOK_BASE_URL` in `packages/backend/.env`.
+2. Use `POST /api/telegram/bots` with a BotFather token to connect a bot.
 
 ## Guidelines
 

@@ -671,9 +671,6 @@ export function DashboardPage() {
                 <div className={styles.emptyDescription}>
                   Conversations from your connected channels will appear here.
                 </div>
-                <Link to="/connectors" className={styles.emptyAction}>
-                  <Plus size={14} /> Set up a channel
-                </Link>
               </div>
             ) : (
               <div className={styles.inboxList}>
