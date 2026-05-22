@@ -7,6 +7,7 @@ General dev setup, commands, and troubleshooting. For module-specific guidance, 
 - [Design System](./design-system.md) — colors, typography, components, animation rules
 - [Agent Chat Turns ADR](./agent-chat-turns-adr.md) — canonical chat transcript model
 - [Agent Chat Cutover Checklist](./agent-chat-cutover-checklist.md) — staging/production migration validation
+- [Runner Separation Contract](./runner-separation-contract.md) — hosted backend vs user-machine runner boundary
 
 ## Quick Start
 

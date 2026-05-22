@@ -2236,14 +2236,16 @@ function settleQueueItemForNonStartableTurn(
   const turnStatus = turn?.status;
 
   if (turnStatus === 'completed') {
+    const assistantMessageId =
+      nonEmptyString(turn?.assistantMessageId) ??
+      recoverCompletedQueueTurnAssistantMessageId(queueItemId, turn);
     store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
       status: 'completed',
       completedAt: nowIso,
       nextAttemptAt: null,
       runId: null,
       errorMessage: null,
-      responseMessageId:
-        typeof turn?.assistantMessageId === 'string' ? (turn.assistantMessageId as string) : null,
+      responseMessageId: assistantMessageId,
     });
     return;
   }
@@ -2263,6 +2265,45 @@ function settleQueueItemForNonStartableTurn(
     runId: null,
     errorMessage,
   });
+}
+
+function recoverCompletedQueueTurnAssistantMessageId(
+  queueItemId: string,
+  turn: Record<string, unknown> | null,
+): string | null {
+  if (!turn) return null;
+  const queueItem = store.getById(AGENT_CHAT_QUEUE_COLLECTION, queueItemId);
+  const runId =
+    nonEmptyString(turn.runId) ??
+    nonEmptyString(queueItem?.runId) ??
+    nonEmptyString(queueItem?.lastRunId);
+  if (!runId) return null;
+
+  const run = store.getById('agent_runs', runId);
+  if (!run || run.status !== 'completed') return null;
+
+  const agentId = nonEmptyString(turn.agentId);
+  const conversationId = nonEmptyString(turn.conversationId);
+  if (!agentId || !conversationId || run.conversationId !== conversationId) return null;
+
+  const runStartedAtMs = parseIsoDateMs(run.startedAt);
+  const runStartedAt = Number.isFinite(runStartedAtMs) ? runStartedAtMs : Date.now();
+  const rawStdout = readRunStdout(run);
+  const responseParentId =
+    nonEmptyString(run.responseParentId) ?? nonEmptyString(turn.userMessageId);
+  const finalMessage = resolveFinalMessageForCompletedRun(
+    conversationId,
+    runStartedAt,
+    rawStdout,
+    responseParentId,
+    runId,
+    { updateActiveBranch: false },
+  );
+  const assistantMessageId = nonEmptyString(finalMessage?.id);
+  if (!assistantMessageId) return null;
+
+  markAgentChatTurnCompleted(nonEmptyString(turn.id), { assistantMessageId, runId });
+  return assistantMessageId;
 }
 
 // ---------------------------------------------------------------------------

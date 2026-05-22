@@ -620,6 +620,75 @@ describe('agent chat turn write paths', () => {
     });
   });
 
+  it('links an orphan completed-run answer when settling an already completed queued turn', async () => {
+    seedMessage('message-1', { content: 'Already answered' });
+    seedMessage('assistant-1', {
+      direction: 'inbound',
+      content: 'Existing orphan answer',
+      parentId: 'message-1',
+      metadata: JSON.stringify({ runId: 'run-1' }),
+      createdAt: '2026-05-16T12:02:00.000Z',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: null,
+      status: 'completed',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      responseText: 'Existing orphan answer',
+      stdout: '',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: '2026-05-16T12:01:00.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      prompt: 'Already answered',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: null,
+      lastRunId: 'run-1',
+      responseMessageId: null,
+      nextAttemptAt: null,
+    });
+
+    await __agentChatTestUtils.drainConversationQueue('agent-1', 'conversation-1');
+
+    expect(mocks.dispatchRemoteAgentJob).not.toHaveBeenCalled();
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      responseMessageId: 'assistant-1',
+      runId: null,
+      errorMessage: null,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'completed',
+      assistantMessageId: 'assistant-1',
+      runId: 'run-1',
+    });
+    expect(getAgentConversationChatView('agent-1', 'conversation-1').entries[0]).toMatchObject({
+      assistantMessage: {
+        id: 'assistant-1',
+        content: 'Existing orphan answer',
+      },
+    });
+  });
+
   it('links recovered completed run messages back to canonical turns and queue rows', () => {
     seedMessage('message-1', { content: 'Queued prompt' });
     seedTurn('turn-1', {
