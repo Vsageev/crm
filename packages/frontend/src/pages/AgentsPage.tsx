@@ -40,7 +40,6 @@ import {
   HardDrive,
   Copy,
   Check,
-  Shield,
   ToggleLeft,
   ToggleRight,
   Layers,
@@ -76,6 +75,8 @@ import {
   ApiKeyFormFields,
   MarkdownContent,
   Tooltip,
+  ActionTooltip,
+  ReasonedActionButton,
   Modal,
 } from '../ui';
 import { ImageLightbox } from '../ui/ImageLightbox';
@@ -477,6 +478,7 @@ const AGENT_CHAT_DRAFT_STORAGE_KEY = 'openwork_agent_chat_global_draft';
 const OVERSIZED_PASTED_TEXT_MIN_CHARS = 12000;
 const PASTED_TEXT_ATTACHMENT_PREFIX = 'pasted-text';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function getChatMessageEditableAttachments(
   message: Pick<ChatMessage, 'attachments'>,
 ): ManagedExistingAttachment[] {
@@ -490,6 +492,7 @@ export function getChatMessageEditableAttachments(
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function isEditableChatMessage(message: ChatMessage): boolean {
   if (message.direction !== 'outbound') return false;
   if (
@@ -804,14 +807,6 @@ export const ReplyComposer = memo(function ReplyComposer({
   const editingSubmitting = isEditing && editingMessage.isSubmitting;
   const composerDisabled = Boolean(disabledReason) && !isEditing;
   const composerValue = isEditing ? editingMessage.value : input;
-  const draftStagedImages = draftStagedAttachments.filter(
-    (attachment): attachment is DraftAttachment & { kind: 'image'; previewUrl: string } =>
-      attachment.kind === 'image' && Boolean(attachment.previewUrl),
-  );
-  const editStagedImages = editStagedAttachments.filter(
-    (attachment): attachment is DraftAttachment & { kind: 'image'; previewUrl: string } =>
-      attachment.kind === 'image' && Boolean(attachment.previewUrl),
-  );
   const totalAttachmentCount = isEditingWithAttachments
     ? editStagedAttachments.length + retainedEditAttachments.length
     : isEditing
@@ -826,16 +821,43 @@ export const ReplyComposer = memo(function ReplyComposer({
       )
     : false;
   const canSubmitEdit = isEditingChatMessage
-    ? (trimmedComposerValue !== editingMessage.initialValue.trim() ||
-        editStagedAttachments.length > 0 ||
-        existingAttachmentsChanged) &&
-      (trimmedComposerValue.length > 0 || totalAttachmentCount > 0)
+    ? trimmedComposerValue.length > 0 || totalAttachmentCount > 0
     : isEditingQueueItem
       ? (trimmedComposerValue !== editingMessage.initialValue.trim() ||
           editStagedAttachments.length > 0 ||
           existingAttachmentsChanged) &&
         (trimmedComposerValue.length > 0 || totalAttachmentCount > 0)
       : false;
+  const attachmentLimitReached = totalAttachmentCount >= MAX_STAGED_ATTACHMENTS;
+  const attachmentDisabledReason = composerDisabled
+    ? disabledReason
+    : uploading
+      ? 'Wait for attachments to finish uploading'
+      : editingSubmitting
+        ? 'Wait for the edit to finish saving'
+        : !isEditing && streaming
+          ? 'Wait for the active run to finish before adding attachments'
+          : attachmentLimitReached
+            ? `Remove an attachment first. Maximum is ${MAX_STAGED_ATTACHMENTS}`
+            : null;
+  const sendDisabledReason = composerDisabled
+    ? disabledReason
+    : uploading
+      ? 'Wait for attachments to finish uploading'
+      : editingSubmitting
+        ? isEditingQueueItem
+          ? 'Wait for the queued message to finish saving'
+          : 'Wait for the edit to finish saving'
+        : isEditing
+          ? !canSubmitEdit
+            ? 'Change the message or attach a file before saving'
+            : null
+          : !composerValue.trim() && draftStagedAttachments.length === 0
+            ? 'Type a message or attach a file before sending'
+            : null;
+  const editCancelDisabledReason = editingSubmitting
+    ? 'Wait for the edit to finish saving'
+    : null;
 
   const clearAttachmentSet = useCallback(
     (setAttachments: Dispatch<SetStateAction<DraftAttachment[]>>) => {
@@ -874,21 +896,25 @@ export const ReplyComposer = memo(function ReplyComposer({
     [clearDraftStagedAttachments, clearEditStagedAttachments],
   );
 
+  let editingMessageId: string | null = null;
+  let editingQueueItemId: string | null = null;
+  let editingExistingAttachments: ManagedExistingAttachment[] | null = null;
+  if (editingMessage?.kind === 'message') {
+    editingMessageId = editingMessage.id;
+    editingExistingAttachments = editingMessage.existingAttachments;
+  } else if (editingMessage?.kind === 'queue') {
+    editingQueueItemId = editingMessage.queueItemId;
+    editingExistingAttachments = editingMessage.existingAttachments;
+  }
+
   useEffect(() => {
-    if (editingMessage?.kind === 'message' || editingMessage?.kind === 'queue') {
-      setRetainedEditAttachments(editingMessage.existingAttachments);
+    if (editingExistingAttachments) {
+      setRetainedEditAttachments(editingExistingAttachments);
     } else {
       setRetainedEditAttachments([]);
     }
     clearEditStagedAttachments();
-  }, [
-    clearEditStagedAttachments,
-    editingMessage?.kind === 'message' ? editingMessage.id : null,
-    editingMessage?.kind === 'queue' ? editingMessage.queueItemId : null,
-    editingMessage?.kind === 'message' || editingMessage?.kind === 'queue'
-      ? editingMessage.existingAttachments
-      : null,
-  ]);
+  }, [clearEditStagedAttachments, editingExistingAttachments, editingMessageId, editingQueueItemId]);
 
   useEffect(() => {
     if (isEditing) return;
@@ -1204,13 +1230,20 @@ export const ReplyComposer = memo(function ReplyComposer({
             {isEditingQueueItem ? <Clock size={13} /> : <Pencil size={13} />}
             {isEditingQueueItem ? 'Editing queued message' : 'Editing message'}
           </div>
-          <button
-            className={styles.composerEditCancel}
-            onClick={handleEditCancel}
-            disabled={editingSubmitting}
+          <ActionTooltip
+            label={editCancelDisabledReason ?? 'Cancel editing'}
+            disabled={Boolean(editCancelDisabledReason)}
+            focusable={Boolean(editCancelDisabledReason)}
+            triggerLabel="Cancel"
           >
-            Cancel
-          </button>
+            <button
+              className={styles.composerEditCancel}
+              onClick={handleEditCancel}
+              disabled={editingSubmitting}
+            >
+              Cancel
+            </button>
+          </ActionTooltip>
         </div>
       )}
       {(retainedEditAttachments.length > 0 ||
@@ -1362,48 +1395,48 @@ export const ReplyComposer = memo(function ReplyComposer({
             onChange={handleFileSelect}
           />
           <div className={styles.attachmentButtons}>
-            <button
-              className={styles.attachBtn}
-              onClick={() => imageInputRef.current?.click()}
-              disabled={
-                composerDisabled ||
-                uploading ||
-                editingSubmitting ||
-                (!isEditing && streaming) ||
-                totalAttachmentCount >= MAX_STAGED_ATTACHMENTS
-              }
-              aria-label="Attach images"
-              title={
-                totalAttachmentCount >= MAX_STAGED_ATTACHMENTS
-                  ? `Max ${MAX_STAGED_ATTACHMENTS} attachments`
-                  : composerDisabled && disabledReason
-                    ? disabledReason
-                    : 'Attach images'
-              }
+            <ActionTooltip
+              label={attachmentDisabledReason ?? 'Attach images'}
+              disabled={Boolean(attachmentDisabledReason)}
+              focusable={Boolean(attachmentDisabledReason)}
+              triggerLabel="Attach images"
             >
-              <Image size={16} />
-            </button>
-            <button
-              className={styles.attachBtn}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={
-                composerDisabled ||
-                uploading ||
-                editingSubmitting ||
-                (!isEditing && streaming) ||
-                totalAttachmentCount >= MAX_STAGED_ATTACHMENTS
-              }
-              aria-label="Attach files"
-              title={
-                totalAttachmentCount >= MAX_STAGED_ATTACHMENTS
-                  ? `Max ${MAX_STAGED_ATTACHMENTS} attachments`
-                  : composerDisabled && disabledReason
-                    ? disabledReason
-                    : 'Attach files'
-              }
+              <button
+                className={styles.attachBtn}
+                onClick={() => imageInputRef.current?.click()}
+                disabled={
+                  composerDisabled ||
+                  uploading ||
+                  editingSubmitting ||
+                  (!isEditing && streaming) ||
+                  attachmentLimitReached
+                }
+                aria-label="Attach images"
+              >
+                <Image size={16} />
+              </button>
+            </ActionTooltip>
+            <ActionTooltip
+              label={attachmentDisabledReason ?? 'Attach files'}
+              disabled={Boolean(attachmentDisabledReason)}
+              focusable={Boolean(attachmentDisabledReason)}
+              triggerLabel="Attach files"
             >
-              <Paperclip size={16} />
-            </button>
+              <button
+                className={styles.attachBtn}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={
+                  composerDisabled ||
+                  uploading ||
+                  editingSubmitting ||
+                  (!isEditing && streaming) ||
+                  attachmentLimitReached
+                }
+                aria-label="Attach files"
+              >
+                <Paperclip size={16} />
+              </button>
+            </ActionTooltip>
           </div>
         </>
         <textarea
@@ -1429,36 +1462,47 @@ export const ReplyComposer = memo(function ReplyComposer({
           rows={1}
           disabled={composerDisabled || uploading || editingSubmitting}
         />
-        <button
-          className={styles.sendBtn}
-          onClick={() => void handleSend()}
-          disabled={
-            composerDisabled ||
-            uploading ||
-            editingSubmitting ||
-            (isEditing
-              ? !canSubmitEdit
-              : !composerValue.trim() && draftStagedAttachments.length === 0)
+        <ActionTooltip
+          label={
+            sendDisabledReason ??
+            (isEditingChatMessage
+              ? 'Save edited message'
+              : isEditingQueueItem
+                ? 'Save queued message'
+                : 'Send message')
           }
-          aria-label={
+          disabled={Boolean(sendDisabledReason)}
+          focusable={Boolean(sendDisabledReason)}
+          triggerLabel={
             isEditingChatMessage
               ? 'Save edited message'
               : isEditingQueueItem
                 ? 'Save queued message'
                 : 'Send message'
           }
-          title={
-            isEditingChatMessage
-              ? 'Save edited message'
-              : isEditingQueueItem
-                ? 'Save queued message'
-                : composerDisabled && disabledReason
-                  ? disabledReason
-                  : 'Send message'
-          }
         >
-          <Send size={18} />
-        </button>
+          <button
+            className={styles.sendBtn}
+            onClick={() => void handleSend()}
+            disabled={
+              composerDisabled ||
+              uploading ||
+              editingSubmitting ||
+              (isEditing
+                ? !canSubmitEdit
+                : !composerValue.trim() && draftStagedAttachments.length === 0)
+            }
+            aria-label={
+              isEditingChatMessage
+                ? 'Save edited message'
+                : isEditingQueueItem
+                  ? 'Save queued message'
+                  : 'Send message'
+            }
+          >
+            <Send size={18} />
+          </button>
+        </ActionTooltip>
       </div>
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} alt={lightboxAlt} onClose={() => setLightboxSrc(null)} />
@@ -2435,7 +2479,8 @@ function AgentFiles({ agentId }: { agentId: string }) {
     [],
   );
   const [agentSkills, setAgentSkills] = useState<AgentLocalSkill[]>([]);
-  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillsLoadedForAgentId, setSkillsLoadedForAgentId] = useState<string | null>(null);
+  const skillsLoaded = skillsLoadedForAgentId === agentId;
 
   const endpoints = useMemo(() => agentFileEndpoints(agentId), [agentId]);
 
@@ -2446,7 +2491,7 @@ function AgentFiles({ agentId }: { agentId: string }) {
     ]);
     setAllSkills(allData.entries);
     setAgentSkills(agentData.entries);
-    setSkillsLoaded(true);
+    setSkillsLoadedForAgentId(agentId);
   }, [agentId]);
 
   useEffect(() => {
@@ -2459,10 +2504,6 @@ function AgentFiles({ agentId }: { agentId: string }) {
       }
     })();
   }, [loadSkills, skillsLoaded]);
-
-  useEffect(() => {
-    setSkillsLoaded(false);
-  }, [agentId]);
 
   const installedSkillSlugs = new Set(agentSkills.map((skill) => localSkillSlug(skill.path)));
   const unattachedSkills = allSkills.filter(
@@ -2693,6 +2734,14 @@ export function AgentsPage() {
     }
     return 'all';
   });
+  const collapseAgent = useCallback((id: string) => {
+    setCollapsedAgents((prev) => {
+      if (prev === 'all' || prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
   const [manageGroupsOpen, setManageGroupsOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -4388,7 +4437,6 @@ export function AgentsPage() {
       collapseAgent,
       convsByAgent,
       fetchMessages,
-      pendingConversationKeys,
       setOptimisticResponseParent,
       setActiveConversation,
     ],
@@ -5419,15 +5467,6 @@ export function AgentsPage() {
     return collapsedAgents === 'all' || collapsedAgents.has(id);
   }
 
-  function collapseAgent(id: string) {
-    setCollapsedAgents((prev) => {
-      if (prev === 'all' || prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }
-
   const toggleAgentCollapse = useCallback((id: string) => {
     setCollapsedAgents((prev) => {
       if (prev === 'all') {
@@ -5826,13 +5865,13 @@ export function AgentsPage() {
     }
   }
 
-  function mgrResetSkillForm() {
+  const mgrResetSkillForm = useCallback(() => {
     setMgrCreating(false);
     setMgrEditingId(null);
     setMgrFormName('');
     setMgrFormDesc('');
     setMgrFormError('');
-  }
+  }, []);
 
   function mgrOpenCreate() {
     setMgrCreating(true);
@@ -5876,7 +5915,7 @@ export function AgentsPage() {
     void mgrFetchSkills();
   }
 
-  function mgrIsFormDirty() {
+  const mgrIsFormDirty = useCallback(() => {
     if (mgrCreating) {
       return Boolean(mgrFormName.trim() || mgrFormDesc.trim());
     }
@@ -5887,9 +5926,9 @@ export function AgentsPage() {
     if (!editingSkill) return false;
 
     return mgrFormName !== editingSkill.name || mgrFormDesc !== editingSkill.description;
-  }
+  }, [mgrCreating, mgrEditingId, mgrFormDesc, mgrFormName, mgrSkills]);
 
-  async function mgrAbandonFormIfConfirmed() {
+  const mgrAbandonFormIfConfirmed = useCallback(async () => {
     if (!mgrCreating && !mgrEditingId) return true;
     if (!mgrIsFormDirty()) {
       mgrResetSkillForm();
@@ -5907,7 +5946,7 @@ export function AgentsPage() {
 
     mgrResetSkillForm();
     return true;
-  }
+  }, [confirm, mgrCreating, mgrEditingId, mgrIsFormDirty, mgrResetSkillForm]);
 
   async function closeSkillsManager() {
     if (!(await mgrAbandonFormIfConfirmed())) return;
@@ -6224,9 +6263,14 @@ export function AgentsPage() {
                     if (e.key === 'Enter') handleCreateGroup();
                   }}
                 />
-                <Button size="sm" onClick={handleCreateGroup} disabled={!newGroupName.trim()}>
+                <ReasonedActionButton
+                  size="sm"
+                  onClick={handleCreateGroup}
+                  disabled={!newGroupName.trim()}
+                  disabledReason="Enter a group name before adding it"
+                >
                   Add
-                </Button>
+                </ReasonedActionButton>
               </div>
             </div>
           )}
@@ -6479,7 +6523,16 @@ export function AgentsPage() {
                       Files
                     </button>
                   </div>
-                  <Tooltip label="Export full conversation as Markdown (all branches)">
+                  <ActionTooltip
+                    label={
+                      visibleMessages.length === 0
+                        ? 'Send or receive a message before exporting'
+                        : 'Export full conversation as Markdown (all branches)'
+                    }
+                    disabled={visibleMessages.length === 0}
+                    focusable={visibleMessages.length === 0}
+                    triggerLabel="Export full conversation as Markdown"
+                  >
                     <button
                       type="button"
                       className={styles.iconBtn}
@@ -6489,7 +6542,7 @@ export function AgentsPage() {
                     >
                       <Download size={15} />
                     </button>
-                  </Tooltip>
+                  </ActionTooltip>
                   <Tooltip label="Agent settings">
                     <button
                       className={styles.iconBtn}
@@ -6633,41 +6686,67 @@ export function AgentsPage() {
                                   <div
                                     className={`${styles.branchNav} ${msg.direction === 'outbound' ? styles.branchNavUser : ''}`}
                                   >
-                                    <button
-                                      className={styles.branchNavBtn}
-                                      disabled={(msg.siblingIndex ?? 0) === 0}
-                                      onClick={() =>
-                                        void handleSwitchBranchByOffset(
-                                          msg.siblingIds,
-                                          msg.siblingTurnIds,
-                                          msg.siblingIndex,
-                                          -1,
-                                        )
+                                    <ActionTooltip
+                                      label={
+                                        (msg.siblingIndex ?? 0) === 0
+                                          ? 'Already on the first branch'
+                                          : 'Previous branch'
                                       }
-                                      aria-label="Previous branch"
+                                      disabled={(msg.siblingIndex ?? 0) === 0}
+                                      focusable={(msg.siblingIndex ?? 0) === 0}
+                                      triggerLabel="Previous branch"
                                     >
-                                      <ArrowLeft size={12} />
-                                    </button>
+                                      <button
+                                        className={styles.branchNavBtn}
+                                        disabled={(msg.siblingIndex ?? 0) === 0}
+                                        onClick={() =>
+                                          void handleSwitchBranchByOffset(
+                                            msg.siblingIds,
+                                            msg.siblingTurnIds,
+                                            msg.siblingIndex,
+                                            -1,
+                                          )
+                                        }
+                                        aria-label="Previous branch"
+                                      >
+                                        <ArrowLeft size={12} />
+                                      </button>
+                                    </ActionTooltip>
                                     <span className={styles.branchNavLabel}>
                                       {(msg.siblingIndex ?? 0) + 1}/{msg.siblingCount}
                                     </span>
-                                    <button
-                                      className={styles.branchNavBtn}
+                                    <ActionTooltip
+                                      label={
+                                        (msg.siblingIndex ?? 0) >= (msg.siblingCount ?? 1) - 1
+                                          ? 'Already on the latest branch'
+                                          : 'Next branch'
+                                      }
                                       disabled={
                                         (msg.siblingIndex ?? 0) >= (msg.siblingCount ?? 1) - 1
                                       }
-                                      onClick={() =>
-                                        void handleSwitchBranchByOffset(
-                                          msg.siblingIds,
-                                          msg.siblingTurnIds,
-                                          msg.siblingIndex,
-                                          1,
-                                        )
+                                      focusable={
+                                        (msg.siblingIndex ?? 0) >= (msg.siblingCount ?? 1) - 1
                                       }
-                                      aria-label="Next branch"
+                                      triggerLabel="Next branch"
                                     >
-                                      <ArrowRight size={12} />
-                                    </button>
+                                      <button
+                                        className={styles.branchNavBtn}
+                                        disabled={
+                                          (msg.siblingIndex ?? 0) >= (msg.siblingCount ?? 1) - 1
+                                        }
+                                        onClick={() =>
+                                          void handleSwitchBranchByOffset(
+                                            msg.siblingIds,
+                                            msg.siblingTurnIds,
+                                            msg.siblingIndex,
+                                            1,
+                                          )
+                                        }
+                                        aria-label="Next branch"
+                                      >
+                                        <ArrowRight size={12} />
+                                      </button>
+                                    </ActionTooltip>
                                   </div>
                                 )}
                                 <div
@@ -6757,12 +6836,25 @@ export function AgentsPage() {
                                     transcriptExecutionItem?.availableActions?.includes(
                                       'delete_queue_item',
                                     ) && (
-                                      <Tooltip
+                                      <ActionTooltip
                                         label={
-                                          isTranscriptExecutionBusy
-                                            ? 'Please wait'
-                                            : 'Remove from queue'
+                                          isDeletingTranscriptExecutionItem
+                                            ? 'Removal already in progress'
+                                            : isSavingTranscriptExecutionItem
+                                              ? 'Wait for the queued message to finish saving'
+                                              : editingMessage?.isSubmitting
+                                                ? 'Wait for the edit to finish saving'
+                                                : 'Remove from queue'
                                         }
+                                        disabled={
+                                          isTranscriptExecutionBusy ||
+                                          Boolean(editingMessage?.isSubmitting)
+                                        }
+                                        focusable={
+                                          isTranscriptExecutionBusy ||
+                                          Boolean(editingMessage?.isSubmitting)
+                                        }
+                                        triggerLabel="Remove queued message"
                                       >
                                         <span
                                           className={
@@ -6792,7 +6884,7 @@ export function AgentsPage() {
                                             <Trash2 size={12} />
                                           </button>
                                         </span>
-                                      </Tooltip>
+                                      </ActionTooltip>
                                     )}
                                   {msg.direction === 'inbound' && (
                                     <>
@@ -6987,17 +7079,27 @@ export function AgentsPage() {
                                   Monitor
                                 </button>
                               )}
-                              {activeConversationRun && (
+                              <ActionTooltip
+                                label={
+                                  !activeConversationRun
+                                    ? 'No active run is available to stop yet'
+                                    : stoppingRun
+                                      ? 'Stop request already in progress'
+                                      : 'Stop the current run'
+                                }
+                                disabled={!activeConversationRun || stoppingRun}
+                                focusable={!activeConversationRun || stoppingRun}
+                                triggerLabel="Stop current run"
+                              >
                                 <button
                                   className={styles.stopRunBtn}
                                   onClick={stopActiveRun}
-                                  disabled={stoppingRun}
-                                  title="Stop the current run"
+                                  disabled={!activeConversationRun || stoppingRun}
                                 >
                                   <Square size={12} />
                                   Stop
                                 </button>
-                              )}
+                              </ActionTooltip>
                             </div>
                           </div>
                         </div>
@@ -7090,12 +7192,19 @@ export function AgentsPage() {
                                     </span>
                                     {queueItem && (
                                       <>
-                                        <Tooltip
+                                        <ActionTooltip
                                           label={
-                                            isQueuedItemBusy
-                                              ? 'Please wait'
-                                              : 'Edit queued message'
+                                            isSavingQueuedItem
+                                              ? 'Save already in progress'
+                                              : isDeletingQueuedItem
+                                                ? 'Wait for removal to finish'
+                                                : editingMessage?.isSubmitting
+                                                  ? 'Wait for the edit to finish saving'
+                                                  : 'Edit queued message'
                                           }
+                                          disabled={isQueuedItemBusy || Boolean(editingMessage?.isSubmitting)}
+                                          focusable={isQueuedItemBusy || Boolean(editingMessage?.isSubmitting)}
+                                          triggerLabel="Edit queued message"
                                         >
                                           <span
                                             className={
@@ -7123,13 +7232,20 @@ export function AgentsPage() {
                                               <Pencil size={12} />
                                             </button>
                                           </span>
-                                        </Tooltip>
-                                        <Tooltip
+                                        </ActionTooltip>
+                                        <ActionTooltip
                                           label={
-                                            isQueuedItemBusy
-                                              ? 'Please wait'
-                                              : 'Remove from queue'
+                                            isDeletingQueuedItem
+                                              ? 'Removal already in progress'
+                                              : isSavingQueuedItem
+                                                ? 'Wait for the queued message to finish saving'
+                                                : editingMessage?.isSubmitting
+                                                  ? 'Wait for the edit to finish saving'
+                                                  : 'Remove from queue'
                                           }
+                                          disabled={isQueuedItemBusy || Boolean(editingMessage?.isSubmitting)}
+                                          focusable={isQueuedItemBusy || Boolean(editingMessage?.isSubmitting)}
+                                          triggerLabel="Remove queued message"
                                         >
                                           <span
                                             className={
@@ -7157,7 +7273,7 @@ export function AgentsPage() {
                                               <Trash2 size={12} />
                                             </button>
                                           </span>
-                                        </Tooltip>
+                                        </ActionTooltip>
                                       </>
                                     )}
                                   </div>
@@ -7711,9 +7827,20 @@ export function AgentsPage() {
                 <Button type="button" variant="secondary" size="md" onClick={closeCreate}>
                   Cancel
                 </Button>
-                <Button type="submit" size="md" disabled={creating || cliMissing}>
+                <ReasonedActionButton
+                  type="submit"
+                  size="md"
+                  disabled={creating || cliMissing}
+                  disabledReason={
+                    creating
+                      ? 'Agent creation is already in progress'
+                      : cliMissing
+                        ? 'Install the selected provider before creating this agent'
+                        : null
+                  }
+                >
                   {creating ? 'Creating...' : 'Create Agent'}
-                </Button>
+                </ReasonedActionButton>
               </div>
             </form>
           </div>
@@ -8042,16 +8169,17 @@ export function AgentsPage() {
                           : 'Empty'}
                     </span>
                   </div>
-                  <Button
+                  <ReasonedActionButton
                     type="button"
                     size="sm"
                     variant="secondary"
                     onClick={handleOpenAgentEnvVarCreate}
                     disabled={agentEnvVarFormOpen && !agentEnvVarForm.id}
+                    disabledReason="Finish or cancel the current variable first"
                   >
                     <Plus size={13} />
                     Add
-                  </Button>
+                  </ReasonedActionButton>
                 </div>
 
                 {agentEnvVarFormOpen && (
@@ -8133,18 +8261,19 @@ export function AgentsPage() {
                       >
                         Cancel
                       </Button>
-                      <Button
+                      <ReasonedActionButton
                         type="button"
                         size="sm"
                         onClick={handleSubmitAgentEnvVar}
                         disabled={agentEnvVarSaving}
+                        disabledReason="Environment variable save already in progress"
                       >
                         {agentEnvVarSaving
                           ? 'Saving...'
                           : agentEnvVarForm.id
                             ? 'Save changes'
                             : 'Add variable'}
-                      </Button>
+                      </ReasonedActionButton>
                     </div>
                   </div>
                 )}
@@ -8233,19 +8362,32 @@ export function AgentsPage() {
                   <div className={styles.cronJobList}>
                     {cronJobs.map((job) => (
                       <div key={job.id} className={styles.cronJobItem}>
-                        <button
-                          type="button"
-                          className={styles.cronToggleBtn}
-                          onClick={() => handleToggleCronJob(job.id)}
+                        <ActionTooltip
+                          label={
+                            cronSaving
+                              ? 'Wait for the current cron change to finish'
+                              : job.enabled
+                                ? 'Disable cron job'
+                                : 'Enable cron job'
+                          }
                           disabled={cronSaving}
-                          title={job.enabled ? 'Disable' : 'Enable'}
+                          focusable={cronSaving}
+                          triggerLabel={job.enabled ? 'Disable cron job' : 'Enable cron job'}
                         >
-                          {job.enabled ? (
-                            <ToggleRight size={20} className={styles.cronToggleOn} />
-                          ) : (
-                            <ToggleLeft size={20} className={styles.cronToggleOff} />
-                          )}
-                        </button>
+                          <button
+                            type="button"
+                            className={styles.cronToggleBtn}
+                            onClick={() => handleToggleCronJob(job.id)}
+                            disabled={cronSaving}
+                            aria-label={job.enabled ? 'Disable cron job' : 'Enable cron job'}
+                          >
+                            {job.enabled ? (
+                              <ToggleRight size={20} className={styles.cronToggleOn} />
+                            ) : (
+                              <ToggleLeft size={20} className={styles.cronToggleOff} />
+                            )}
+                          </button>
+                        </ActionTooltip>
                         <div className={styles.cronJobInfo}>
                           <div className={styles.cronJobExpr}>
                             <code className={styles.settingsCode}>{job.cron}</code>
@@ -8256,15 +8398,26 @@ export function AgentsPage() {
                             {job.prompt.length > 80 ? job.prompt.slice(0, 80) + '...' : job.prompt}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          className={`${styles.cronDeleteBtn}`}
-                          onClick={() => handleDeleteCronJob(job.id)}
+                        <ActionTooltip
+                          label={
+                            cronSaving
+                              ? 'Wait for the current cron change to finish'
+                              : 'Delete cron job'
+                          }
                           disabled={cronSaving}
-                          title="Delete cron job"
+                          focusable={cronSaving}
+                          triggerLabel="Delete cron job"
                         >
-                          <Trash2 size={14} />
-                        </button>
+                          <button
+                            type="button"
+                            className={`${styles.cronDeleteBtn}`}
+                            onClick={() => handleDeleteCronJob(job.id)}
+                            disabled={cronSaving}
+                            aria-label="Delete cron job"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </ActionTooltip>
                       </div>
                     ))}
                   </div>
@@ -8299,13 +8452,22 @@ export function AgentsPage() {
                       >
                         Cancel
                       </Button>
-                      <Button
+                      <ReasonedActionButton
                         size="sm"
                         onClick={handleAddCronJob}
                         disabled={!cronFormCron.trim() || !cronFormPrompt.trim() || cronSaving}
+                        disabledReason={
+                          cronSaving
+                            ? 'Cron job save already in progress'
+                            : !cronFormCron.trim()
+                              ? 'Enter a schedule before adding the cron job'
+                              : !cronFormPrompt.trim()
+                                ? 'Enter a prompt before adding the cron job'
+                                : null
+                        }
                       >
                         {cronSaving ? 'Saving...' : 'Add Job'}
-                      </Button>
+                      </ReasonedActionButton>
                     </div>
                   </div>
                 ) : (
@@ -8521,13 +8683,28 @@ export function AgentsPage() {
                           >
                             Cancel
                           </button>
-                          <button
-                            type="submit"
-                            className={styles.skillsMgrTopBtnPrimary}
+                          <ActionTooltip
+                            label={
+                              mgrSaving
+                                ? 'Skill save already in progress'
+                                : !mgrFormName.trim()
+                                  ? 'Enter a skill name before saving'
+                                  : !mgrHasDirtyForm
+                                    ? 'Make a change before saving'
+                                    : 'Save skill'
+                            }
                             disabled={!mgrFormName.trim() || !mgrHasDirtyForm || mgrSaving}
+                            focusable={!mgrFormName.trim() || !mgrHasDirtyForm || mgrSaving}
+                            triggerLabel="Save skill"
                           >
-                            {mgrSaving ? 'Saving...' : 'Save'}
-                          </button>
+                            <button
+                              type="submit"
+                              className={styles.skillsMgrTopBtnPrimary}
+                              disabled={!mgrFormName.trim() || !mgrHasDirtyForm || mgrSaving}
+                            >
+                              {mgrSaving ? 'Saving...' : 'Save'}
+                            </button>
+                          </ActionTooltip>
                         </div>
                       </form>
                     ) : mgrShowingCreateForm ? (
@@ -8574,13 +8751,26 @@ export function AgentsPage() {
                           >
                             Cancel
                           </button>
-                          <button
-                            type="submit"
-                            className={styles.skillsMgrTopBtnPrimary}
+                          <ActionTooltip
+                            label={
+                              mgrSaving
+                                ? 'Skill creation already in progress'
+                                : !mgrFormName.trim()
+                                  ? 'Enter a skill name before creating it'
+                                  : 'Create skill'
+                            }
                             disabled={!mgrFormName.trim() || mgrSaving}
+                            focusable={!mgrFormName.trim() || mgrSaving}
+                            triggerLabel="Create skill"
                           >
-                            {mgrSaving ? 'Creating...' : 'Create'}
-                          </button>
+                            <button
+                              type="submit"
+                              className={styles.skillsMgrTopBtnPrimary}
+                              disabled={!mgrFormName.trim() || mgrSaving}
+                            >
+                              {mgrSaving ? 'Creating...' : 'Create'}
+                            </button>
+                          </ActionTooltip>
                         </div>
                       </form>
                     ) : mgrActiveSkill ? (

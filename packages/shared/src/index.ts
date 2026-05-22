@@ -93,6 +93,20 @@ export {
   parseRunnerServerMessage,
   parseServerRunnerMessage,
 } from './runner-protocol.js';
+export {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_POLICY_SUMMARY,
+  PASSWORD_REQUIREMENTS,
+  getPasswordRequirementChecks,
+  isPasswordRequirementMet,
+  validatePasswordStrength,
+} from './password-policy.js';
+export type {
+  PasswordPolicyResult,
+  PasswordRequirement,
+  PasswordRequirementId,
+} from './password-policy.js';
 export type {
   RunnerAgentKind,
   RunnerApprovalMode,

@@ -54,14 +54,16 @@ interface ActiveBatchRunsBannerProps {
 }
 
 function ElapsedTimer({ startedAt }: { startedAt: string }) {
-  const [, setTick] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
-    const iv = setInterval(() => setTick((t) => t + 1), 1000);
+    const startedAtMs = new Date(startedAt).getTime();
+    const iv = setInterval(() => {
+      setElapsedMs(Date.now() - startedAtMs);
+    }, 1000);
     return () => clearInterval(iv);
-  }, []);
+  }, [startedAt]);
 
-  const ms = Date.now() - new Date(startedAt).getTime();
-  const secs = Math.floor(ms / 1000);
+  const secs = Math.floor(elapsedMs / 1000);
   const mins = Math.floor(secs / 60);
   const hrs = Math.floor(mins / 60);
   if (hrs > 0) return <>{hrs}h {mins % 60}m</>;
@@ -140,10 +142,13 @@ export function ActiveBatchRunsBanner({
 
   useEffect(() => {
     mountedRef.current = true;
-    void fetchRuns();
+    const initialPoll = setTimeout(() => {
+      void fetchRuns();
+    }, 0);
     pollRef.current = setInterval(fetchRuns, pollInterval);
     return () => {
       mountedRef.current = false;
+      clearTimeout(initialPoll);
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [fetchRuns, pollInterval]);
@@ -210,7 +215,6 @@ export function ActiveBatchRunsBanner({
         const isMinimized = !expandedRuns.has(run.id);
         const skipped = run.skipped ?? 0;
         const finished = run.completed + run.failed + run.cancelled + skipped;
-        const pct = run.total > 0 ? Math.round((finished / run.total) * 100) : 0;
         const issueCount = run.failed + skipped;
 
         // Build per-item grid data if available

@@ -60,6 +60,7 @@ import {
   updateAgentChatTurn,
   type AgentChatTurnType,
 } from './agent-chat-turns.js';
+import { buildQueuedDisplayPositionById } from './agent-chat-queue-positions.js';
 import { getFallbackModelConfig } from './project-settings.js';
 
 const STORAGE_DIR = path.resolve(env.DATA_DIR, 'storage');
@@ -76,8 +77,6 @@ const OPENWORK_CHILD_ENV_BLOCKLIST = new Set([
   'BODY_LIMIT_BYTES',
   'CORS_ORIGIN',
   'DATA_DIR',
-  'EMAIL_SYNC_CRON',
-  'EMAIL_SYNC_ENABLED',
   'HOST',
   'INSTAGRAM_APP_SECRET',
   'INSTAGRAM_WEBHOOK_BASE_URL',
@@ -4745,10 +4744,14 @@ export function getConversationQueueItems(agentId: string, conversationId: strin
 export function getConversationExecutionItems(agentId: string, conversationId: string) {
   reconcileTerminalProcessingExecutionItems(agentId, conversationId);
 
-  let position = 0;
-  return listConversationQueueItems(agentId, conversationId).map((item) => {
-    const isLive = item.status === 'queued' || item.status === 'processing';
-    const queuePosition = isLive ? ++position : null;
+  const queueItems = listConversationQueueItems(agentId, conversationId);
+  const queuePositionById = buildQueuedDisplayPositionById(
+    queueItems,
+    listAgentChatTurns(agentId, conversationId),
+  );
+  return queueItems.map((item) => {
+    const itemId = nonEmptyString(item.id);
+    const queuePosition = itemId ? (queuePositionById.get(itemId) ?? null) : null;
     return sanitizeQueueItemForChat(item, queuePosition);
   });
 }

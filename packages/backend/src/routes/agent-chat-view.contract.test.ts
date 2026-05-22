@@ -492,7 +492,7 @@ describe('agent chat canonical view endpoint', () => {
     expect(body.entries[2].execution.queue).toMatchObject({
       id: 'queue-3',
       turnId: 'turn-3',
-      position: 2,
+      position: null,
       runId: 'run-3',
     });
     expect(body.entries[2].execution.run).toMatchObject({
@@ -522,6 +522,121 @@ describe('agent chat canonical view endpoint', () => {
     );
     expect(queueBody.entries[0]).not.toHaveProperty('message');
     expect(queueBody.entries[0]).not.toHaveProperty('userMessage');
+
+    await app.close();
+  });
+
+  it('numbers queued display positions per branch without counting active processing work', async () => {
+    seedAgentConversation('conversation-1', {
+      activeBranches: { 'turn:turn-root': 'turn-queued-branch-b' },
+    });
+    addMessage('user-root', { content: 'root prompt' });
+    addMessage('user-processing-a', {
+      content: 'processing branch A',
+      previousUserMessageId: 'user-root',
+    });
+    addMessage('user-queued-a', {
+      content: 'queued behind branch A processing',
+      previousUserMessageId: 'user-processing-a',
+    });
+    addMessage('user-queued-b', {
+      content: 'queued branch B',
+      previousUserMessageId: 'user-root',
+    });
+
+    addTurn('turn-root', {
+      userMessageId: 'user-root',
+      status: 'completed',
+      createdAt: '2026-05-16T12:00:00.000Z',
+    });
+    addTurn('turn-processing-branch-a', {
+      parentTurnId: 'turn-root',
+      userMessageId: 'user-processing-a',
+      status: 'processing',
+      runId: 'run-processing-a',
+      createdAt: '2026-05-16T12:01:00.000Z',
+    });
+    addTurn('turn-queued-branch-a', {
+      parentTurnId: 'turn-processing-branch-a',
+      userMessageId: 'user-queued-a',
+      status: 'queued',
+      createdAt: '2026-05-16T12:02:00.000Z',
+    });
+    addTurn('turn-queued-branch-b', {
+      parentTurnId: 'turn-root',
+      userMessageId: 'user-queued-b',
+      status: 'queued',
+      createdAt: '2026-05-16T12:03:00.000Z',
+    });
+
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-processing-a',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'processing',
+      turnId: 'turn-processing-branch-a',
+      queuedMessageId: 'user-processing-a',
+      runId: 'run-processing-a',
+      attempts: 1,
+      maxAttempts: 3,
+      createdAt: '2026-05-16T12:01:30.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-queued-a',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-queued-branch-a',
+      queuedMessageId: 'user-queued-a',
+      dependsOnQueueItemId: 'queue-processing-a',
+      attempts: 0,
+      maxAttempts: 3,
+      createdAt: '2026-05-16T12:02:30.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-queued-b',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-queued-branch-b',
+      queuedMessageId: 'user-queued-b',
+      attempts: 0,
+      maxAttempts: 3,
+      createdAt: '2026-05-16T12:03:30.000Z',
+    });
+
+    const app = await buildRouteApp();
+    const viewResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/conversations/conversation-1/view',
+    });
+    expect(viewResponse.statusCode).toBe(200);
+    const viewBody = viewResponse.json();
+    expect(viewBody.entries.map((turn: Record<string, unknown>) => turn.id)).toEqual([
+      'turn-root',
+      'turn-queued-branch-b',
+    ]);
+    expect(viewBody.entries[1].execution.queue).toMatchObject({
+      id: 'queue-queued-b',
+      position: 1,
+    });
+
+    const queueResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/conversations/conversation-1/queue',
+    });
+    expect(queueResponse.statusCode).toBe(200);
+    const queueEntries = queueResponse.json().entries;
+    expect(queueEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'queue-processing-a', queuePosition: null }),
+        expect.objectContaining({ id: 'queue-queued-a', queuePosition: 1 }),
+        expect.objectContaining({ id: 'queue-queued-b', queuePosition: 1 }),
+      ]),
+    );
 
     await app.close();
   });
@@ -844,6 +959,81 @@ describe('agent chat turn lifecycle regression matrix API view', () => {
       },
       availableActions: expect.arrayContaining(['stop']),
     });
+
+    await app.close();
+  });
+
+  it('does not surface superseded recovery failures as active chat errors', async () => {
+    seedAgentConversation('conversation-1', {
+      activeBranches: { 'turn:__root__': 'turn-original' },
+    });
+    addMessage('message-original', { content: 'Original first prompt' });
+    addMessage('message-edit', { content: 'Edited first prompt' });
+    addTurn('turn-original', {
+      userMessageId: 'message-original',
+      status: 'superseded',
+      runId: 'run-original',
+    });
+    addTurn('turn-edit', {
+      userMessageId: 'message-edit',
+      status: 'completed',
+      turnType: 'edit',
+      supersedesTurnId: 'turn-original',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-original',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'respond_to_message',
+      status: 'failed',
+      turnId: 'turn-original',
+      targetMessageId: 'message-original',
+      queuedMessageId: 'message-original',
+      lastRunId: 'run-original',
+      errorMessage: 'Skipped superseded queued turn during recovery',
+      attempts: 1,
+      maxAttempts: 3,
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-original',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-original',
+      turnId: 'turn-original',
+      startedAt: '2026-05-16T12:02:00.000Z',
+      finishedAt: '2026-05-16T12:03:00.000Z',
+    });
+
+    const app = await buildRouteApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/conversations/conversation-1/view',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.entries.map((turn: Record<string, unknown>) => turn.id)).toEqual([
+      'turn-original',
+    ]);
+    expect(body.entries[0]).toMatchObject({
+      status: 'superseded',
+      execution: {
+        queue: {
+          id: 'queue-original',
+          status: 'failed',
+          errorMessage: 'Skipped superseded queued turn during recovery',
+        },
+        run: { id: 'run-original', status: 'completed' },
+      },
+      edit: {
+        supersededByTurnId: 'turn-edit',
+        isSuperseded: true,
+      },
+    });
+    expect(body.entries[0].availableActions).not.toContain('retry');
 
     await app.close();
   });

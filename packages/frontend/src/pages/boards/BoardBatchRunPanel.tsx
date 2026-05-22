@@ -1,15 +1,20 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { X, Bot, Play, Check, CheckCircle2, Minus, Plus, Zap, Layers, ChevronDown, Search, ListOrdered } from 'lucide-react';
-import { Button, Tooltip } from '../../ui';
+import { ReasonedActionButton } from '../../ui';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { AgentAvatar } from '../../components/AgentAvatar';
-import { BatchLayerPlanner, type BatchPlanCard } from '../../components/BatchLayerPlanner';
+import { BatchLayerPlanner, type BatchLayerPlannerExperiments, type BatchPlanCard } from '../../components/BatchLayerPlanner';
 import {
   buildCardDependenciesFromLayers,
   buildStagesFromLayers,
   type BatchLayer,
 } from '../../lib/agent-batch';
+import {
+  filterColumnIds,
+  getBoardBatchRunPreferences,
+  saveBoardBatchRunPreferences,
+} from '../../lib/board-batch-run-preferences';
 import styles from './BoardBatchRunPanel.module.css';
 
 interface BoardColumn {
@@ -46,6 +51,8 @@ interface BoardBatchRunPanelProps {
   }>;
   initialManualLayers?: BatchLayer[];
   initialPlanName?: string | null;
+  embedPlanner?: boolean;
+  plannerExperiments?: BatchLayerPlannerExperiments;
   onClose: () => void;
 }
 
@@ -55,22 +62,34 @@ export function BoardBatchRunPanel({
   availableCards,
   initialManualLayers,
   initialPlanName,
+  embedPlanner = false,
+  plannerExperiments,
   onClose,
 }: BoardBatchRunPanelProps) {
+  const savedPrefs = useMemo(() => getBoardBatchRunPreferences(boardId), [boardId]);
+  const validColumnIds = useMemo(() => new Set(columns.map((c) => c.id)), [columns]);
+  const openedFromPlan = Boolean(initialManualLayers);
+  const showEmbeddedPlanner = embedPlanner && openedFromPlan;
+  const persistManualLayersRef = useRef(!openedFromPlan);
+
   const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [agentId, setAgentId] = useState('');
-  const [prompt, setPrompt] = useState('');
+  const [agentId, setAgentId] = useState(savedPrefs?.agentId ?? '');
+  const [prompt, setPrompt] = useState(savedPrefs?.prompt ?? '');
   const [scopeMode, setScopeMode] = useState<'filters' | 'manual'>(
-    () => initialManualLayers ? 'manual' : 'filters',
+    () => (openedFromPlan || embedPlanner ? 'manual' : savedPrefs?.scopeMode) ?? 'filters',
   );
-  const [selectedColumnIds, setSelectedColumnIds] = useState<Set<string>>(
-    () => new Set(columns.map((c) => c.id)),
-  );
-  const [textFilter, setTextFilter] = useState('');
+  const [selectedColumnIds, setSelectedColumnIds] = useState<Set<string>>(() => {
+    const savedIds = filterColumnIds(savedPrefs?.selectedColumnIds, validColumnIds);
+    if (savedIds?.length) return new Set(savedIds);
+    return new Set(columns.map((c) => c.id));
+  });
+  const [textFilter, setTextFilter] = useState(savedPrefs?.textFilter ?? '');
   const [manualLayers, setManualLayers] = useState<BatchLayer[]>(
-    () => initialManualLayers ?? [{ cards: [] }],
+    () => initialManualLayers ?? savedPrefs?.manualLayers ?? [{ cards: [] }],
   );
-  const [maxParallel, setMaxParallel] = useState(3);
+  const [maxParallel, setMaxParallel] = useState(
+    () => Math.min(10, Math.max(1, savedPrefs?.maxParallel ?? 3)),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
@@ -82,12 +101,63 @@ export function BoardBatchRunPanel({
   const previewAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    if (showEmbeddedPlanner) setScopeMode('manual');
+  }, [showEmbeddedPlanner]);
+
+  useEffect(() => {
     api<{ entries: AgentEntry[] }>('/agents?limit=100').then((res) => {
       const active = res.entries.filter((a) => a.status === 'active');
       setAgents(active);
-      if (active.length > 0) setAgentId(active[0].id);
+      setAgentId((current) => {
+        if (current && active.some((a) => a.id === current)) return current;
+        if (savedPrefs?.agentId && active.some((a) => a.id === savedPrefs.agentId)) {
+          return savedPrefs.agentId;
+        }
+        return active[0]?.id ?? '';
+      });
     }).catch(() => {});
+  }, [savedPrefs?.agentId]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      saveBoardBatchRunPreferences(boardId, {
+        agentId: agentId || undefined,
+        prompt,
+        scopeMode,
+        selectedColumnIds: Array.from(selectedColumnIds),
+        textFilter,
+        maxParallel,
+        manualLayers:
+          scopeMode === 'manual' && persistManualLayersRef.current
+            ? manualLayers
+            : undefined,
+      });
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [
+    boardId,
+    agentId,
+    prompt,
+    scopeMode,
+    selectedColumnIds,
+    textFilter,
+    maxParallel,
+    manualLayers,
+  ]);
+
+  const handleManualLayersChange = useCallback((layers: BatchLayer[]) => {
+    persistManualLayersRef.current = true;
+    setManualLayers(layers);
   }, []);
+
+  useEffect(() => {
+    setSelectedColumnIds((prev) => {
+      const next = new Set([...prev].filter((id) => validColumnIds.has(id)));
+      if (next.size === prev.size) return prev;
+      if (next.size === 0) return new Set(columns.map((c) => c.id));
+      return next;
+    });
+  }, [validColumnIds, columns]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -365,6 +435,23 @@ export function BoardBatchRunPanel({
             </div>
           </div>
 
+          {showEmbeddedPlanner && (
+            <div className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <Layers size={14} className={styles.sectionIcon} />
+                <span className={styles.sectionLabel}>Edit plan layers</span>
+              </div>
+              <BatchLayerPlanner
+                layers={manualLayers}
+                onChange={handleManualLayersChange}
+                loadOptions={loadManualOptions}
+                searchPlaceholder="Search board cards or columns..."
+                emptySearchLabel="No board cards available"
+                experiments={plannerExperiments}
+              />
+            </div>
+          )}
+
           {/* Prompt */}
           <div className={styles.section}>
             <div className={styles.sectionHeader}>
@@ -440,7 +527,7 @@ export function BoardBatchRunPanel({
                 />
               </div>
             </>
-          ) : (
+          ) : !showEmbeddedPlanner ? (
             <div className={styles.section}>
               <div className={styles.sectionHeader}>
                 <Layers size={14} className={styles.sectionIcon} />
@@ -448,13 +535,14 @@ export function BoardBatchRunPanel({
               </div>
               <BatchLayerPlanner
                 layers={manualLayers}
-                onChange={setManualLayers}
+                onChange={handleManualLayersChange}
                 loadOptions={loadManualOptions}
                 searchPlaceholder="Search board cards or columns..."
                 emptySearchLabel="No board cards available"
+                experiments={plannerExperiments}
               />
             </div>
-          )}
+          ) : null}
 
           {/* Concurrency */}
           <div className={styles.section}>
@@ -516,28 +604,15 @@ export function BoardBatchRunPanel({
               </span>
             )}
           </div>
-          {disabledReason ? (
-            <Tooltip label={disabledReason} position="top">
-              <div style={{ cursor: 'not-allowed' }}>
-                <Button
-                  variant="primary"
-                  disabled
-                  style={{ pointerEvents: 'none' }}
-                >
-                  <Play size={14} />
-                  {submitting ? 'Starting…' : 'Run batch'}
-                </Button>
-              </div>
-            </Tooltip>
-          ) : (
-            <Button
-              variant="primary"
-              onClick={handleSubmit}
-            >
-              <Play size={14} />
-              Run batch
-            </Button>
-          )}
+          <ReasonedActionButton
+            variant="primary"
+            onClick={handleSubmit}
+            disabled={Boolean(disabledReason)}
+            disabledReason={disabledReason}
+          >
+            <Play size={14} />
+            {submitting ? 'Starting…' : 'Run batch'}
+          </ReasonedActionButton>
         </div>
       </div>
     </div>

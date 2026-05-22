@@ -5,6 +5,7 @@ import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
 import { MarkdownContent } from './MarkdownContent';
+import { ReasonedActionButton, type DisabledActionReason } from './ActionTooltip';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { ApiError, api, apiUpload } from '../lib/api';
 import { getImagesFromClipboardData, getImagesFromFileList, prepareImageForUpload } from '../lib/image-upload';
@@ -180,7 +181,14 @@ export function CreateCardModal({ onClose, onSubmit, showCollectionPicker, allow
     return () => controller.abort();
   }, [linkSearch, linkedCards]);
 
-  const canSubmit = name.trim() && !submitting && (!showCollectionPicker || selectedCollectionId);
+  const submitDisabledReason: DisabledActionReason | null = submitting
+    ? { kind: 'active-operation', message: 'Wait for the current card to finish creating' }
+    : !name.trim()
+      ? { kind: 'invalid-form', message: 'Enter a card title to create it' }
+      : showCollectionPicker && !selectedCollectionId
+        ? { kind: 'missing-selection', message: 'Choose a collection to create this card' }
+        : null;
+  const canSubmit = !submitDisabledReason;
 
   const resetForm = useCallback(() => {
     setName('');
@@ -222,7 +230,7 @@ export function CreateCardModal({ onClose, onSubmit, showCollectionPicker, allow
     } finally {
       setSubmitting(false);
     }
-  }, [name, description, submitting, onSubmit, assigneeId, selectedTagIds, linkedCards, showCollectionPicker, selectedCollectionId, resetForm]);
+  }, [name, description, submitting, onSubmit, assigneeId, selectedTagIds, linkedCards, showCollectionPicker, selectedCollectionId, resetForm, onClose]);
 
   const handleSubmit = useCallback(() => doSubmit(false), [doSubmit]);
   const handleSubmitAndNew = useCallback(() => doSubmit(true), [doSubmit]);
@@ -668,13 +676,22 @@ export function CreateCardModal({ onClose, onSubmit, showCollectionPicker, allow
           </span>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           {allowCreateAnother && (
-            <Button variant="secondary" onClick={() => void handleSubmitAndNew()} disabled={!canSubmit}>
+            <ReasonedActionButton
+              variant="secondary"
+              onClick={() => void handleSubmitAndNew()}
+              disabled={!canSubmit}
+              disabledReason={submitDisabledReason}
+            >
               {submitting ? 'Creating...' : 'Create & New'}
-            </Button>
+            </ReasonedActionButton>
           )}
-          <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
+          <ReasonedActionButton
+            onClick={() => void handleSubmit()}
+            disabled={!canSubmit}
+            disabledReason={submitDisabledReason}
+          >
             {submitting ? 'Creating...' : 'Create'}
-          </Button>
+          </ReasonedActionButton>
         </div>
       </div>
     </Modal>

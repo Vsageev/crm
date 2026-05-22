@@ -1,11 +1,13 @@
 import {
   deleteBoardCardByBoardAndCard,
+  deleteBoardCardsByBoardAndColumnNative,
   deleteBoardCardsByBoardId,
   deleteBoardCardsByBoardIdNative,
   deleteBoardCardsByColumnId,
   deleteBoardColumnsByBoardIdNative,
   getBoardCardByBoardAndCardNative,
   countBoardCardsByBoardAndColumnNative,
+  listBoardCardsByBoardAndColumnNative,
   listBoardCardsByBoardIdNative,
   listBoardColumnsByBoardIdNative,
   listCardTagsByCardId,
@@ -412,6 +414,12 @@ export async function deleteColumn(columnId: string) {
   });
 }
 
+function getBoardColumnForBoard(boardId: string, columnId: string): BoardColumn | null {
+  const column = store.getById('boardColumns', columnId) as BoardColumn | null;
+  if (!column || column.boardId !== boardId) return null;
+  return column;
+}
+
 // ── Auto-assign agent helper ──────────────────────────────────────────
 
 async function tryAutoAssignAgent(columnId: string, cardId: string) {
@@ -490,4 +498,45 @@ export async function removeCardFromBoard(boardId: string, cardId: string) {
 
 export async function clearBoardCards(boardId: string) {
   return store.transaction(async () => deleteBoardCardsByBoardId(boardId));
+}
+
+export async function moveColumnCards(boardId: string, sourceColumnId: string, targetColumnId: string) {
+  const sourceColumn = getBoardColumnForBoard(boardId, sourceColumnId);
+  const targetColumn = getBoardColumnForBoard(boardId, targetColumnId);
+  if (!sourceColumn || !targetColumn || sourceColumnId === targetColumnId) return null;
+
+  return store.transaction(async () => {
+    const sourceCards = ((await listBoardCardsByBoardAndColumnNative(
+      boardId,
+      sourceColumnId,
+    )) as unknown as BoardCard[])
+      .sort((a, b) => a.position - b.position);
+    const targetStart = await countBoardCardsByBoardAndColumnNative(boardId, targetColumnId);
+    let moved = 0;
+
+    for (const [index, boardCard] of sourceCards.entries()) {
+      if (!boardCard.id) continue;
+      const updated = await store.update('boardCards', boardCard.id, {
+        columnId: targetColumnId,
+        position: targetStart + index,
+        updatedAt: new Date().toISOString(),
+      });
+      if (updated) {
+        moved += 1;
+        await tryAutoAssignAgent(targetColumnId, boardCard.cardId);
+      }
+    }
+
+    return { moved };
+  });
+}
+
+export async function clearColumnCards(boardId: string, columnId: string) {
+  const column = getBoardColumnForBoard(boardId, columnId);
+  if (!column) return null;
+
+  return store.transaction(async () => {
+    const removed = await deleteBoardCardsByBoardAndColumnNative(boardId, columnId);
+    return { removed: removed.length };
+  });
 }

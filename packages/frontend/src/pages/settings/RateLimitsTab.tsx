@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Gauge, Save } from 'lucide-react';
 import { api } from '../../lib/api';
+import { ActionTooltip } from '../../ui';
 import styles from './RateLimitsTab.module.css';
 
 interface RateLimitSettings {
@@ -29,6 +30,11 @@ export function RateLimitsTab() {
     draft.agentPromptMax !== settings.agentPromptMax ||
     draft.agentPromptWindowS !== settings.agentPromptWindowS
   );
+  const saveDisabledReason = saving
+    ? 'Rate limit settings are already being saved.'
+    : !hasChanges
+      ? 'Change a rate limit before saving.'
+      : null;
 
   async function handleSave() {
     setSaving(true);
@@ -108,14 +114,20 @@ export function RateLimitsTab() {
         </div>
 
         <div className={styles.actions}>
-          <button
-            className={styles.saveBtn}
-            disabled={!hasChanges || saving}
-            onClick={handleSave}
+          <ActionTooltip
+            label={saveDisabledReason ?? 'Save changes'}
+            disabled={Boolean(saveDisabledReason)}
+            triggerLabel="Save changes"
           >
-            <Save size={14} />
-            {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
-          </button>
+            <button
+              className={styles.saveBtn}
+              disabled={Boolean(saveDisabledReason)}
+              onClick={handleSave}
+            >
+              <Save size={14} />
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
+            </button>
+          </ActionTooltip>
         </div>
       </div>
     </div>

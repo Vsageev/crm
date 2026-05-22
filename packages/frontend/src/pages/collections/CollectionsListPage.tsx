@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, FolderOpen, Trash2, X, Star } from 'lucide-react';
 import { PageHeader } from '../../layout';
-import { Button } from '../../ui';
+import { ActionTooltip, Button, ReasonedActionButton } from '../../ui';
 import { Modal } from '../../ui/Modal';
 import { api, ApiError } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -84,7 +84,7 @@ export function CollectionsListPage() {
 
   useEffect(() => {
     fetchCollections();
-  }, [fetchCollections]);
+  }, [activeWorkspaceId, fetchCollections]);
 
   const createDefaultCollection = useCallback(async () => {
     setProvisioningStarter(true);
@@ -104,7 +104,7 @@ export function CollectionsListPage() {
     } finally {
       setProvisioningStarter(false);
     }
-  }, [fetchCollections]);
+  }, [activeWorkspaceId, fetchCollections]);
 
   useEffect(() => {
     if (activeWorkspaceId || search || loading || provisioningStarter || error || collections.length > 0) return;
@@ -323,16 +323,23 @@ export function CollectionsListPage() {
                 {isGeneralCollection(collection) ? (
                   <span className={styles.generalBadge}>General</span>
                 ) : (
-                  <button
-                    type="button"
-                    className={styles.deleteButton}
-                    onClick={() => { void handleDeleteCollection(collection); }}
+                  <ActionTooltip
+                    label={deletingCollectionId === collection.id ? `"${collection.name}" is being deleted.` : `Delete ${collection.name}.`}
                     disabled={deletingCollectionId === collection.id}
-                    aria-label={`Delete ${collection.name}`}
+                    focusable={deletingCollectionId === collection.id}
+                    triggerLabel={`Delete ${collection.name}`}
                   >
-                    <Trash2 size={14} />
-                    {deletingCollectionId === collection.id ? 'Deleting...' : 'Delete'}
-                  </button>
+                    <button
+                      type="button"
+                      className={styles.deleteButton}
+                      onClick={() => { void handleDeleteCollection(collection); }}
+                      disabled={deletingCollectionId === collection.id}
+                      aria-label={`Delete ${collection.name}`}
+                    >
+                      <Trash2 size={14} />
+                      {deletingCollectionId === collection.id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </ActionTooltip>
                 )}
               </div>
             </article>
@@ -366,9 +373,13 @@ export function CollectionsListPage() {
             </div>
             <div className={styles.modalActions}>
               <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={creating || !createName.trim()}>
+              <ReasonedActionButton
+                onClick={handleCreate}
+                disabled={creating || !createName.trim()}
+                disabledReason={creating ? 'Collection is being created.' : 'Enter a collection name before creating it.'}
+              >
                 {creating ? 'Creating...' : 'Create'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </div>
         </Modal>

@@ -260,12 +260,16 @@ describe('buildAgentConversationViewModel', () => {
       availableActions: ['retry', 'switch_branch'],
     });
     expect(view.queuedQueueItems).toEqual([
-      expect.objectContaining({ id: 'queue-queued', turnId: 'turn-queued' }),
+      expect.objectContaining({ id: 'queue-queued', turnId: 'turn-queued', queuePosition: 1 }),
     ]);
     expect(view.queuedMessages).toEqual([
       expect.objectContaining({
         message: expect.objectContaining({ id: 'message-queued' }),
-        queueItem: expect.objectContaining({ id: 'queue-queued', turnId: 'turn-queued' }),
+        queueItem: expect.objectContaining({
+          id: 'queue-queued',
+          turnId: 'turn-queued',
+          queuePosition: 1,
+        }),
         status: 'queued',
       }),
     ]);
@@ -273,6 +277,89 @@ describe('buildAgentConversationViewModel', () => {
     expect(view.activeConversationRun?.id).toBe('run-edit');
     expect(view.activeProcessingTargetMessageId).toBe('message-edit');
     expect(view.showStreamingBubble).toBe(true);
+  });
+
+  it('renumbers visible queued rows from one even when the server payload includes global positions', () => {
+    const view = buildView(
+      canonicalView([
+        canonicalTurn({
+          id: 'turn-processing-other-branch',
+          status: 'processing',
+          execution: {
+            queue: {
+              id: 'queue-processing-other-branch',
+              turnId: 'turn-processing-other-branch',
+              status: 'processing',
+              position: 1,
+              runId: 'run-processing-other-branch',
+              errorMessage: null,
+              attempts: 1,
+              maxAttempts: 3,
+              nextAttemptAt: null,
+              startedAt: '2026-01-01T00:00:01.000Z',
+              completedAt: null,
+              usedFallback: false,
+              fallbackModel: null,
+            },
+            run: {
+              id: 'run-processing-other-branch',
+              turnId: 'turn-processing-other-branch',
+              status: 'running',
+              errorMessage: null,
+              responseText: null,
+              startedAt: '2026-01-01T00:00:01.000Z',
+              finishedAt: null,
+              durationMs: null,
+            },
+          },
+        }),
+        canonicalTurn({
+          id: 'turn-visible-queued',
+          parentTurnId: 'turn-processing-other-branch',
+          status: 'queued',
+          createdAt: '2026-01-01T00:01:00.000Z',
+          userMessage: {
+            id: 'message-visible-queued',
+            direction: 'outbound',
+            type: 'text',
+            content: 'visible queued prompt',
+            status: 'sent',
+            metadata: null,
+            attachments: null,
+            createdAt: '2026-01-01T00:01:00.000Z',
+            updatedAt: null,
+          },
+          execution: {
+            queue: {
+              id: 'queue-visible-queued',
+              turnId: 'turn-visible-queued',
+              status: 'queued',
+              position: 2,
+              runId: null,
+              errorMessage: null,
+              attempts: 0,
+              maxAttempts: 3,
+              nextAttemptAt: null,
+              startedAt: null,
+              completedAt: null,
+              usedFallback: false,
+              fallbackModel: null,
+            },
+            run: null,
+          },
+        }),
+      ]),
+    );
+
+    expect(view.queuedMessages).toHaveLength(1);
+    expect(view.queuedMessages[0].queueItem).toMatchObject({
+      id: 'queue-visible-queued',
+      queuePosition: 1,
+    });
+    expect(view.queuedQueueItems[0]).toMatchObject({
+      id: 'queue-visible-queued',
+      queuePosition: 1,
+    });
   });
 
   it('preserves canonical turn order instead of re-sorting messages by timestamp', () => {

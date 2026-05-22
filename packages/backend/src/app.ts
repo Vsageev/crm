@@ -18,7 +18,6 @@ import { tagRoutes } from './routes/tags.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { messageRoutes } from './routes/messages.js';
 import { mediaRoutes } from './routes/media.js';
-import { widgetRoutes } from './routes/widget.js';
 import { apiKeyRoutes } from './routes/api-keys.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { registerSwagger } from './plugins/swagger.js';
@@ -158,7 +157,6 @@ export async function buildApp() {
   await app.register(messageRoutes);
   await app.register(messageDraftRoutes);
   await app.register(mediaRoutes);
-  await app.register(widgetRoutes);
   await app.register(apiKeyRoutes);
   await app.register(webhookRoutes);
   await app.register(permissionRoutes);

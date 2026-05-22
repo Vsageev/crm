@@ -51,10 +51,6 @@ const processes = [
     name: 'landing',
     args: ['--filter', 'landing', 'dev'],
   },
-  {
-    name: 'widget',
-    args: ['--filter', 'widget', 'dev'],
-  },
 ];
 
 function startProcess(definition) {
@@ -251,7 +247,7 @@ async function main() {
     await migrateDatabase();
   }
 
-  console.log('[dev] Starting backend, frontend, landing, and widget...');
+  console.log('[dev] Starting backend, frontend, and landing...');
   console.log('[dev] Start a paired runner separately from Settings -> Runners when agent execution is needed.');
 
   for (const definition of processes) {

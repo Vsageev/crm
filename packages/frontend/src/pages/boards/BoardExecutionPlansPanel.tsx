@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowLeft, CheckCircle2, GitBranch, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
 import { formatDate } from 'shared';
-import { Button, Tooltip } from '../../ui';
+import { ActionTooltip, Button, ReasonedActionButton, Tooltip } from '../../ui';
 import { Input } from '../../ui/Input';
 import { Textarea } from '../../ui/Textarea';
 import { api, ApiError } from '../../lib/api';
@@ -13,6 +13,8 @@ import {
 } from '../../lib/agent-batch';
 import { toast } from '../../stores/toast';
 import { BatchLayerPlanner, type BatchPlanCard } from '../../components/BatchLayerPlanner';
+import type { ExecutionPlansExperiments } from '../../devtools/execution-plans-experiments';
+import type { PlanEditorBridge, PlanEditorAddMode } from './execution-plan-editor-bridge';
 import styles from './BoardExecutionPlansPanel.module.css';
 
 interface BoardExecutionPlansPanelProps {
@@ -22,12 +24,21 @@ interface BoardExecutionPlansPanelProps {
     name: string;
     columnId?: string | null;
     columnName?: string | null;
+    columnColor?: string | null;
+    assigneeId?: string | null;
+    assigneeName?: string | null;
   }>;
+  columnColors?: Record<string, string>;
+  experiments?: ExecutionPlansExperiments;
   onClose: () => void;
   onRunPlan: (plan: BoardExecutionPlan) => void;
+  onEditorBridgeChange?: (bridge: PlanEditorBridge | null) => void;
+  onEditorLayersChange?: (layers: BatchLayer[]) => void;
+  onExternalPlannerDrag?: (active: boolean) => void;
 }
 
 type EditorMode = 'list' | 'editor';
+const MAX_PLAN_DESCRIPTION_LENGTH = 2000;
 
 function emptyLayers(): BatchLayer[] {
   return [{ cards: [] }];
@@ -57,11 +68,27 @@ function describePlan(plan: BoardExecutionPlan): string {
   return `${cardCount} card${cardCount === 1 ? '' : 's'} · ${layerCount} layer${layerCount === 1 ? '' : 's'} · ${dependencyCount} dependency rule${dependencyCount === 1 ? '' : 's'}`;
 }
 
+type PlanTemplate = {
+  id: string;
+  label: string;
+  description: string;
+  buildLayers: () => BatchLayer[];
+};
+
+function layerFingerprint(layers: BatchLayer[]) {
+  return JSON.stringify(serializeLayers(layers));
+}
+
 export function BoardExecutionPlansPanel({
   boardId,
   availableCards,
+  columnColors = {},
+  experiments,
   onClose,
   onRunPlan,
+  onEditorBridgeChange,
+  onEditorLayersChange,
+  onExternalPlannerDrag,
 }: BoardExecutionPlansPanelProps) {
   const [plans, setPlans] = useState<BoardExecutionPlan[]>([]);
   const [mode, setMode] = useState<EditorMode>('list');
@@ -73,20 +100,45 @@ export function BoardExecutionPlansPanel({
   const [layers, setLayers] = useState<BatchLayer[]>(emptyLayers);
 
   const cardCount = useMemo(() => countCardsInLayers(layers), [layers]);
-  const layerCount = useMemo(
-    () => layers.filter((layer) => layer.cards.length > 0).length,
-    [layers],
-  );
-  const dependencyCount = useMemo(() => countDependencyRulesInLayers(layers), [layers]);
   const editingPlan = plans.find((plan) => plan.id === editingId) ?? null;
   const currentIssues = editingPlan?.issues ?? [];
+  const nextDescriptionValue = description.trim() || null;
+  const descriptionTooLong = description.length > MAX_PLAN_DESCRIPTION_LENGTH;
+  const dirty = mode === 'editor' && (
+    !editingPlan
+    || editingPlan.name !== name.trim()
+      || (editingPlan.description ?? null) !== nextDescriptionValue
+      || layerFingerprint(editingPlan.layers) !== layerFingerprint(layers)
+  );
+  const readinessIssues = [
+    ...(!name.trim() ? ['Name required before saving.'] : []),
+    ...(cardCount === 0 ? ['Assign at least one board card to a layer.'] : []),
+    ...(descriptionTooLong ? ['Description must stay under 2000 characters.'] : []),
+    ...currentIssues,
+  ];
+  const canRunEditingPlan = !!editingPlan && editingPlan.status === 'ready' && !dirty;
+  const runEditingLabel = canRunEditingPlan
+    ? 'Run plan'
+    : dirty
+      ? 'Save before running'
+      : readinessIssues[0] ?? 'Plan is not ready to run';
+  const canSave = Boolean(name.trim()) && !saving && !descriptionTooLong;
+  const saveDisabledReason = saving
+    ? 'Plan is saving.'
+    : !name.trim()
+      ? 'Enter a plan name before saving.'
+      : descriptionTooLong
+        ? 'Description must stay under 2000 characters before saving.'
+        : null;
 
   const fetchPlans = useCallback(async () => {
     try {
       const res = await api<{ entries: BoardExecutionPlan[] }>(`/boards/${boardId}/execution-plans`);
       setPlans(res.entries);
+      return res.entries;
     } catch {
       toast.error('Failed to load execution plans');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -104,6 +156,13 @@ export function BoardExecutionPlansPanel({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  const toPlanCard = useCallback((card: BoardExecutionPlansPanelProps['availableCards'][number]): BatchPlanCard => ({
+    id: card.id,
+    name: card.name,
+    subtitle: card.columnName ?? null,
+    columnColor: card.columnColor ?? (card.columnId ? columnColors[card.columnId] ?? null : null),
+  }), [columnColors]);
+
   const loadOptions = useCallback(async (query: string): Promise<BatchPlanCard[]> => {
     const needle = query.toLowerCase();
     return availableCards
@@ -113,18 +172,94 @@ export function BoardExecutionPlansPanel({
           || (card.columnName ?? '').toLowerCase().includes(needle);
       })
       .slice(0, 30)
-      .map((card) => ({
-        id: card.id,
-        name: card.name,
-        subtitle: card.columnName ?? null,
-      }));
-  }, [availableCards]);
+      .map(toPlanCard);
+  }, [availableCards, toPlanCard]);
 
-  function startNewPlan() {
+  const addCardsToLayers = useCallback((cards: BatchPlanCard[], mode: PlanEditorAddMode) => {
+    setLayers((prev) => {
+      const existing = new Set(prev.flatMap((layer) => layer.cards.map((card) => card.id)));
+      const fresh = cards.filter((card) => !existing.has(card.id));
+      if (fresh.length === 0) return prev;
+
+      if (mode === 'newLayer') {
+        const nonEmpty = prev.filter((layer) => layer.cards.length > 0);
+        return [...nonEmpty, { cards: fresh }];
+      }
+
+      if (prev.length === 0) return [{ cards: fresh }];
+      const lastIdx = prev.length - 1;
+      return prev.map((layer, idx) => (
+        idx === lastIdx ? { cards: [...layer.cards, ...fresh] } : layer
+      ));
+    });
+  }, []);
+
+  useEffect(() => {
+    onEditorLayersChange?.(layers);
+  }, [layers, onEditorLayersChange]);
+
+  useEffect(() => {
+    if (mode !== 'editor') {
+      onEditorBridgeChange?.(null);
+      return;
+    }
+    onEditorBridgeChange?.({
+      isEditing: true,
+      boardSelectionMode: Boolean(experiments?.selectionToolbar),
+      addCards: addCardsToLayers,
+    });
+  }, [addCardsToLayers, experiments?.selectionToolbar, mode, onEditorBridgeChange]);
+
+  const planTemplates = useMemo<PlanTemplate[]>(() => {
+    if (!experiments?.planTemplates) return [];
+
+    const byColumn = new Map<string, BatchPlanCard[]>();
+    for (const card of availableCards) {
+      const key = card.columnId ?? '__none__';
+      const list = byColumn.get(key) ?? [];
+      list.push(toPlanCard(card));
+      byColumn.set(key, list);
+    }
+
+    const templates: PlanTemplate[] = [
+      {
+        id: 'blank',
+        label: 'Blank plan',
+        description: 'Start with an empty layer.',
+        buildLayers: () => [{ cards: [] }],
+      },
+    ];
+
+    for (const [columnId, cards] of byColumn) {
+      if (cards.length === 0) continue;
+      const columnName = availableCards.find((c) => c.columnId === columnId)?.columnName ?? 'Column';
+      templates.push({
+        id: `column-${columnId}`,
+        label: columnName,
+        description: `${cards.length} card${cards.length === 1 ? '' : 's'} as one layer`,
+        buildLayers: () => [{ cards }],
+      });
+    }
+
+    if (availableCards.length > 0) {
+      templates.push({
+        id: 'all-columns',
+        label: 'All columns',
+        description: 'One layer per column, left to right',
+        buildLayers: () => [...byColumn.values()]
+          .filter((cards) => cards.length > 0)
+          .map((cards) => ({ cards })),
+      });
+    }
+
+    return templates;
+  }, [availableCards, experiments?.planTemplates, toPlanCard]);
+
+  function startNewPlan(template?: PlanTemplate) {
     setEditingId(null);
-    setName('');
+    setName(template && template.id !== 'blank' ? `${template.label} plan` : '');
     setDescription('');
-    setLayers(emptyLayers());
+    setLayers(template ? template.buildLayers() : emptyLayers());
     setMode('editor');
   }
 
@@ -144,15 +279,15 @@ export function BoardExecutionPlansPanel({
     setLayers(emptyLayers());
   }
 
-  async function handleSave() {
+  async function handleSave(options: { requireCards?: boolean; runAfterSave?: boolean } = {}) {
     const trimmedName = name.trim();
-    if (!trimmedName || saving) return;
+    if (!trimmedName || !canSave || (options.requireCards && cardCount === 0)) return null;
 
     setSaving(true);
     try {
       const body = {
         name: trimmedName,
-        description: description.trim() || null,
+        description: nextDescriptionValue,
         layers: serializeLayers(layers),
       };
 
@@ -164,19 +299,25 @@ export function BoardExecutionPlansPanel({
         : await api<BoardExecutionPlan>(`/boards/${boardId}/execution-plans`, {
             method: 'POST',
             body: JSON.stringify(body),
-          });
+      });
 
       setEditingId(saved.id);
+      setDescription(saved.description ?? '');
+      setLayers(saved.layers.length > 0 ? saved.layers : emptyLayers());
       setPlans((prev) => {
         const exists = prev.some((plan) => plan.id === saved.id);
         return exists
           ? prev.map((plan) => (plan.id === saved.id ? saved : plan))
           : [saved, ...prev];
       });
+      if (!editingId) await fetchPlans();
       toast.success(editingId ? 'Execution plan updated' : 'Execution plan created');
+      if (options.runAfterSave && saved.status === 'ready') onRunPlan(saved);
+      return saved;
     } catch (err) {
       if (err instanceof ApiError) toast.error(err.message);
       else toast.error('Failed to save execution plan');
+      return null;
     } finally {
       setSaving(false);
     }
@@ -198,12 +339,21 @@ export function BoardExecutionPlansPanel({
     onRunPlan(plan);
   }
 
+  const panelClass = [
+    styles.railPanel,
+    mode === 'editor' ? styles.editorPanel : styles.listPanel,
+  ].join(' ');
+  const bodyClass = [
+    styles.body,
+    mode === 'editor' ? styles.editorBody : styles.listBody,
+  ].join(' ');
+
   return (
-    <div className={styles.overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.panel}>
+    <div className={styles.railShell}>
+      <div className={panelClass}>
         <div className={styles.header}>
           <div className={styles.headerLeft}>
-            {mode === 'editor' && (
+            {mode !== 'list' && (
               <button className={styles.backBtn} onClick={backToList} aria-label="Back to plans">
                 <ArrowLeft size={15} />
               </button>
@@ -211,7 +361,9 @@ export function BoardExecutionPlansPanel({
             <div className={styles.headerIcon}>
               <GitBranch size={14} />
             </div>
-            <span className={styles.title}>{mode === 'editor' ? 'Execution Plan' : 'Execution Plans'}</span>
+            <span className={styles.title}>
+              {mode === 'editor' ? 'Execution Plan' : 'Execution Plans'}
+            </span>
           </div>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
             <X size={16} />
@@ -219,11 +371,30 @@ export function BoardExecutionPlansPanel({
         </div>
 
         {mode === 'list' ? (
-          <div className={styles.body}>
-            <Button onClick={startNewPlan}>
-              <Plus size={14} />
-              New plan
-            </Button>
+          <div className={bodyClass}>
+            {planTemplates.length > 0 ? (
+              <div className={styles.templateSection}>
+                <span className={styles.templateLabel}>New from template</span>
+                <div className={styles.templateGrid}>
+                  {planTemplates.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      className={styles.templateCard}
+                      onClick={() => startNewPlan(template)}
+                    >
+                      <span className={styles.templateCardTitle}>{template.label}</span>
+                      <span className={styles.templateCardDesc}>{template.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <Button onClick={() => startNewPlan()}>
+                <Plus size={14} />
+                New plan
+              </Button>
+            )}
 
             {loading ? (
               <div className={styles.empty}>Loading...</div>
@@ -270,18 +441,21 @@ export function BoardExecutionPlansPanel({
                           <Pencil size={14} />
                         </button>
                       </Tooltip>
-                      <Tooltip label={runLabel}>
-                        <span>
-                          <button
-                            className={styles.iconBtn}
-                            onClick={() => handleRun(plan)}
-                            disabled={!canRun}
-                            aria-label="Run from plan"
-                          >
-                            <Play size={14} />
-                          </button>
-                        </span>
-                      </Tooltip>
+                      <ActionTooltip
+                        label={runLabel}
+                        disabled={!canRun}
+                        focusable={!canRun}
+                        triggerLabel="Run from plan"
+                      >
+                        <button
+                          className={styles.iconBtn}
+                          onClick={() => handleRun(plan)}
+                          disabled={!canRun}
+                          aria-label="Run from plan"
+                        >
+                          <Play size={14} />
+                        </button>
+                      </ActionTooltip>
                       <Tooltip label="Delete plan">
                         <button
                           className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
@@ -299,7 +473,7 @@ export function BoardExecutionPlansPanel({
           </div>
         ) : (
           <>
-            <div className={styles.body}>
+            <div className={bodyClass}>
               <div className={styles.formGrid}>
                 <div className={styles.formField}>
                   <span className={styles.formLabel}>Name</span>
@@ -317,18 +491,9 @@ export function BoardExecutionPlansPanel({
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Optional notes for this plan"
                     rows={2}
-                    maxLength={2000}
+                    maxLength={MAX_PLAN_DESCRIPTION_LENGTH}
                   />
                 </div>
-              </div>
-
-              <div className={styles.statusStrip}>
-                <span>{cardCount} card{cardCount === 1 ? '' : 's'}</span>
-                <span>{layerCount} layer{layerCount === 1 ? '' : 's'}</span>
-                <span>{dependencyCount} dependency rule{dependencyCount === 1 ? '' : 's'}</span>
-                <span className={currentIssues.length > 0 ? styles.statusIssue : styles.statusOk}>
-                  {currentIssues.length > 0 ? `${currentIssues.length} issue${currentIssues.length === 1 ? '' : 's'}` : 'No saved issues'}
-                </span>
               </div>
 
               {currentIssues.length > 0 && (
@@ -348,17 +513,34 @@ export function BoardExecutionPlansPanel({
                 loadOptions={loadOptions}
                 searchPlaceholder="Search board cards or columns..."
                 emptySearchLabel="No board cards available"
+                experiments={{
+                  acceptBoardDrag: experiments?.boardDragIn,
+                  polish: experiments?.plannerPolish,
+                  dependencyShortcuts: experiments?.dependencyShortcuts,
+                }}
+                onExternalDragActive={onExternalPlannerDrag}
               />
             </div>
 
             <div className={styles.footer}>
               <Button variant="ghost" onClick={backToList}>Cancel</Button>
-              <Button
+              <ReasonedActionButton
+                variant="secondary"
+                onClick={() => editingPlan && handleRun(editingPlan)}
+                disabled={!canRunEditingPlan}
+                disabledReason={runEditingLabel}
+                aria-label="Run plan"
+              >
+                <Play size={14} />
+                Run
+              </ReasonedActionButton>
+              <ReasonedActionButton
                 onClick={() => void handleSave()}
-                disabled={saving || !name.trim()}
+                disabled={!canSave}
+                disabledReason={saveDisabledReason ?? undefined}
               >
                 {saving ? 'Saving...' : editingId ? 'Save changes' : 'Save plan'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </>
         )}

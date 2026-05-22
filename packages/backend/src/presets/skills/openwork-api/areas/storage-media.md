@@ -23,11 +23,6 @@ This section covers internal file browsing, uploads, downloads, and media servin
 - `POST /api/cards/description/images/upload`
 - `POST /api/cards/:id/comments/upload`
 
-## Widget scripts (non-API)
-
-- `GET /widget.js` (form widget bundle)
-- `GET /chat-widget.js` (chat widget bundle)
-
 ## Recommended patterns
 
 - For human-facing UI flows, prefer short-lived pre-signed or server-generated

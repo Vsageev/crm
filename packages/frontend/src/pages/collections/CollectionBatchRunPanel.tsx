@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, Bot, Play, Check, CheckCircle2, Minus, Plus, Zap, ChevronDown, Search, Tag, Save, ListOrdered, Layers } from 'lucide-react';
-import { Button, Tooltip } from '../../ui';
+import { ActionTooltip, ReasonedActionButton } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { AgentAvatar } from '../../components/AgentAvatar';
@@ -488,7 +488,13 @@ export function CollectionBatchRunPanel({
           </div>
           <div className={styles.footerActions}>
             {scopeMode === 'filters' && (
-              <Tooltip label="Save current settings as default" position="top">
+              <ActionTooltip
+                label={saving ? 'Default batch settings are saving.' : 'Save current settings as default'}
+                disabled={saving}
+                focusable={saving}
+                position="top"
+                triggerLabel="Save default batch settings"
+              >
                 <button
                   className={styles.saveConfigBtn}
                   onClick={() => void handleSaveConfig()}
@@ -498,32 +504,21 @@ export function CollectionBatchRunPanel({
                   <Save size={14} />
                   {saving ? 'Saving…' : 'Save'}
                 </button>
-              </Tooltip>
+              </ActionTooltip>
             )}
-            {disabledReason ? (
-              <Tooltip label={disabledReason} position="top">
-                <div style={{ cursor: 'not-allowed' }}>
-                  <Button
-                    variant="primary"
-                    disabled
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    <Play size={14} />
-                    {submitting ? 'Starting…' : 'Run batch'}
-                  </Button>
-                </div>
-              </Tooltip>
-            ) : (
-              <Button
-                variant="primary"
-                onClick={handleSubmit}
-              >
-                <Play size={14} />
-                {previewCount !== null && previewCount > 0
+            <ReasonedActionButton
+              variant="primary"
+              onClick={handleSubmit}
+              disabled={Boolean(disabledReason)}
+              disabledReason={disabledReason}
+            >
+              <Play size={14} />
+              {submitting
+                ? 'Starting…'
+                : previewCount !== null && previewCount > 0
                   ? `Run on ${previewCount} card${previewCount !== 1 ? 's' : ''}`
                   : 'Run batch'}
-              </Button>
-            )}
+            </ReasonedActionButton>
           </div>
         </div>
       </div>

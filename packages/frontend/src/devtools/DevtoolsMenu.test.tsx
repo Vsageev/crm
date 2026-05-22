@@ -44,6 +44,33 @@ describe('DevtoolsMenu', () => {
     );
   });
 
+  it('persists execution plan experiment boolean flags', () => {
+    render(<DevtoolsMenu enabled />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open devtools' }));
+    fireEvent.click(screen.getByLabelText('Board → plan drag'));
+
+    expect(window.localStorage.getItem('openwork:feature-flags:v1')).toContain(
+      '"executionPlans.boardDragIn":true',
+    );
+  });
+
+  it('does not expose alternate plans panel layouts', () => {
+    render(<DevtoolsMenu enabled />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open devtools' }));
+
+    expect(screen.queryByLabelText('Plans panel layout')).not.toBeInTheDocument();
+  });
+
+  it('does not expose alternate plans editor modes', () => {
+    render(<DevtoolsMenu enabled />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open devtools' }));
+
+    expect(screen.queryByLabelText('Plans editor mode')).not.toBeInTheDocument();
+  });
+
   it('parses common enabled env values only', () => {
     expect(isDevtoolsEnabledFromEnv('true')).toBe(true);
     expect(isDevtoolsEnabledFromEnv('1')).toBe(true);

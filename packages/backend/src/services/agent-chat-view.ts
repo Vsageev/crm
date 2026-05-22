@@ -1,6 +1,7 @@
 import { store } from '../db/index.js';
 import type { StoreRecord } from '../db/store.js';
 import { listAgentChatTurns, type AgentChatTurnStatus } from './agent-chat-turns.js';
+import { buildQueuedDisplayPositionById } from './agent-chat-queue-positions.js';
 
 const ROOT_BRANCH_KEY = '__root__';
 
@@ -120,7 +121,8 @@ export function getAgentConversationChatView(
     .getAll('agentChatQueue')
     .filter((item) => item.agentId === agentId && item.conversationId === conversationId)
     .sort(compareCreated);
-  const queuePositionById = buildQueuePositionById(queueItems);
+  const turns = listAgentChatTurns(agentId, conversationId);
+  const queuePositionById = buildQueuedDisplayPositionById(queueItems, turns);
   const runs = store
     .getAll('agent_runs')
     .filter(
@@ -130,7 +132,6 @@ export function getAgentConversationChatView(
         run.triggerType === 'chat',
     )
     .sort(compareRunStarted);
-  const turns = listAgentChatTurns(agentId, conversationId);
   const activeBranches = getActiveBranches(conversationId);
   const supersededByTurnId = new Map<string, string>();
   for (const turn of turns) {
@@ -313,18 +314,6 @@ function serializeRun(run: StoreRecord | null): ChatViewExecutionRun | null {
   };
 }
 
-function buildQueuePositionById(queueItems: StoreRecord[]): Map<string, number> {
-  const positions = new Map<string, number>();
-  let nextPosition = 1;
-  for (const item of queueItems) {
-    if (item.status !== 'queued' && item.status !== 'processing') continue;
-    if (typeof item.id !== 'string') continue;
-    positions.set(item.id, nextPosition);
-    nextPosition += 1;
-  }
-  return positions;
-}
-
 function serializeSibling(
   turn: StoreRecord,
   isSelected: boolean,
@@ -438,6 +427,8 @@ function resolveChatViewStatus(
   run: StoreRecord | null,
 ): ChatViewStatus {
   if (queue?.status === 'processing' || run?.status === 'running') return 'processing';
+  const status = asString(turn.status) as AgentChatTurnStatus | null;
+  if (status === 'superseded') return 'superseded';
   if (queue?.status === 'queued' || run?.status === 'queued') return 'queued';
   if (queue?.status === 'failed') return 'failed';
   if (queue?.status === 'cancelled') return 'stopped';
@@ -448,12 +439,10 @@ function resolveChatViewStatus(
       : 'failed';
   }
 
-  const status = asString(turn.status) as AgentChatTurnStatus | null;
   if (status === 'running') return 'processing';
   if (status === 'stopped') return 'stopped';
   if (status === 'failed') return 'failed';
   if (status === 'completed') return 'completed';
-  if (status === 'superseded') return 'superseded';
   return 'queued';
 }
 

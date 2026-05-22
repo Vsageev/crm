@@ -1,6 +1,7 @@
 export { Breadcrumb } from './Breadcrumb';
 export type { BreadcrumbItem } from './Breadcrumb';
 export { Button } from './Button';
+export type { ButtonProps, ButtonSize, ButtonVariant } from './Button';
 export { Card } from './Card';
 export { Badge } from './Badge';
 export { Input } from './Input';
@@ -10,6 +11,8 @@ export { PageLoader } from './PageLoader';
 export { ToastContainer } from './Toast';
 export { ErrorBoundary } from './ErrorBoundary';
 export { Tooltip } from './Tooltip';
+export { ActionTooltip, ReasonedActionButton } from './ActionTooltip';
+export type { DisabledActionReason, DisabledActionReasonKind } from './ActionTooltip';
 export { AnchoredOverlay } from './AnchoredOverlay';
 export { CronEditor } from './CronEditor';
 export { EntitySwitcher } from './EntitySwitcher';

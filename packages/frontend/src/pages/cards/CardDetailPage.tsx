@@ -6,7 +6,7 @@ import {
   FileText, User, Send, Check, Pencil, Loader2, ChevronDown, Copy, CloudOff, Star, History,
   Bold, Italic, Code, List, Heading2, ChevronLeft, ChevronRight, Image,
 } from 'lucide-react';
-import { Breadcrumb, Button, MarkdownContent, PageLoader, Tooltip } from '../../ui';
+import { ActionTooltip, Breadcrumb, Button, MarkdownContent, PageLoader, ReasonedActionButton, Tooltip } from '../../ui';
 import { ImageLightbox } from '../../ui/ImageLightbox';
 import type { BreadcrumbItem } from '../../ui';
 import { AgentAvatar } from '../../components/AgentAvatar';
@@ -1324,15 +1324,22 @@ export function CardDetailPage() {
                       <button type="button" className={styles.mdToolbarBtn} title="Italic" onClick={() => insertFormat('italic')}><Italic size={13} /></button>
                       <button type="button" className={styles.mdToolbarBtn} title="Inline code" onClick={() => insertFormat('code')}><Code size={13} /></button>
                       <button type="button" className={styles.mdToolbarBtn} title="Link" onClick={() => insertFormat('link')}><Link2 size={13} /></button>
-                      <button
-                        type="button"
-                        className={styles.mdToolbarBtn}
-                        title="Insert images"
-                        onClick={() => descFileInputRef.current?.click()}
+                      <ActionTooltip
+                        label={uploadingDescImages ? 'Wait for image uploads to finish.' : 'Insert images'}
                         disabled={uploadingDescImages}
+                        focusable={uploadingDescImages}
+                        triggerLabel="Insert images"
                       >
-                        <Image size={13} />
-                      </button>
+                        <button
+                          type="button"
+                          className={styles.mdToolbarBtn}
+                          onClick={() => descFileInputRef.current?.click()}
+                          disabled={uploadingDescImages}
+                          aria-label="Insert images"
+                        >
+                          <Image size={13} />
+                        </button>
+                      </ActionTooltip>
                       <span className={styles.mdToolbarSep} />
                       <button type="button" className={styles.mdToolbarBtn} title="Bullet list" onClick={() => insertFormat('bullet')}><List size={13} /></button>
                       <button type="button" className={styles.mdToolbarBtn} title="Heading" onClick={() => insertFormat('heading')}><Heading2 size={13} /></button>
@@ -1501,14 +1508,15 @@ export function CardDetailPage() {
                             />
                             <div className={styles.commentEditActions}>
                               <Button variant="ghost" size="sm" onClick={cancelEditComment}>Cancel</Button>
-                              <Button
+                              <ReasonedActionButton
                                 size="sm"
                                 onClick={() => void saveEditComment(c.id)}
                                 disabled={!editCommentDraft.trim() || savingEditComment}
+                                disabledReason={savingEditComment ? 'Comment is saving.' : 'Enter a comment before saving.'}
                               >
                                 {savingEditComment ? <Loader2 size={12} className={styles.spinner} /> : <Check size={12} />}
                                 Save
-                              </Button>
+                              </ReasonedActionButton>
                             </div>
                           </div>
                         ) : (
@@ -1571,7 +1579,12 @@ export function CardDetailPage() {
                       className={styles.commentHiddenFileInput}
                       onChange={handleCommentFileSelect}
                     />
-                    <Tooltip label={stagedImages.length >= MAX_COMMENT_IMAGES ? `Max ${MAX_COMMENT_IMAGES} images` : 'Attach images'}>
+                    <ActionTooltip
+                      label={uploadingImages ? 'Wait for image uploads to finish.' : stagedImages.length >= MAX_COMMENT_IMAGES ? `Remove an image before attaching more than ${MAX_COMMENT_IMAGES}.` : 'Attach images'}
+                      disabled={uploadingImages || stagedImages.length >= MAX_COMMENT_IMAGES}
+                      focusable={uploadingImages || stagedImages.length >= MAX_COMMENT_IMAGES}
+                      triggerLabel="Attach images"
+                    >
                       <button
                         className={styles.commentAttachBtn}
                         onClick={() => commentFileInputRef.current?.click()}
@@ -1580,7 +1593,7 @@ export function CardDetailPage() {
                       >
                         <Image size={14} />
                       </button>
-                    </Tooltip>
+                    </ActionTooltip>
                     <textarea
                       ref={commentTextareaRef}
                       className={styles.commentTextarea}
@@ -1598,16 +1611,21 @@ export function CardDetailPage() {
                       onPaste={handleCommentPaste}
                       disabled={uploadingImages}
                     />
-                    <Tooltip label="Send">
+                    <ActionTooltip
+                      label={submittingComment ? 'Comment is sending.' : (!newComment.trim() && stagedImages.length === 0) ? 'Write a comment or attach an image before sending.' : 'Send'}
+                      disabled={(!newComment.trim() && stagedImages.length === 0) || submittingComment}
+                      focusable={(!newComment.trim() && stagedImages.length === 0) || submittingComment}
+                      triggerLabel="Send comment"
+                    >
                       <button
                         className={styles.commentSend}
                         onClick={addComment}
                         disabled={(!newComment.trim() && stagedImages.length === 0) || submittingComment}
-                        aria-label="Send"
+                        aria-label="Send comment"
                       >
                         <Send size={14} />
                       </button>
-                    </Tooltip>
+                    </ActionTooltip>
                   </div>
                   {(newComment.trim() || stagedImages.length > 0) && (
                     <span className={styles.commentHint}>
@@ -1642,15 +1660,23 @@ export function CardDetailPage() {
                   ) : allCollections.length > 0 ? (
                     <div className={styles.resultsList}>
                       {allCollections.map((col) => (
-                        <button
+                        <ActionTooltip
                           key={col.id}
-                          className={`${styles.resultItem}${col.id === card.collectionId ? ` ${styles.resultItemActive}` : ''}`}
-                          onClick={() => moveToCollection(col.id)}
+                          label={movingCollection ? 'Card is moving to another collection.' : col.id === card.collectionId ? 'Card is already in this collection.' : `Move to ${col.name}.`}
                           disabled={col.id === card.collectionId || movingCollection}
+                          focusable={col.id === card.collectionId || movingCollection}
+                          position="right"
+                          triggerLabel={`Move to ${col.name}`}
                         >
-                          <FolderOpen size={12} /> {col.name}
-                          {col.id === card.collectionId && <Check size={12} className={styles.checkIcon} />}
-                        </button>
+                          <button
+                            className={`${styles.resultItem}${col.id === card.collectionId ? ` ${styles.resultItemActive}` : ''}`}
+                            onClick={() => moveToCollection(col.id)}
+                            disabled={col.id === card.collectionId || movingCollection}
+                          >
+                            <FolderOpen size={12} /> {col.name}
+                            {col.id === card.collectionId && <Check size={12} className={styles.checkIcon} />}
+                          </button>
+                        </ActionTooltip>
                       ))}
                     </div>
                   ) : (
@@ -1820,9 +1846,16 @@ export function CardDetailPage() {
                       onChange={(e) => setNewTagColor(e.target.value)}
                       aria-label="Tag color"
                     />
+                    <ActionTooltip
+                      label={creatingTag ? 'Tag is being created.' : !newTagName.trim() ? 'Enter a tag name before creating it.' : 'Create tag.'}
+                      disabled={!newTagName.trim() || creatingTag}
+                      focusable={!newTagName.trim() || creatingTag}
+                      triggerLabel="Create tag"
+                    >
                     <button className={styles.sectionAction} onClick={createTag} disabled={!newTagName.trim() || creatingTag}>
                       {creatingTag ? '...' : 'Create'}
                     </button>
+                    </ActionTooltip>
                   </div>
                   {allTags.length > 0 ? (
                     <div className={styles.tagMgrList}>
@@ -1833,14 +1866,26 @@ export function CardDetailPage() {
                             <span>{tag.name}</span>
                           </div>
                           <div className={styles.tagMgrActions}>
-                            <button
-                              className={styles.sectionAction}
-                              onClick={() => addTag(tag.id)}
+                            <ActionTooltip
+                              label={tagIds.has(tag.id) ? `"${tag.name}" is already on this card.` : `Add "${tag.name}" to this card.`}
                               disabled={tagIds.has(tag.id)}
+                              focusable={tagIds.has(tag.id)}
+                              triggerLabel={`Add ${tag.name}`}
                             >
-                              {tagIds.has(tag.id) ? 'Added' : 'Add'}
-                            </button>
-                            <Tooltip label="Delete tag">
+                              <button
+                                className={styles.sectionAction}
+                                onClick={() => addTag(tag.id)}
+                                disabled={tagIds.has(tag.id)}
+                              >
+                                {tagIds.has(tag.id) ? 'Added' : 'Add'}
+                              </button>
+                            </ActionTooltip>
+                            <ActionTooltip
+                              label={deletingTagId === tag.id ? 'Tag is being deleted.' : 'Delete tag'}
+                              disabled={deletingTagId === tag.id}
+                              focusable={deletingTagId === tag.id}
+                              triggerLabel="Delete tag"
+                            >
                               <button
                                 className={styles.tagMgrDelete}
                                 onClick={() => deleteTag(tag.id)}
@@ -1849,7 +1894,7 @@ export function CardDetailPage() {
                               >
                                 <Trash2 size={11} />
                               </button>
-                            </Tooltip>
+                            </ActionTooltip>
                           </div>
                         </div>
                       ))}
@@ -1971,14 +2016,21 @@ export function CardDetailPage() {
                       >
                         {String(value) || <em className={styles.cfEmpty}>empty</em>}
                       </span>
-                      <button
-                        className={styles.cfDeleteBtn}
-                        onClick={() => void deleteCustomField(key)}
-                        title={`Remove "${key}"`}
+                      <ActionTooltip
+                        label={savingCf ? 'Custom field changes are saving.' : `Remove "${key}".`}
                         disabled={savingCf}
+                        focusable={savingCf}
+                        triggerLabel={`Remove ${key}`}
                       >
-                        <X size={11} />
-                      </button>
+                        <button
+                          className={styles.cfDeleteBtn}
+                          onClick={() => void deleteCustomField(key)}
+                          disabled={savingCf}
+                          aria-label={`Remove "${key}"`}
+                        >
+                          <X size={11} />
+                        </button>
+                      </ActionTooltip>
                     </div>
                   )}
                 </div>
@@ -2008,13 +2060,20 @@ export function CardDetailPage() {
                     }}
                   />
                   <div className={styles.cfAddActions}>
-                    <button
-                      className={styles.cfSaveBtn}
-                      onClick={() => void commitAddCf()}
+                    <ActionTooltip
+                      label={savingCf ? 'Custom field changes are saving.' : !newCfKey.trim() ? 'Enter a field name before adding it.' : 'Add custom field.'}
                       disabled={!newCfKey.trim() || savingCf}
+                      focusable={!newCfKey.trim() || savingCf}
+                      triggerLabel="Add custom field"
                     >
-                      <Check size={11} /> Add
-                    </button>
+                      <button
+                        className={styles.cfSaveBtn}
+                        onClick={() => void commitAddCf()}
+                        disabled={!newCfKey.trim() || savingCf}
+                      >
+                        <Check size={11} /> Add
+                      </button>
+                    </ActionTooltip>
                     <button
                       className={styles.cfCancelBtn}
                       onClick={() => { setAddingCf(false); setNewCfKey(''); setNewCfValue(''); }}

@@ -4,23 +4,27 @@ import * as schema from '../schema.js';
 import type { StoreRecord } from '../store.js';
 import { getFlushedNativeDb, recordFromLegacyRow } from './native-repository-utils.js';
 
-export async function findValidRefreshTokenByHash(tokenHash: string): Promise<StoreRecord | null> {
+export async function consumeValidRefreshTokenByHash(tokenHash: string): Promise<StoreRecord | null> {
   const db = await getFlushedNativeDb();
   if (!db) {
-    return (
-      store.getAll('refreshTokens').find(
-        (r) =>
-          r.tokenHash === tokenHash && new Date(String(r.expiresAt)).getTime() > Date.now(),
-      ) ?? null
+    const record = store.getAll('refreshTokens').find(
+      (r) =>
+        r.tokenHash === tokenHash && new Date(String(r.expiresAt)).getTime() > Date.now(),
     );
+    if (!record) return null;
+    await store.delete('refreshTokens', String(record.id));
+    return record;
   }
+
   const rows = await db
-    .select()
-    .from(schema.refreshTokens)
+    .delete(schema.refreshTokens)
     .where(
       and(eq(schema.refreshTokens.tokenHash, tokenHash), gt(schema.refreshTokens.expiresAt, new Date())),
     )
-    .limit(1);
+    .returning();
+  if (rows[0]) {
+    await store.delete('refreshTokens', rows[0].id);
+  }
   return rows[0] ? recordFromLegacyRow(rows[0]) : null;
 }
 

@@ -180,7 +180,7 @@ function Hero() {
                     <div className="mini-stack">
                       <div className="mini-card">
                         <span className="mini-tag mini-tag--blue">Inbox</span>
-                        <p>Widget feedback — checkout step</p>
+                        <p>Checkout feedback — payment step</p>
                         <span className="mini-meta">
                           <MessageSquare size={12} aria-hidden="true" />6
                         </span>
@@ -227,7 +227,7 @@ function ProofStrip() {
     [Bot, 'Agents'],
     [Webhook, 'Webhooks'],
     [Layers, 'Collections'],
-    [LayoutGrid, 'Widgets'],
+    [LayoutGrid, 'Workspaces'],
   ];
   return (
     <section className="strip" aria-label="Product surfaces">
@@ -554,7 +554,7 @@ function CapabilityGrid() {
 const LOOP: { title: string; detail: string }[] = [
   {
     title: 'Capture',
-    detail: 'Messages, widgets, and webhooks become cards with originating context attached.',
+    detail: 'Messages and webhooks become cards with originating context attached.',
   },
   {
     title: 'Coordinate',
@@ -635,7 +635,7 @@ function SplitNarrative() {
               <li>
                 <Inbox size={14} strokeWidth={2} aria-hidden="true" />
                 <div>
-                  <p>Widget checkout — new thread</p>
+                  <p>Checkout issue — new thread</p>
                   <span>→ Customer launch board · Build</span>
                 </div>
                 <span className="split-mock__assign">

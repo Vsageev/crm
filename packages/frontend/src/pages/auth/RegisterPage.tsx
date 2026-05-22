@@ -4,6 +4,10 @@ import { Button, Input } from '../../ui';
 import { useAuth } from '../../stores/useAuth';
 import { getErrorMessage } from '../../lib/error-messages';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import {
+  getPasswordRequirementChecks,
+  getRegisterPasswordFieldError,
+} from '../../lib/register-password-validation';
 import styles from './RegisterPage.module.css';
 
 type StrengthLevel = 'weak' | 'medium' | 'strong';
@@ -11,15 +15,11 @@ type StrengthLevel = 'weak' | 'medium' | 'strong';
 function getPasswordStrength(password: string): { level: StrengthLevel; score: number } {
   if (!password) return { level: 'weak', score: 0 };
 
-  let score = 0;
-  if (password.length >= 8) score++;
-  if (password.length >= 12) score++;
-  if (/[A-Z]/.test(password)) score++;
-  if (/[0-9]/.test(password)) score++;
-  if (/[^A-Za-z0-9]/.test(password)) score++;
+  const checks = getPasswordRequirementChecks(password);
+  const metCount = checks.filter((check) => check.met).length;
 
-  if (score <= 2) return { level: 'weak', score: 1 };
-  if (score <= 3) return { level: 'medium', score: 2 };
+  if (metCount <= 1) return { level: 'weak', score: 1 };
+  if (metCount <= 3) return { level: 'medium', score: 2 };
   return { level: 'strong', score: 3 };
 }
 
@@ -44,20 +44,17 @@ export function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const strength = useMemo(() => getPasswordStrength(password), [password]);
-
-  const requirements = useMemo(() => [
-    { label: 'At least 8 characters', met: password.length >= 8 },
-    { label: 'One uppercase letter', met: /[A-Z]/.test(password) },
-    { label: 'One number', met: /[0-9]/.test(password) },
-    { label: 'One special character', met: /[^A-Za-z0-9]/.test(password) },
-  ], [password]);
+  const requirements = useMemo(() => getPasswordRequirementChecks(password), [password]);
 
   function validate(): boolean {
     const errors: Record<string, string> = {};
     if (firstName.trim().length === 0) errors.firstName = 'First name is required';
     if (lastName.trim().length === 0) errors.lastName = 'Last name is required';
     if (!email.trim()) errors.email = 'Email is required';
-    if (password.length < 8) errors.password = 'Password must be at least 8 characters';
+
+    const passwordError = getRegisterPasswordFieldError(password);
+    if (passwordError) errors.password = passwordError;
+
     if (password !== confirmPassword) errors.confirmPassword = 'Passwords do not match';
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -166,7 +163,7 @@ export function RegisterPage() {
             </span>
             <div className={styles.requirements}>
               {requirements.map((req) => (
-                <span key={req.label} className={styles.requirement} data-met={req.met}>
+                <span key={req.id} className={styles.requirement} data-met={req.met}>
                   <svg
                     className={styles.requirementIcon}
                     viewBox="0 0 14 14"

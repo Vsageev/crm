@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Folder, File, ChevronRight, CornerLeftUp, HardDrive, X, Check, Info } from 'lucide-react';
-import { Button, Tooltip } from '../ui';
+import { Button, ReasonedActionButton, Tooltip } from '../ui';
 import { api, ApiError } from '../lib/api';
 import styles from './FileSystemBrowserModal.module.css';
 
@@ -128,6 +128,11 @@ export function FileSystemBrowserModal({
   const visibleEntries = selectionMode === 'folder'
     ? entries.filter((entry) => entry.type === 'folder')
     : entries;
+  const selectDisabledReason = !pathInput.trim()
+    ? selectionMode === 'folder'
+      ? 'Enter or browse to a folder path before selecting.'
+      : 'Enter or select a path before selecting.'
+    : null;
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -229,9 +234,14 @@ export function FileSystemBrowserModal({
           />
           <div className={styles.footerActions}>
             <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button size="sm" onClick={handleSelectCurrent} disabled={!pathInput.trim()}>
+            <ReasonedActionButton
+              size="sm"
+              onClick={handleSelectCurrent}
+              disabled={Boolean(selectDisabledReason)}
+              disabledReason={selectDisabledReason}
+            >
               Select
-            </Button>
+            </ReasonedActionButton>
           </div>
         </div>
       </div>

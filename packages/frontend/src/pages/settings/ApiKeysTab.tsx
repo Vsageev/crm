@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Copy, Check, AlertTriangle } from 'lucide-react';
-import { Button, Card, Badge, ApiKeyFormFields, Tooltip, type ApiKeyFormData } from '../../ui';
+import { Button, Card, Badge, ApiKeyFormFields, ReasonedActionButton, Tooltip, type ApiKeyFormData } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import { scrollToFirstError } from '../../lib/scroll-to-error';
 import styles from './SettingsPage.module.css';
@@ -286,6 +286,13 @@ export function ApiKeysTab() {
   const defaultAgentKeyChanged = defaultAgentKeyId !== savedDefaultAgentKeyId;
   const defaultAgentKeyUnavailable =
     Boolean(defaultAgentKeyId) && !activeKeys.some((key) => key.id === defaultAgentKeyId);
+  const saveDefaultDisabledReason = defaultKeyLoading
+    ? 'Default agent key is still loading.'
+    : defaultKeySaving
+      ? 'Default agent key is already being saved.'
+      : !defaultAgentKeyChanged
+        ? 'Choose a different default agent key before saving.'
+        : null;
 
   return (
     <div>
@@ -335,13 +342,14 @@ export function ApiKeysTab() {
                   </option>
                 ))}
               </select>
-              <Button
+              <ReasonedActionButton
                 size="sm"
                 onClick={handleSaveDefaultAgentKey}
-                disabled={defaultKeyLoading || defaultKeySaving || !defaultAgentKeyChanged}
+                disabled={Boolean(saveDefaultDisabledReason)}
+                disabledReason={saveDefaultDisabledReason}
               >
                 {defaultKeySaving ? 'Saving...' : 'Save default'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </div>
         </Card>

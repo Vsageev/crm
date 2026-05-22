@@ -290,6 +290,16 @@
   background: var(--color-surface);
 }
 
+.iconBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.iconBtn:disabled:hover {
+  color: var(--color-text-tertiary);
+  background: none;
+}
+
 .iconBtnDanger:hover {
   color: var(--color-error);
   background: rgba(239, 68, 68, 0.08);

@@ -6,6 +6,7 @@ import {
   getAgentModelDefaultId,
   getAgentModelOptions,
 } from '../../lib/agent-models';
+import { ActionTooltip } from '../../ui';
 import styles from './FallbackModelTab.module.css';
 
 type ModelId = (typeof MODELS)[number]['id'];
@@ -49,6 +50,14 @@ export function FallbackModelTab() {
   );
 
   const hasFallback = settings?.fallbackModel != null;
+  const clearDisabledReason = saving ? 'Fallback model settings are already being saved.' : null;
+  const saveDisabledReason = saving
+    ? 'Fallback model settings are already being saved.'
+    : !selectedModel
+      ? 'Select a fallback provider before saving.'
+      : !hasChanges
+        ? 'Change the fallback model before saving.'
+        : null;
 
   function getVariantHint(): string {
     if (selectedModel === 'cursor') {
@@ -188,22 +197,34 @@ export function FallbackModelTab() {
 
         <div className={styles.actions}>
           {hasFallback && (
-            <button
-              className={styles.clearBtn}
-              disabled={saving}
-              onClick={handleClear}
+            <ActionTooltip
+              label={clearDisabledReason ?? 'Remove fallback'}
+              disabled={Boolean(clearDisabledReason)}
+              triggerLabel="Remove fallback"
             >
-              Remove fallback
-            </button>
+              <button
+                className={styles.clearBtn}
+                disabled={Boolean(clearDisabledReason)}
+                onClick={handleClear}
+              >
+                Remove fallback
+              </button>
+            </ActionTooltip>
           )}
-          <button
-            className={styles.saveBtn}
-            disabled={!selectedModel || !hasChanges || saving}
-            onClick={handleSave}
+          <ActionTooltip
+            label={saveDisabledReason ?? 'Save changes'}
+            disabled={Boolean(saveDisabledReason)}
+            triggerLabel="Save changes"
           >
-            <Save size={14} />
-            {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
-          </button>
+            <button
+              className={styles.saveBtn}
+              disabled={Boolean(saveDisabledReason)}
+              onClick={handleSave}
+            >
+              <Save size={14} />
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
+            </button>
+          </ActionTooltip>
         </div>
       </div>
     </div>

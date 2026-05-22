@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useId } from 'react';
 import { Mail, Calendar, Shield, Check } from 'lucide-react';
+import { PASSWORD_POLICY_SUMMARY, validatePasswordStrength } from 'shared';
 import { Button } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -11,9 +12,9 @@ const STRENGTH_LABELS = ['Weak', 'Fair', 'Good', 'Strong'];
 function getPasswordStrength(password: string): number {
   let score = 0;
   if (password.length >= 8) score++;
-  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[a-z]/.test(password)) score++;
   if (/\d/.test(password)) score++;
-  if (/[^A-Za-z0-9]/.test(password)) score++;
   return Math.min(score - 1, 3); // 0–3
 }
 
@@ -41,6 +42,26 @@ export function ProfileTab() {
 
   const profileDirty = firstName !== (user?.firstName ?? '') || lastName !== (user?.lastName ?? '');
   const passwordStrength = newPassword.length > 0 ? getPasswordStrength(newPassword) : -1;
+  const profileHelpId = useId();
+  const passwordHelpId = useId();
+  const profileSaveHelp = savingProfile
+    ? null
+    : !firstName.trim()
+      ? 'Enter a first name before saving.'
+      : !lastName.trim()
+        ? 'Enter a last name before saving.'
+        : !profileDirty
+          ? 'Change your name before saving.'
+          : null;
+  const passwordChangeHelp = changingPassword
+    ? null
+    : !currentPassword
+      ? 'Enter your current password before changing it.'
+      : !newPassword
+        ? 'Enter a new password before changing it.'
+        : !confirmPassword
+          ? 'Confirm the new password before changing it.'
+          : null;
 
   const handleSaveProfile = useCallback(async () => {
     if (!profileDirty || savingProfile) return;
@@ -76,8 +97,9 @@ export function ProfileTab() {
       setPasswordError('Current password is required');
       return;
     }
-    if (newPassword.length < 8) {
-      setPasswordError('New password must be at least 8 characters');
+    const passwordCheck = validatePasswordStrength(newPassword);
+    if (!passwordCheck.valid) {
+      setPasswordError(passwordCheck.errors[0]);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -149,6 +171,7 @@ export function ProfileTab() {
                 onChange={(e) => setFirstName(e.target.value)}
                 disabled={savingProfile}
                 maxLength={100}
+                aria-describedby={profileSaveHelp ? profileHelpId : undefined}
               />
             </div>
             <div className={styles.field}>
@@ -160,6 +183,7 @@ export function ProfileTab() {
                 onChange={(e) => setLastName(e.target.value)}
                 disabled={savingProfile}
                 maxLength={100}
+                aria-describedby={profileSaveHelp ? profileHelpId : undefined}
               />
             </div>
           </div>
@@ -172,6 +196,11 @@ export function ProfileTab() {
             >
               {savingProfile ? 'Saving...' : 'Save Changes'}
             </Button>
+            {profileSaveHelp && (
+              <span id={profileHelpId} className={styles.actionHelp}>
+                {profileSaveHelp}
+              </span>
+            )}
             {profileSaved && (
               <span className={styles.savedIndicator}>
                 <Check size={14} /> Saved
@@ -221,7 +250,7 @@ export function ProfileTab() {
       <div className={styles.section}>
         <div>
           <h3 className={styles.sectionTitle}>Change Password</h3>
-          <p className={styles.sectionDesc}>Update your password. Must include uppercase, lowercase, number, and special character.</p>
+          <p className={styles.sectionDesc}>Update your password. {PASSWORD_POLICY_SUMMARY}.</p>
         </div>
 
         {passwordError && <div className={styles.errorMsg}>{passwordError}</div>}
@@ -238,6 +267,7 @@ export function ProfileTab() {
               onChange={(e) => { setCurrentPassword(e.target.value); setPasswordError(''); }}
               disabled={changingPassword}
               autoComplete="current-password"
+              aria-describedby={passwordChangeHelp ? passwordHelpId : undefined}
             />
           </div>
 
@@ -251,6 +281,7 @@ export function ProfileTab() {
               onChange={(e) => { setNewPassword(e.target.value); setPasswordError(''); }}
               disabled={changingPassword}
               autoComplete="new-password"
+              aria-describedby={passwordChangeHelp ? passwordHelpId : undefined}
             />
             {passwordStrength >= 0 && (
               <>
@@ -277,6 +308,7 @@ export function ProfileTab() {
               onChange={(e) => { setConfirmPassword(e.target.value); setPasswordError(''); }}
               disabled={changingPassword}
               autoComplete="new-password"
+              aria-describedby={passwordChangeHelp ? passwordHelpId : undefined}
             />
           </div>
 
@@ -288,6 +320,11 @@ export function ProfileTab() {
             >
               {changingPassword ? 'Changing...' : 'Change Password'}
             </Button>
+            {passwordChangeHelp && (
+              <span id={passwordHelpId} className={styles.actionHelp}>
+                {passwordChangeHelp}
+              </span>
+            )}
           </div>
         </div>
       </div>

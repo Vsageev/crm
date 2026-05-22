@@ -120,6 +120,20 @@ describe('board execution plans', () => {
     expect(entries[0]?.name).toBe('Release plan');
   });
 
+  it('marks a checklist-built plan ready when it has at least one valid board card', async () => {
+    const plan = await createBoardExecutionPlan(
+      {
+        boardId: 'board-1',
+        name: 'Coverage checklist plan',
+        layers: [{ cards: [{ id: 'card-a' }] }],
+      },
+      'user-1',
+    );
+
+    expect(plan.status).toBe('ready');
+    expect(plan.issues).toEqual([]);
+  });
+
   it('marks plans invalid when a saved card is no longer on the board', async () => {
     const plan = await createBoardExecutionPlan(
       {

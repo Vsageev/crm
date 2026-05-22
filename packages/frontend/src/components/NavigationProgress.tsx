@@ -43,19 +43,21 @@ export function NavigationProgress() {
 
     cleanup();
 
-    // Start: jump to a visible amount immediately
-    setVisible(true);
-    setProgress(15);
+    const startTimeout = setTimeout(() => {
+      // Start: jump to a visible amount immediately
+      setVisible(true);
+      setProgress(15);
 
-    // Trickle: slowly increase progress
-    trickleRef.current = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 85) return prev;
-        // Slow down as we approach 85%
-        const increment = prev < 50 ? 8 : prev < 70 ? 3 : 1;
-        return Math.min(prev + increment, 85);
-      });
-    }, 200);
+      // Trickle: slowly increase progress
+      trickleRef.current = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 85) return prev;
+          // Slow down as we approach 85%
+          const increment = prev < 50 ? 8 : prev < 70 ? 3 : 1;
+          return Math.min(prev + increment, 85);
+        });
+      }, 200);
+    }, 0);
 
     // Complete after a short delay (simulate page load finishing)
     // In practice, lazy components load fast since they're small chunks
@@ -72,6 +74,7 @@ export function NavigationProgress() {
 
     return () => {
       cleanup();
+      clearTimeout(startTimeout);
       clearTimeout(completeTimeout);
     };
   }, [location.pathname, cleanup]);

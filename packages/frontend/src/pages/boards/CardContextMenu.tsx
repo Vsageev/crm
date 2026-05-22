@@ -56,6 +56,9 @@ interface CardContextMenuProps {
   onDeleteCard: (cardId: string, cardName: string) => void;
   onAssignCard: (cardId: string, assigneeId: string | null) => Promise<void>;
   onToggleTag: (cardId: string, tagId: string) => Promise<void>;
+  planSelectionEnabled?: boolean;
+  selectedForPlan?: boolean;
+  onTogglePlanCardSelection?: (cardId: string) => void;
 }
 
 export function CardContextMenu({
@@ -78,8 +81,11 @@ export function CardContextMenu({
   onDeleteCard,
   onAssignCard,
   onToggleTag,
+  planSelectionEnabled = false,
+  selectedForPlan = false,
+  onTogglePlanCardSelection,
 }: CardContextMenuProps) {
-  const [showTagsMenu, setShowTagsMenu] = useState(false);
+  const [showTagsMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [showAssigneeMenu, setShowAssigneeMenu] = useState(false);
   const assigneeButtonRef = useRef<HTMLDivElement>(null);
@@ -196,6 +202,18 @@ export function CardContextMenu({
       {/* Quick Actions Section */}
       <div className={styles.menuSection}>
         <div className={styles.menuLabel}>Quick Actions</div>
+        {planSelectionEnabled && onTogglePlanCardSelection && (
+          <button
+            className={styles.menuItemNeutral}
+            onClick={() => {
+              onTogglePlanCardSelection(cardId);
+              onClose();
+            }}
+          >
+            <Check size={14} />
+            {selectedForPlan ? 'Remove from plan selection' : 'Select for plan'}
+          </button>
+        )}
         
         {/* Assignee Quick Pick */}
         <div className={styles.menuItemWrap} ref={assigneeButtonRef}>

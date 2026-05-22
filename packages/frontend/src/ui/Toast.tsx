@@ -23,12 +23,10 @@ function VariantIcon({ variant }: { variant: ToastVariant }) {
 /** Returns a value from 1 (full) to 0 (expired) representing remaining time */
 function useCountdownProgress(toast: ToastItem): number {
   const [progress, setProgress] = useState(1);
+  const shouldShowProgress = toast.duration > 0 && !toast.dismissing;
 
   useEffect(() => {
-    if (toast.duration <= 0 || toast.dismissing) {
-      setProgress(1);
-      return;
-    }
+    if (!shouldShowProgress) return;
 
     if (toast.paused) return; // freeze progress when paused
 
@@ -41,9 +39,9 @@ function useCountdownProgress(toast: ToastItem): number {
     tick();
     const interval = setInterval(tick, 50);
     return () => clearInterval(interval);
-  }, [toast.duration, toast.createdAt, toast.paused, toast.dismissing]);
+  }, [toast.duration, toast.createdAt, toast.paused, shouldShowProgress]);
 
-  return progress;
+  return shouldShowProgress ? progress : 1;
 }
 
 function ToastRow({ t }: { t: ToastItem }) {

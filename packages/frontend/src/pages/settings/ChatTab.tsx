@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { MessageSquare, Save, FileText } from 'lucide-react';
 import { api } from '../../lib/api';
+import { ActionTooltip } from '../../ui';
 import styles from './ChatTab.module.css';
 
 interface ChatSettings {
@@ -26,6 +27,11 @@ export function ChatTab() {
   const hasChanges =
     settings !== null &&
     draftEnabled !== settings.autoAttachOversizedPasteAsTextFile;
+  const saveDisabledReason = saving
+    ? 'Chat settings are already being saved.'
+    : !hasChanges
+      ? 'Change a chat setting before saving.'
+      : null;
 
   async function handleSave() {
     setSaving(true);
@@ -99,14 +105,20 @@ export function ChatTab() {
         </div>
 
         <div className={styles.actions}>
-          <button
-            className={styles.saveBtn}
-            disabled={!hasChanges || saving}
-            onClick={handleSave}
+          <ActionTooltip
+            label={saveDisabledReason ?? 'Save changes'}
+            disabled={Boolean(saveDisabledReason)}
+            triggerLabel="Save changes"
           >
-            <Save size={14} />
-            {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
-          </button>
+            <button
+              className={styles.saveBtn}
+              disabled={Boolean(saveDisabledReason)}
+              onClick={handleSave}
+            >
+              <Save size={14} />
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save changes'}
+            </button>
+          </ActionTooltip>
         </div>
       </div>
     </div>

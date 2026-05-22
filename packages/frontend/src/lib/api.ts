@@ -105,6 +105,16 @@ async function performTokenRefresh(currentRefreshToken: string): Promise<Refresh
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
+        const storedAccess = localStorage.getItem(TOKEN_KEY);
+        const storedRefresh = localStorage.getItem(REFRESH_KEY);
+        if (
+          isStoredToken(storedAccess) &&
+          isStoredToken(storedRefresh) &&
+          storedRefresh !== currentRefreshToken
+        ) {
+          loadTokens();
+          return 'success';
+        }
         clearTokens();
         return 'invalid';
       }

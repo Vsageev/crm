@@ -46,7 +46,6 @@ export async function registerSwagger(app: FastifyInstance) {
         { name: 'Storage', description: 'File storage management' },
         { name: 'Audit Logs', description: 'System audit logs' },
         { name: 'Media', description: 'File uploads and media management' },
-        { name: 'Widget', description: 'Embeddable website widget' },
         { name: 'API Keys', description: 'API key management' },
         { name: 'Webhooks', description: 'Webhook management' },
         { name: 'Backup', description: 'Data backup and restore' },

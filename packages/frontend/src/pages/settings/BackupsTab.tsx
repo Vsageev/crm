@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Upload, Download, RotateCcw, Trash2 } from 'lucide-react';
-import { Button, Card, Tooltip } from '../../ui';
+import { Button, Card, ReasonedActionButton, Tooltip } from '../../ui';
 import { api, getAccessToken, ApiError } from '../../lib/api';
 import { formatBytes, formatDate } from 'shared';
 import styles from './SettingsPage.module.css';
@@ -155,6 +155,9 @@ export function BackupsTab() {
     }
   }
 
+  const importDisabledReason = importing ? 'Backup import is already running.' : null;
+  const createDisabledReason = creating ? 'Backup creation is already running.' : null;
+
   return (
     <div>
       <div className={styles.section}>
@@ -173,14 +176,25 @@ export function BackupsTab() {
               style={{ display: 'none' }}
               onChange={handleImportFile}
             />
-            <Button size="sm" variant="secondary" onClick={handleImportClick} disabled={importing}>
+            <ReasonedActionButton
+              size="sm"
+              variant="secondary"
+              onClick={handleImportClick}
+              disabled={Boolean(importDisabledReason)}
+              disabledReason={importDisabledReason}
+            >
               <Upload size={14} />
               {importing ? 'Importing...' : 'Import'}
-            </Button>
-            <Button size="sm" onClick={handleCreate} disabled={creating}>
+            </ReasonedActionButton>
+            <ReasonedActionButton
+              size="sm"
+              onClick={handleCreate}
+              disabled={Boolean(createDisabledReason)}
+              disabledReason={createDisabledReason}
+            >
               <Plus size={14} />
               {creating ? 'Creating...' : 'Create Backup'}
-            </Button>
+            </ReasonedActionButton>
           </div>
         </div>
 
@@ -199,10 +213,15 @@ export function BackupsTab() {
           ) : backups.length === 0 ? (
             <div className={styles.emptyState}>
               <p>No backups yet.</p>
-              <Button size="sm" onClick={handleCreate} disabled={creating}>
+              <ReasonedActionButton
+                size="sm"
+                onClick={handleCreate}
+                disabled={Boolean(createDisabledReason)}
+                disabledReason={createDisabledReason}
+              >
                 <Plus size={14} />
                 Create your first backup
-              </Button>
+              </ReasonedActionButton>
             </div>
           ) : (
             <div className={styles.templateList}>

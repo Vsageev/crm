@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Kanban, Trash2, X, Star, FileText } from 'lucide-react';
 import { PageHeader } from '../../layout';
-import { Button } from '../../ui';
+import { ActionTooltip, Button, ReasonedActionButton } from '../../ui';
 import { Modal } from '../../ui/Modal';
 import { api, ApiError } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -114,7 +114,7 @@ export function BoardsListPage() {
 
   useEffect(() => {
     fetchBoards();
-  }, [fetchBoards]);
+  }, [activeWorkspaceId, fetchBoards]);
 
   // Fetch column/card details for each board to show previews
   useEffect(() => {
@@ -164,7 +164,7 @@ export function BoardsListPage() {
     } finally {
       setProvisioningStarter(false);
     }
-  }, [fetchBoards]);
+  }, [activeWorkspaceId, fetchBoards]);
 
   useEffect(() => {
     if (activeWorkspaceId || search || loading || provisioningStarter || error || boards.length > 0) return;
@@ -448,16 +448,23 @@ export function BoardsListPage() {
                 {isGeneralBoard(board) ? (
                   <span className={styles.generalBadge}>General</span>
                 ) : (
-                  <button
-                    type="button"
-                    className={styles.deleteButton}
-                    onClick={() => { void handleDeleteBoard(board); }}
+                  <ActionTooltip
+                    label={deletingBoardId === board.id ? `"${board.name}" is being deleted.` : `Delete ${board.name}.`}
                     disabled={deletingBoardId === board.id}
-                    aria-label={`Delete ${board.name}`}
+                    focusable={deletingBoardId === board.id}
+                    triggerLabel={`Delete ${board.name}`}
                   >
-                    <Trash2 size={14} />
-                    {deletingBoardId === board.id ? 'Deleting...' : 'Delete'}
-                  </button>
+                    <button
+                      type="button"
+                      className={styles.deleteButton}
+                      onClick={() => { void handleDeleteBoard(board); }}
+                      disabled={deletingBoardId === board.id}
+                      aria-label={`Delete ${board.name}`}
+                    >
+                      <Trash2 size={14} />
+                      {deletingBoardId === board.id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </ActionTooltip>
                 )}
               </div>
             </article>
@@ -492,9 +499,13 @@ export function BoardsListPage() {
             </div>
             <div className={styles.modalActions}>
               <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={creating || !createName.trim()}>
+              <ReasonedActionButton
+                onClick={handleCreate}
+                disabled={creating || !createName.trim()}
+                disabledReason={creating ? 'Board is being created.' : 'Enter a board name before creating it.'}
+              >
                 {creating ? 'Creating...' : 'Create'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </div>
         </Modal>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, X } from 'lucide-react';
-import { Button, MarkdownContent, Tooltip } from '../ui';
+import { Button, MarkdownContent, ReasonedActionButton, Tooltip } from '../ui';
 import { isMarkdownFile, isImagePreviewable } from '../lib/file-utils';
 import styles from './FilePreviewModal.module.css';
 
@@ -44,6 +44,11 @@ export function FilePreviewModal({
   const isHtml = HTML_EXTS.has(fileExt);
   const canEditMarkdown = isMarkdown && textContent !== null && Boolean(onSaveTextContent);
   const hasUnsavedChanges = isEditing && draftContent !== textContent;
+  const saveDisabledReason = saving
+    ? 'Save is already in progress.'
+    : !hasUnsavedChanges
+      ? 'Make a change before saving.'
+      : null;
 
   function getAuthHeaders(): Record<string, string> {
     const token = localStorage.getItem('ws_access_token');
@@ -191,23 +196,25 @@ export function FilePreviewModal({
               <div className={styles.editActions}>
                 {isEditing ? (
                   <>
-                    <Button
+                    <ReasonedActionButton
                       size="sm"
                       variant="ghost"
                       onClick={handleCancelEdit}
                       disabled={saving}
+                      disabledReason={saving ? 'Wait for the save to finish before canceling.' : null}
                       type="button"
                     >
                       Cancel
-                    </Button>
-                    <Button
+                    </ReasonedActionButton>
+                    <ReasonedActionButton
                       size="sm"
                       onClick={() => void handleSave()}
-                      disabled={saving || !hasUnsavedChanges}
+                      disabled={Boolean(saveDisabledReason)}
+                      disabledReason={saveDisabledReason}
                       type="button"
                     >
                       {saving ? 'Saving...' : 'Save changes'}
-                    </Button>
+                    </ReasonedActionButton>
                   </>
                 ) : (
                   <Button

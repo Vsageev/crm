@@ -738,10 +738,21 @@ function buildCanonicalAgentConversationViewModel(
     compareByCreatedAt(queueItemToComparable(a), queueItemToComparable(b)),
   );
   queuedMessages.sort((a, b) => compareByCreatedAt(a.message, b.message));
+  const visibleQueuePositionById = new Map<string, number>();
+  queuedMessages.forEach((queuedMessage, index) => {
+    if (!queuedMessage.queueItem) return;
+    const queuePosition = index + 1;
+    queuedMessage.queueItem = { ...queuedMessage.queueItem, queuePosition };
+    visibleQueuePositionById.set(queuedMessage.queueItem.id, queuePosition);
+  });
+  const displayQueuedQueueItems = queuedQueueItems.map((item) => {
+    const queuePosition = visibleQueuePositionById.get(item.id);
+    return queuePosition === undefined ? item : { ...item, queuePosition };
+  });
 
   return {
     visibleMessages,
-    queuedQueueItems,
+    queuedQueueItems: displayQueuedQueueItems,
     queuedMessages,
     notifyQueueItems,
     effectivePendingBranchExecutionsByMessageId,

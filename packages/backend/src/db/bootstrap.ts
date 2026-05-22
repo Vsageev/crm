@@ -169,7 +169,10 @@ async function bootstrap() {
   await store.flush();
 
   console.log('Workspace bootstrap completed.');
-  console.log('Admin login: admin@workspace.local / admin123');
+  console.log('Test accounts:');
+  console.log('  admin@workspace.local   / admin123');
+  console.log('  manager@workspace.local / manager123');
+  console.log('  agent1@workspace.local  / agent123');
 }
 
 bootstrap().catch((err) => {

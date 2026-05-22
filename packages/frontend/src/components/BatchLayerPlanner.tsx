@@ -1,17 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, GitBranch, GripVertical, Layers, Link2, Plus, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Copy, GitBranch, GripVertical, Layers, Link2, Plus, Search, Trash2, X } from 'lucide-react';
 import type { BatchDependencyMode, BatchDependencyRule } from '../lib/agent-batch';
+import {
+  isExternalBoardDrag,
+  readBoardCardDragData,
+  readBoardCardsBulkDragData,
+  readBoardColumnDragData,
+} from '../lib/execution-plans-dnd';
 import styles from './BatchLayerPlanner.module.css';
 
 export interface BatchPlanCard {
   id: string;
   name: string;
   subtitle?: string | null;
+  columnColor?: string | null;
   dependencyRule?: BatchDependencyRule;
 }
 
 export interface BatchLayer {
   cards: BatchPlanCard[];
+}
+
+export interface BatchLayerPlannerExperiments {
+  acceptBoardDrag?: boolean;
+  polish?: boolean;
+  dependencyShortcuts?: boolean;
 }
 
 interface BatchLayerPlannerProps {
@@ -20,6 +33,8 @@ interface BatchLayerPlannerProps {
   loadOptions: (query: string) => Promise<BatchPlanCard[]>;
   searchPlaceholder?: string;
   emptySearchLabel?: string;
+  experiments?: BatchLayerPlannerExperiments;
+  onExternalDragActive?: (active: boolean) => void;
 }
 
 // ─── Drag payload types ──────────────────────────────────────────────
@@ -76,14 +91,22 @@ export function BatchLayerPlanner({
   loadOptions,
   searchPlaceholder = 'Search cards…',
   emptySearchLabel = 'No matching cards',
+  experiments,
+  onExternalDragActive,
 }: BatchLayerPlannerProps) {
+  const acceptBoardDrag = experiments?.acceptBoardDrag ?? false;
+  const polish = experiments?.polish ?? false;
+  const dependencyShortcuts = experiments?.dependencyShortcuts ?? false;
   // ── Search / add cards ───────────────────────────────────────────
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState<BatchPlanCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingDependencyCardId, setEditingDependencyCardId] = useState<string | null>(null);
+  const [focusedCardId, setFocusedCardId] = useState<string | null>(null);
+  const [externalDragActive, setExternalDragActive] = useState(false);
   const comboRef = useRef<HTMLDivElement>(null);
+  const layerListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +216,112 @@ export function BatchLayerPlanner({
     emitChange(next);
   }
 
+  function insertExternalAt(
+    cards: BatchPlanCard[],
+    toLayer: number,
+    toIndex: number,
+    asNewLayer: boolean,
+  ) {
+    const fresh = cards.filter((card) => !allCardIds.has(card.id));
+    if (fresh.length === 0) return;
+
+    if (asNewLayer) {
+      const next = [...layers];
+      next.splice(toLayer + 1, 0, { cards: fresh });
+      emitChange(next.filter((layer) => layer.cards.length > 0));
+      return;
+    }
+
+    let next = layers.length === 0 ? [{ cards: [] as BatchPlanCard[] }] : [...layers];
+    if (toLayer >= next.length) {
+      next = [...next, { cards: [] }];
+    }
+    next = next.map((layer, li) => {
+      if (li !== toLayer) return layer;
+      const updated = [...layer.cards];
+      updated.splice(toIndex, 0, ...fresh);
+      return { cards: updated };
+    });
+    emitChange(next.filter((layer) => layer.cards.length > 0));
+  }
+
+  function tryHandleExternalDrop(
+    e: React.DragEvent,
+    toLayer: number,
+    toIndex: number,
+    asNewLayer: boolean,
+  ): boolean {
+    if (!acceptBoardDrag || !isExternalBoardDrag(e.dataTransfer)) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(null);
+    setSepDropTarget(null);
+    setIsDragging(false);
+    setExternalDragActive(false);
+    onExternalDragActive?.(false);
+    dragRef.current = null;
+
+    const columnPayload = readBoardColumnDragData(e.dataTransfer);
+    if (columnPayload) {
+      const columnCards = columnPayload.cards
+        .filter((card) => !allCardIds.has(card.id))
+        .map((card) => ({
+          id: card.id,
+          name: card.name,
+          subtitle: columnPayload.columnName,
+        }));
+      insertExternalAt(columnCards, toLayer, toIndex, true);
+      return true;
+    }
+
+    const bulk = readBoardCardsBulkDragData(e.dataTransfer);
+    if (bulk && bulk.length > 0) {
+      insertExternalAt(
+        bulk.map((card) => ({ id: card.id, name: card.name, subtitle: card.columnName ?? null })),
+        toLayer,
+        toIndex,
+        asNewLayer,
+      );
+      return true;
+    }
+
+    const payload = readBoardCardDragData(e.dataTransfer);
+    if (payload) {
+      insertExternalAt(
+        [{
+          id: payload.id,
+          name: payload.name,
+          subtitle: payload.columnName ?? null,
+        }],
+        toLayer,
+        toIndex,
+        asNewLayer,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  function setLayerDependencyDefaults(layerIdx: number, mode: BatchDependencyMode) {
+    emitChange(layers.map((layer, li) => {
+      if (li !== layerIdx) return layer;
+      return {
+        cards: layer.cards.map((card) => ({
+          ...card,
+          dependencyRule: { mode: li === 0 && mode !== 'none' ? 'none' : mode },
+        })),
+      };
+    }));
+  }
+
+  function copyDependencyFromAbove(layerIdx: number, cardIdx: number) {
+    if (cardIdx === 0) return;
+    const above = layers[layerIdx]?.cards[cardIdx - 1];
+    if (!above?.dependencyRule) return;
+    setCardDependencyRule(layerIdx, cardIdx, { ...above.dependencyRule });
+  }
+
   function removeCard(layerIdx: number, cardIdx: number) {
     const next = layers.map((l, li) =>
       li === layerIdx ? { cards: l.cards.filter((_, ci) => ci !== cardIdx) } : l,
@@ -256,20 +385,39 @@ export function BatchLayerPlanner({
     setDropTarget(null);
   }
 
-  const handleDragOver = useCallback((e: React.DragEvent, layerIdx: number, cardIdx: number) => {
+  function handleDragOver(e: React.DragEvent, layerIdx: number, cardIdx: number) {
+    if (acceptBoardDrag && isExternalBoardDrag(e.dataTransfer)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setExternalDragActive(true);
+      onExternalDragActive?.(true);
+      setDropTarget({ layerIdx, cardIdx });
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setDropTarget({ layerIdx, cardIdx });
-  }, []);
+  }
 
-  const handleLayerDragOver = useCallback((e: React.DragEvent, layerIdx: number) => {
+  function handleLayerDragOver(e: React.DragEvent, layerIdx: number) {
+    if (acceptBoardDrag && isExternalBoardDrag(e.dataTransfer)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setExternalDragActive(true);
+      onExternalDragActive?.(true);
+      const layer = layers[layerIdx];
+      setDropTarget({ layerIdx, cardIdx: layer?.cards.length ?? 0 });
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const layer = layers[layerIdx];
-    setDropTarget({ layerIdx, cardIdx: layer.cards.length });
-  }, [layers]);
+    setDropTarget({ layerIdx, cardIdx: layer?.cards.length ?? 0 });
+  }
 
   function handleDrop(e: React.DragEvent, toLayer: number, toIndex: number) {
+    if (tryHandleExternalDrop(e, toLayer, toIndex, false)) return;
+
     e.preventDefault();
     setDropTarget(null);
     setIsDragging(false);
@@ -294,6 +442,10 @@ export function BatchLayerPlanner({
       adjustedToIndex = Math.max(0, toIndex - 1);
     }
 
+    if (toLayer >= next.length) {
+      next = [...next, { cards: [] }];
+    }
+
     // Insert at target
     next = next.map((l, li) => {
       if (li !== toLayer) return l;
@@ -313,6 +465,14 @@ export function BatchLayerPlanner({
   const [sepDropTarget, setSepDropTarget] = useState<number | null>(null);
 
   function handleSepDragOver(e: React.DragEvent, afterLayerIdx: number) {
+    if (acceptBoardDrag && isExternalBoardDrag(e.dataTransfer)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setExternalDragActive(true);
+      onExternalDragActive?.(true);
+      setSepDropTarget(afterLayerIdx);
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setSepDropTarget(afterLayerIdx);
@@ -323,6 +483,8 @@ export function BatchLayerPlanner({
   }
 
   function handleSepDrop(e: React.DragEvent, afterLayerIdx: number) {
+    if (tryHandleExternalDrop(e, afterLayerIdx, 0, true)) return;
+
     e.preventDefault();
     setSepDropTarget(null);
     setIsDragging(false);
@@ -350,6 +512,43 @@ export function BatchLayerPlanner({
     emitChange(next);
   }
 
+  useEffect(() => {
+    if (!polish) return;
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (!focusedCardId || !layerListRef.current?.contains(document.activeElement)) return;
+      const entry = flatCards.find(({ card }) => card.id === focusedCardId);
+      if (!entry) return;
+
+      const { layerIdx, card } = entry;
+      const cardIdx = layers[layerIdx]?.cards.findIndex((c) => c.id === card.id) ?? -1;
+      if (cardIdx < 0) return;
+
+      if (e.key === 'ArrowUp' && cardIdx > 0) {
+        e.preventDefault();
+        const layer = layers[layerIdx];
+        const next = [...layer.cards];
+        [next[cardIdx - 1], next[cardIdx]] = [next[cardIdx], next[cardIdx - 1]];
+        emitChange(layers.map((l, li) => (li === layerIdx ? { cards: next } : l)));
+      } else if (e.key === 'ArrowDown' && cardIdx < (layers[layerIdx]?.cards.length ?? 0) - 1) {
+        e.preventDefault();
+        const layer = layers[layerIdx];
+        const next = [...layer.cards];
+        [next[cardIdx], next[cardIdx + 1]] = [next[cardIdx + 1], next[cardIdx]];
+        emitChange(layers.map((l, li) => (li === layerIdx ? { cards: next } : l)));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        splitAfter(layerIdx, cardIdx);
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        removeCard(layerIdx, cardIdx);
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [focusedCardId, flatCards, layers, polish]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Render ───────────────────────────────────────────────────────
   function renderDependencyEditor(card: BatchPlanCard, layerIdx: number, cardIdx: number) {
     const mode = getEffectiveDependencyMode(card, layerIdx);
@@ -362,8 +561,20 @@ export function BatchLayerPlanner({
       { mode: 'none', label: 'No dependency' },
     ];
 
+    const cardAbove = cardIdx > 0 ? layers[layerIdx]?.cards[cardIdx - 1] : null;
+
     return (
       <div className={styles.dependencyEditor}>
+        {dependencyShortcuts && layerIdx > 0 && cardAbove?.dependencyRule && (
+          <button
+            type="button"
+            className={styles.dependencyShortcutBtn}
+            onClick={() => copyDependencyFromAbove(layerIdx, cardIdx)}
+          >
+            <Copy size={11} />
+            Same as card above
+          </button>
+        )}
         <div className={styles.dependencyModes}>
           {modeOptions.map((option) => (
             <button
@@ -401,8 +612,20 @@ export function BatchLayerPlanner({
     );
   }
 
+  const displayLayers = useMemo(() => {
+    if (!polish) return layers;
+    const hasTrailingEmpty = layers.length > 0 && layers[layers.length - 1].cards.length === 0;
+    return hasTrailingEmpty ? layers : [...layers, { cards: [] }];
+  }, [layers, polish]);
+
+  const showExternalHint = acceptBoardDrag && (externalDragActive || isDragging);
+  const nonEmptyDisplayLayerCount = displayLayers.filter((l) => l.cards.length > 0).length;
+
   return (
-    <div className={styles.root}>
+    <div
+      className={`${styles.root} ${showExternalHint ? styles.rootExternalDrag : ''}`}
+      data-external-drag={showExternalHint ? 'true' : undefined}
+    >
       {/* Search / add */}
       <div className={styles.combobox} ref={comboRef}>
         <div className={styles.searchBox}>
@@ -458,15 +681,38 @@ export function BatchLayerPlanner({
       )}
 
       {/* Layers */}
-      {totalCards === 0 ? (
-        <div className={styles.emptyState}>
-          Add cards above. Drag them into groups to create dependency layers.
+      {totalCards === 0 && !polish ? (
+        <div
+          className={`${styles.emptyState} ${acceptBoardDrag ? styles.emptyStateDropTarget : ''}`}
+          onDragOver={(e) => {
+            if (!acceptBoardDrag) return;
+            e.preventDefault();
+            setExternalDragActive(true);
+            onExternalDragActive?.(true);
+          }}
+          onDragLeave={() => {
+            setExternalDragActive(false);
+            onExternalDragActive?.(false);
+          }}
+          onDrop={(e) => tryHandleExternalDrop(e, 0, 0, false)}
+        >
+          {acceptBoardDrag
+            ? 'Search or drag board cards here to start a plan.'
+            : 'Add cards above. Drag them into groups to create dependency layers.'}
         </div>
       ) : (
-        <div className={styles.layerList}>
-          {layers.map((layer, layerIdx) => {
-            if (layer.cards.length === 0) return null;
-            const layerNumber = layers.slice(0, layerIdx + 1).filter((l) => l.cards.length > 0).length;
+        <div
+          className={styles.layerList}
+          ref={layerListRef}
+          tabIndex={polish ? 0 : undefined}
+        >
+          {displayLayers.map((layer, layerIdx) => {
+            if (layer.cards.length === 0 && !polish) return null;
+            const layerNumber = displayLayers
+              .slice(0, layerIdx + 1)
+              .filter((l) => l.cards.length > 0).length;
+            const isEmptySlot = layer.cards.length === 0;
+            const displayLayerNumber = isEmptySlot ? nonEmptyDisplayLayerCount + 1 : layerNumber;
 
             return (
               <div key={layerIdx}>
@@ -493,6 +739,8 @@ export function BatchLayerPlanner({
 
                 <div
                   className={`${styles.layer} ${
+                    isEmptySlot ? styles.layerEmptySlot : ''
+                  } ${
                     dropTarget?.layerIdx === layerIdx && dropTarget.cardIdx === layer.cards.length
                       ? styles.layerDropTarget
                       : ''
@@ -501,16 +749,44 @@ export function BatchLayerPlanner({
                   onDrop={(e) => handleDrop(e, layerIdx, layer.cards.length)}
                 >
                   {/* Layer label */}
-                  {layerCount > 1 && (
+                  {(layerCount > 1 || isEmptySlot) && (
                     <div className={styles.layerLabel}>
-                      <Layers size={11} />
-                      <span>Layer {layerNumber}</span>
-                      {layerNumber === 1 && <span className={styles.layerHint}>runs first</span>}
-                      {layerNumber > 1 && (
+                      <span className={styles.layerLabelMain}>
+                        <Layers size={11} />
+                        <span>{isEmptySlot ? 'Empty layer' : `Layer ${displayLayerNumber}`}</span>
+                      </span>
+                      {!isEmptySlot && layerNumber === 1 && (
+                        <span className={styles.layerHint}>runs first</span>
+                      )}
+                      {!isEmptySlot && layerNumber > 1 && (
                         <span className={styles.layerHint}>
-                          defaults to layer {layerNumber - 1}
+                          waits for layer {layerNumber - 1}
                         </span>
                       )}
+                      {dependencyShortcuts && !isEmptySlot && layerIdx > 0 && (
+                        <span className={styles.layerShortcutGroup}>
+                          <button
+                            type="button"
+                            className={styles.layerShortcutBtn}
+                            onClick={() => setLayerDependencyDefaults(layerIdx, 'previous_layer')}
+                          >
+                            Wait for layer above
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.layerShortcutBtn}
+                            onClick={() => setLayerDependencyDefaults(layerIdx, 'none')}
+                          >
+                            Independent
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {isEmptySlot && (
+                    <div className={styles.emptyLayerHint}>
+                      Drop cards here
                     </div>
                   )}
 
@@ -521,13 +797,22 @@ export function BatchLayerPlanner({
                           dropTarget?.layerIdx === layerIdx && dropTarget?.cardIdx === cardIdx
                             ? styles.cardDropBefore
                             : ''
-                        }`}
+                        } ${focusedCardId === card.id && polish ? styles.cardFocused : ''}`}
                         draggable
+                        tabIndex={polish ? 0 : undefined}
+                        onFocus={() => setFocusedCardId(card.id)}
                         onDragStart={(e) => handleDragStart(e, layerIdx, cardIdx, card)}
                         onDragEnd={handleDragEnd}
                         onDragOver={(e) => handleDragOver(e, layerIdx, cardIdx)}
                         onDrop={(e) => { e.stopPropagation(); handleDrop(e, layerIdx, cardIdx); }}
                       >
+                        {card.columnColor && (
+                          <span
+                            className={styles.cardColumnStrip}
+                            style={{ background: card.columnColor }}
+                            aria-hidden
+                          />
+                        )}
                         <div className={styles.cardGrip}>
                           <GripVertical size={14} />
                         </div>
@@ -587,7 +872,10 @@ export function BatchLayerPlanner({
                 </div>
 
                 {/* Drop zone / button after last layer to create a new layer below */}
-                {layerIdx === layers.length - 1 && layers.filter((l) => l.cards.length > 0).length >= 1 && (
+                {layerIdx === displayLayers.length - 1
+                  && displayLayers.filter((l) => l.cards.length > 0).length >= 1
+                  && !isEmptySlot
+                  && (
                   <div
                     className={`${styles.newLayerDropZone} ${isDragging ? styles.newLayerDropZoneDragging : ''} ${sepDropTarget === layerIdx ? styles.newLayerDropZoneActive : ''}`}
                     onDragOver={(e) => handleSepDragOver(e, layerIdx)}

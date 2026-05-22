@@ -96,7 +96,7 @@ async function notifyForFinishedRuns(
 export function useAgentRunNotifications(pathname: string) {
   const knownRunsRef = useRef<Map<string, RunSnapshot>>(new Map());
   const initializedRef = useRef(false);
-  const lastPollAtRef = useRef(Date.now());
+  const lastPollAtRef = useRef<number | null>(null);
   const cardNameCacheRef = useRef<Map<string, string | null>>(new Map());
   const pathnameRef = useRef(pathname);
 
@@ -118,7 +118,8 @@ export function useAgentRunNotifications(pathname: string) {
         const previousRuns = knownRunsRef.current;
         const currentRuns = new Map<string, RunSnapshot>();
         const runsToNotify: AgentRunEntry[] = [];
-        const lastPollAt = lastPollAtRef.current;
+        const now = Date.now();
+        const lastPollAt = lastPollAtRef.current ?? now;
 
         for (const run of entries) {
           currentRuns.set(run.id, { status: run.status });
@@ -136,7 +137,7 @@ export function useAgentRunNotifications(pathname: string) {
         }
 
         knownRunsRef.current = currentRuns;
-        lastPollAtRef.current = Date.now();
+        lastPollAtRef.current = now;
 
         if (!initializedRef.current) {
           initializedRef.current = true;

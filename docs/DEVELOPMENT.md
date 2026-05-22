@@ -12,7 +12,7 @@ General dev setup, commands, and troubleshooting. For module-specific guidance, 
 
 ```bash
 pnpm install   # install dependencies
-pnpm dev       # run backend, frontend, landing, and widget
+pnpm dev       # run backend, frontend, and landing
 pnpm typecheck # run type checking
 pnpm lint      # run linter
 ```
@@ -87,6 +87,14 @@ With `DATABASE_URL` set, `db:bootstrap` applies Drizzle migrations to the target
 DATABASE_URL=postgres://openwork:openwork@localhost:5432/openwork \
   pnpm --filter backend db:bootstrap
 ```
+
+Seeded local login accounts (passwords are for development only):
+
+| Email | Password |
+| --- | --- |
+| `admin@workspace.local` | `admin123` |
+| `manager@workspace.local` | `manager123` |
+| `agent1@workspace.local` | `agent123` |
 
 `DATA_DIR` remains used for uploads, agent files, and other non-relational paths; collection data is in Postgres.
 

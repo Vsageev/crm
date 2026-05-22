@@ -67,6 +67,10 @@ Agent presentation and grouping helpers:
   - `DELETE /api/agent-batch-runs`
   - `POST /api/agent-batch-runs/:runId/cancel`
 
+Batch runs execute queued work. Saved board execution plans are documented in
+`workspace-content.md`; they compile into a board batch-run request instead of
+creating a separate run type.
+
 ## Previous run logs and history
 
 When the task asks what happened in an earlier agent run, do not assume prior
@@ -99,6 +103,8 @@ Implementation notes that matter:
 1. Provision an agent (`POST /api/agents`) and attach skills (`POST /api/agents/:id/skills`).
 2. Open a chat conversation and append messages (`POST /api/agents/:id/chat/conversations`, `POST /api/agents/:id/chat/message`).
 3. For mass actions use board/collection batch job endpoints where relevant.
+   For ordered board work, use a board execution plan from
+   `workspace-content.md` and compile it into the board batch-run payload.
 4. Monitor status via `/api/agent-runs` or `/api/agent-batch-runs`.
 
 ## Where to verify exact schemas

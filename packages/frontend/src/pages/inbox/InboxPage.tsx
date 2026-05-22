@@ -6,7 +6,6 @@ import {
   Search,
   MessageSquare,
   Send,
-  Zap,
   X,
   Archive,
   CheckCircle2,
@@ -32,7 +31,7 @@ import { CreateCardModal } from '../../ui/CreateCardModal';
 import type { CreateCardData } from '../../ui/CreateCardModal';
 import { getFirstImageFromClipboardData, prepareImageForUpload } from '../../lib/image-upload';
 import { useAuth } from '../../stores/useAuth';
-import { Tooltip } from '../../ui';
+import { ActionTooltip, Tooltip } from '../../ui';
 import { formatBytes } from 'shared';
 import styles from './InboxPage.module.css';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -96,18 +95,6 @@ interface Message {
   sender: MessageSender | null;
 }
 
-interface QuickReplyTemplate {
-  id: string;
-  name: string;
-  content: string;
-  category: string | null;
-  shortcut: string | null;
-  isGlobal: boolean;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 interface PaginatedResponse<T> {
   total: number;
   limit: number;
@@ -127,7 +114,6 @@ const CHANNEL_LABELS: Record<string, string> = {
   internal: 'Internal',
   other: 'Other',
   email: 'Email',
-  web_chat: 'Web Chat',
 };
 
 const INBOX_REFRESH_INTERVAL_MS = 5000;
@@ -387,11 +373,6 @@ export function InboxPage() {
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
 
-  // Templates state
-  const [templates, setTemplates] = useState<QuickReplyTemplate[]>([]);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [templateSearch, setTemplateSearch] = useState('');
-
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -441,7 +422,6 @@ export function InboxPage() {
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
-  const templatesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Fetch conversations ── */
@@ -677,20 +657,6 @@ export function InboxPage() {
     };
   }, [replyText, selectedId]);
 
-  /* ── Close templates popover on outside click ── */
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (templatesRef.current && !templatesRef.current.contains(e.target as Node)) {
-        setTemplatesOpen(false);
-        setTemplateSearch('');
-      }
-    }
-    if (templatesOpen) {
-      document.addEventListener('mousedown', handleClick);
-      return () => document.removeEventListener('mousedown', handleClick);
-    }
-  }, [templatesOpen]);
-
   /* ── Sort conversations: pinned first, then by original order ── */
   const sortedConversations = useMemo(() => {
     if (pinnedIds.size === 0) return conversations;
@@ -708,22 +674,10 @@ export function InboxPage() {
     [sortedConversations, pinnedIds],
   );
 
-
-
-  /* ── Fetch templates when popover opens ── */
-  useEffect(() => {
-    if (!templatesOpen) return;
-    api<PaginatedResponse<QuickReplyTemplate>>('/quick-reply-templates?limit=100')
-      .then((data) => setTemplates(data.entries))
-      .catch(() => setTemplates([]));
-  }, [templatesOpen]);
-
   /* ── Select conversation ── */
   function selectConversation(id: string) {
     setSearchParams({ id });
     setAttachedFile(null);
-    setTemplatesOpen(false);
-    setTemplateSearch('');
     setDraftSavedIndicator(false);
   }
 
@@ -868,22 +822,6 @@ export function InboxPage() {
       toast.error('Failed to update conversation');
     }
   }
-
-  /* ── Select template ── */
-  function selectTemplate(template: QuickReplyTemplate) {
-    setReplyText(template.content);
-    setTemplatesOpen(false);
-    replyInputRef.current?.focus();
-  }
-
-  /* ── Filter templates ── */
-  const filteredTemplates = templates.filter(
-    (t) =>
-      !templateSearch ||
-      t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
-      t.content.toLowerCase().includes(templateSearch.toLowerCase()) ||
-      (t.shortcut && t.shortcut.toLowerCase().includes(templateSearch.toLowerCase())),
-  );
 
   /* ── Mark all conversations as read ── */
   async function handleMarkAllRead() {
@@ -1036,7 +974,6 @@ export function InboxPage() {
   }
 
   // Clear selection when filters change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     deselectAll();
   }, [statusFilter, debouncedSearch, channelFilter, unreadOnly, assignedToMe]);
@@ -1044,6 +981,13 @@ export function InboxPage() {
   /* ── Render ── */
 
   const dateGroups = groupMessagesByDate(messages);
+  const bulkActionDisabledReason = bulkActing ? 'Wait for the current bulk action to finish.' : null;
+  const markAllReadDisabledReason = markingAllRead ? 'Mark all as read is already running.' : null;
+  const sendDisabledReason = sending
+    ? 'Wait for this message to finish sending.'
+    : !replyText.trim() && !attachedFile
+      ? 'Type a message or attach a file before sending.'
+      : null;
 
   return (
     <>
@@ -1063,31 +1007,51 @@ export function InboxPage() {
                 </button>
                 <span className={styles.bulkCount}>{selectedConvIds.size} selected</span>
                 <div className={styles.bulkActions}>
-                  <Tooltip label="Mark read">
-                    <button className={styles.bulkBtn} onClick={() => { void bulkMarkRead(); }} disabled={bulkActing}>
+                  <ActionTooltip
+                    label={bulkActionDisabledReason ?? 'Mark read'}
+                    disabled={Boolean(bulkActionDisabledReason)}
+                    triggerLabel="Mark read"
+                  >
+                    <button className={styles.bulkBtn} onClick={() => { void bulkMarkRead(); }} disabled={Boolean(bulkActionDisabledReason)} aria-label="Mark read">
                       <CheckCircle2 size={14} />
                     </button>
-                  </Tooltip>
-                  <Tooltip label="Close">
-                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('closed'); }} disabled={bulkActing}>
+                  </ActionTooltip>
+                  <ActionTooltip
+                    label={bulkActionDisabledReason ?? 'Close'}
+                    disabled={Boolean(bulkActionDisabledReason)}
+                    triggerLabel="Close"
+                  >
+                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('closed'); }} disabled={Boolean(bulkActionDisabledReason)} aria-label="Close">
                       <X size={14} />
                     </button>
-                  </Tooltip>
-                  <Tooltip label="Archive">
-                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('archived'); }} disabled={bulkActing}>
+                  </ActionTooltip>
+                  <ActionTooltip
+                    label={bulkActionDisabledReason ?? 'Archive'}
+                    disabled={Boolean(bulkActionDisabledReason)}
+                    triggerLabel="Archive"
+                  >
+                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('archived'); }} disabled={Boolean(bulkActionDisabledReason)} aria-label="Archive">
                       <Archive size={14} />
                     </button>
-                  </Tooltip>
-                  <Tooltip label="Reopen">
-                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('open'); }} disabled={bulkActing}>
+                  </ActionTooltip>
+                  <ActionTooltip
+                    label={bulkActionDisabledReason ?? 'Reopen'}
+                    disabled={Boolean(bulkActionDisabledReason)}
+                    triggerLabel="Reopen"
+                  >
+                    <button className={styles.bulkBtn} onClick={() => { void bulkUpdateStatus('open'); }} disabled={Boolean(bulkActionDisabledReason)} aria-label="Reopen">
                       <RotateCcw size={14} />
                     </button>
-                  </Tooltip>
-                  <Tooltip label="Delete">
-                    <button className={`${styles.bulkBtn} ${styles.bulkBtnDanger}`} onClick={() => { void bulkDelete(); }} disabled={bulkActing}>
+                  </ActionTooltip>
+                  <ActionTooltip
+                    label={bulkActionDisabledReason ?? 'Delete'}
+                    disabled={Boolean(bulkActionDisabledReason)}
+                    triggerLabel="Delete"
+                  >
+                    <button className={`${styles.bulkBtn} ${styles.bulkBtnDanger}`} onClick={() => { void bulkDelete(); }} disabled={Boolean(bulkActionDisabledReason)} aria-label="Delete">
                       <Trash2 size={14} />
                     </button>
-                  </Tooltip>
+                  </ActionTooltip>
                 </div>
                 <button className={styles.bulkDismiss} onClick={deselectAll} title="Cancel selection">
                   <X size={14} />
@@ -1097,15 +1061,20 @@ export function InboxPage() {
               <>
                 <span className={styles.sidebarTitle}>Inbox</span>
                 {sortedConversations.some((c) => c.isUnread) && (
-                  <button
-                    className={styles.markAllReadBtn}
-                    onClick={() => { void handleMarkAllRead(); }}
-                    disabled={markingAllRead}
-                    title="Mark all as read"
+                  <ActionTooltip
+                    label={markAllReadDisabledReason ?? 'Mark all as read'}
+                    disabled={Boolean(markAllReadDisabledReason)}
+                    triggerLabel="Mark all as read"
                   >
-                    <CheckCircle2 size={14} />
-                    <span>{markingAllRead ? 'Marking…' : 'Mark all read'}</span>
-                  </button>
+                    <button
+                      className={styles.markAllReadBtn}
+                      onClick={() => { void handleMarkAllRead(); }}
+                      disabled={Boolean(markAllReadDisabledReason)}
+                    >
+                      <CheckCircle2 size={14} />
+                      <span>{markingAllRead ? 'Marking…' : 'Mark all read'}</span>
+                    </button>
+                  </ActionTooltip>
                 )}
               </>
             )}
@@ -1156,7 +1125,6 @@ export function InboxPage() {
             >
               <option value="">All channels</option>
               <option value="email">Email</option>
-              <option value="web_chat">Web Chat</option>
               <option value="internal">Internal</option>
               <option value="other">Other</option>
             </select>
@@ -1700,61 +1668,6 @@ export function InboxPage() {
             {/* Reply box */}
             <div className={styles.replyBox}>
               <div className={styles.replyRow}>
-                <div className={styles.templatesAnchor} ref={templatesRef}>
-                  <Tooltip label="Quick replies">
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => setTemplatesOpen((v) => !v)}
-                    >
-                      <Zap size={16} />
-                    </button>
-                  </Tooltip>
-                  {templatesOpen && (
-                    <div className={styles.templatesPopover}>
-                      <div className={styles.templatesHeader}>
-                        <span className={styles.templatesTitle}>Templates</span>
-                        <Tooltip label="Close">
-                          <button
-                            className={styles.iconBtn}
-                            onClick={() => setTemplatesOpen(false)}
-                            style={{ border: 'none', width: 24, height: 24 }}
-                          >
-                            <X size={14} />
-                          </button>
-                        </Tooltip>
-                      </div>
-                      <input
-                        type="text"
-                        placeholder="Search templates..."
-                        value={templateSearch}
-                        onChange={(e) => setTemplateSearch(e.target.value)}
-                        className={styles.templatesSearch}
-                        autoFocus
-                      />
-                      <div className={styles.templatesList}>
-                        {filteredTemplates.length === 0 ? (
-                          <div className={styles.templatesEmpty}>No templates found</div>
-                        ) : (
-                          filteredTemplates.map((tpl) => (
-                            <button
-                              key={tpl.id}
-                              className={styles.templateItem}
-                              onClick={() => selectTemplate(tpl)}
-                            >
-                              <div className={styles.templateName}>
-                                {tpl.name}
-                                {tpl.shortcut && (
-                                  <span className={styles.templateShortcut}>/{tpl.shortcut}</span>
-                                )}
-                              </div>
-                              <div className={styles.templatePreview}>{tpl.content}</div>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -1797,17 +1710,10 @@ export function InboxPage() {
                   <textarea
                     ref={replyInputRef}
                     className={styles.replyInput}
-                    placeholder={attachedFile ? 'Add a caption... (optional)' : 'Type a message… or / for templates (Enter to send, Shift+Enter for new line)'}
+                    placeholder={attachedFile ? 'Add a caption... (optional)' : 'Type a message... (Enter to send, Shift+Enter for new line)'}
                     value={replyText}
                     onChange={(e) => {
                       const val = e.target.value;
-                      // Slash trigger: lone "/" opens the template popover
-                      if (val === '/') {
-                        setTemplatesOpen(true);
-                        setTemplateSearch('');
-                        setReplyText('');
-                        return;
-                      }
                       setReplyText(val);
                       // Auto-resize
                       const ta = e.target;
@@ -1822,16 +1728,20 @@ export function InboxPage() {
                     <span className={styles.draftSavedIndicator}>Draft saved</span>
                   )}
                 </div>
-                <Tooltip label="Send message">
+                <ActionTooltip
+                  label={sendDisabledReason ?? 'Send message'}
+                  disabled={Boolean(sendDisabledReason)}
+                  triggerLabel="Send message"
+                >
                   <button
                     className={styles.sendBtn}
                     onClick={handleSend}
-                    disabled={(!replyText.trim() && !attachedFile) || sending}
+                    disabled={Boolean(sendDisabledReason)}
                     aria-label="Send message"
                   >
                     <Send size={16} />
                   </button>
-                </Tooltip>
+                </ActionTooltip>
               </div>
             </div>
           </div>

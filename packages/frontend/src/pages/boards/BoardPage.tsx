@@ -1,7 +1,7 @@
 import { memo, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Bot, FolderOpen, ChevronDown, Check, Clock, Search, X, SearchX, ChevronsLeft, SlidersHorizontal, Star, Tag, Users, ArrowUpDown, GripVertical, RefreshCw, MoreHorizontal, Layers, User, AlignLeft, GitBranch } from 'lucide-react';
-import { AnchoredOverlay, Button, EntitySwitcher, CreateCardModal, Modal } from '../../ui';
+import { Plus, Trash2, Bot, FolderOpen, ChevronDown, Check, Clock, Search, X, SearchX, ChevronsLeft, SlidersHorizontal, Star, Tag, Users, ArrowUpDown, GripVertical, RefreshCw, MoreHorizontal, Layers, User, AlignLeft, GitBranch, MoveRight } from 'lucide-react';
+import { ActionTooltip, AnchoredOverlay, Button, EntitySwitcher, CreateCardModal, Modal, ReasonedActionButton } from '../../ui';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { ActiveBatchRunsBanner } from '../../components/ActiveBatchRunsBanner';
 
@@ -20,9 +20,17 @@ import { BoardExecutionPlansPanel } from './BoardExecutionPlansPanel';
 import { CardQuickView } from './CardQuickView';
 import { CardContextMenu } from './CardContextMenu';
 import { useFavorites } from '../../hooks/useFavorites';
+import { useExecutionPlansExperiments } from '../../devtools/execution-plans-experiments';
+import {
+  isExternalBoardDrag,
+  writeBoardCardDragData,
+  writeBoardCardsBulkDragData,
+  writeBoardColumnDragData,
+} from '../../lib/execution-plans-dnd';
+import type { PlanEditorBridge } from './execution-plan-editor-bridge';
 import styles from './BoardPage.module.css';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import type { BoardExecutionPlan } from '../../lib/agent-batch';
+import type { BatchLayer, BoardExecutionPlan } from '../../lib/agent-batch';
 
 const COLUMN_COLORS = ['#6B7280', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
 
@@ -222,6 +230,11 @@ export function BoardPage() {
   const [showExecutionPlansPanel, setShowExecutionPlansPanel] = useState(false);
   const [showBatchRunPanel, setShowBatchRunPanel] = useState(false);
   const [batchPlanSource, setBatchPlanSource] = useState<BoardExecutionPlan | null>(null);
+  const planExperiments = useExecutionPlansExperiments();
+  const [planEditorBridge, setPlanEditorBridge] = useState<PlanEditorBridge | null>(null);
+  const [planEditorLayers, setPlanEditorLayers] = useState<BatchLayer[]>([]);
+  const [selectedPlanCardIds, setSelectedPlanCardIds] = useState<Set<string>>(new Set());
+  const [externalPlannerDrag, setExternalPlannerDrag] = useState(false);
   const [filterText, setFilterText] = useState(() => id ? getFilterState(id).text : '');
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(() => {
     if (!id) return new Set();
@@ -454,19 +467,61 @@ export function BoardPage() {
     () => (board ? [...board.columns].sort((a, b) => a.position - b.position) : []),
     [board],
   );
+  const columnColors = useMemo(
+    () => Object.fromEntries(sortedColumns.map((column) => [column.id, column.color])),
+    [sortedColumns],
+  );
+
   const availableBoardCards = useMemo(
     () => board
       ? board.cards
           .filter((entry) => entry.card)
+          .sort((a, b) => {
+            const columnA = sortedColumns.findIndex((column) => column.id === a.columnId);
+            const columnB = sortedColumns.findIndex((column) => column.id === b.columnId);
+            const normalizedColumnA = columnA === -1 ? Number.MAX_SAFE_INTEGER : columnA;
+            const normalizedColumnB = columnB === -1 ? Number.MAX_SAFE_INTEGER : columnB;
+            if (normalizedColumnA !== normalizedColumnB) return normalizedColumnA - normalizedColumnB;
+            if (a.position !== b.position) return a.position - b.position;
+            return a.cardId.localeCompare(b.cardId);
+          })
           .map((entry) => ({
             id: entry.cardId,
             name: entry.card?.name ?? 'Untitled card',
             columnId: entry.columnId,
             columnName: sortedColumns.find((column) => column.id === entry.columnId)?.name ?? null,
+            columnColor: entry.columnId ? columnColors[entry.columnId] ?? null : null,
+            assigneeId: entry.card?.assignee?.id ?? null,
+            assigneeName: entry.card?.assignee
+              ? `${entry.card.assignee.firstName} ${entry.card.assignee.lastName}`.trim()
+              : null,
           }))
       : [],
-    [board, sortedColumns],
+    [board, columnColors, sortedColumns],
   );
+
+  const plansEditorActive = showExecutionPlansPanel && (planEditorBridge?.isEditing ?? false);
+  const boardDragToPlanActive = planExperiments.boardDragIn && plansEditorActive;
+  const planBoardSelectionActive = plansEditorActive && Boolean(planEditorBridge?.boardSelectionMode);
+
+  const planLayerByCardId = useMemo(() => {
+    if (!planExperiments.liveBadges || !plansEditorActive) return new Map<string, number>();
+    const map = new Map<string, number>();
+    for (const [idx, layer] of planEditorLayers.entries()) {
+      if (layer.cards.length === 0) continue;
+      for (const card of layer.cards) map.set(card.id, idx + 1);
+    }
+    return map;
+  }, [planEditorLayers, planExperiments.liveBadges, plansEditorActive]);
+
+  const planCardIds = useMemo(
+    () => new Set(planLayerByCardId.keys()),
+    [planLayerByCardId],
+  );
+
+  useEffect(() => {
+    if (!plansEditorActive) setSelectedPlanCardIds(new Set());
+  }, [plansEditorActive]);
 
   // Restore filter state when navigating to a different board
   useEffect(() => {
@@ -476,10 +531,9 @@ export function BoardPage() {
     setFilterText(saved.text);
     setSelectedTagIds(new Set(saved.tagIds));
     setSelectedAssigneeIds(new Set(saved.assigneeIds));
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id]);
 
   // Persist filter state to localStorage whenever filters change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!id) return;
     saveFilterState(id, {
@@ -487,7 +541,7 @@ export function BoardPage() {
       tagIds: [...selectedTagIds],
       assigneeIds: [...selectedAssigneeIds],
     });
-  }, [filterText, selectedTagIds, selectedAssigneeIds]);
+  }, [filterText, id, selectedTagIds, selectedAssigneeIds]);
 
   const shouldOpenCreateCard = searchParams.get('newCard') === '1';
 
@@ -640,14 +694,91 @@ export function BoardPage() {
   }, [id]);
 
   const handleDragStart = useCallback((e: React.DragEvent, boardCard: BoardCardEntry) => {
-    dragCardRef.current = boardCard;
+    if (!boardDragToPlanActive) {
+      dragCardRef.current = boardCard;
+    }
     isDraggingRef.current = true;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', boardCard.cardId);
+    const column = sortedColumns.find((col) => col.id === boardCard.columnId);
+    if (boardDragToPlanActive) {
+      writeBoardCardDragData(e.dataTransfer, {
+        id: boardCard.cardId,
+        name: boardCard.card?.name ?? 'Untitled card',
+        columnId: boardCard.columnId,
+        columnName: column?.name ?? null,
+      });
+      if (planExperiments.selectionToolbar && selectedPlanCardIds.size > 1 && selectedPlanCardIds.has(boardCard.cardId)) {
+        const bulk = board?.cards
+          .filter((entry) => selectedPlanCardIds.has(entry.cardId) && entry.card)
+          .map((entry) => ({
+            id: entry.cardId,
+            name: entry.card?.name ?? 'Untitled card',
+            columnId: entry.columnId,
+            columnName: sortedColumns.find((col) => col.id === entry.columnId)?.name ?? null,
+          })) ?? [];
+        writeBoardCardsBulkDragData(e.dataTransfer, bulk);
+      }
+      e.dataTransfer.effectAllowed = 'copy';
+    } else {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', boardCard.cardId);
+    }
+    const dragTarget = e.currentTarget as HTMLElement;
     requestAnimationFrame(() => {
-      (e.currentTarget as HTMLElement).classList.add(styles.dragging);
+      dragTarget.classList.add(styles.dragging);
+    });
+  }, [
+    board,
+    boardDragToPlanActive,
+    planExperiments.selectionToolbar,
+    selectedPlanCardIds,
+    sortedColumns,
+  ]);
+
+  const handleColumnImportDragStart = useCallback((
+    e: React.DragEvent,
+    column: BoardColumn,
+    columnCards: BoardCardEntry[],
+  ) => {
+    e.stopPropagation();
+    isDraggingRef.current = true;
+    writeBoardColumnDragData(e.dataTransfer, {
+      columnId: column.id,
+      columnName: column.name,
+      cards: columnCards
+        .filter((entry) => entry.card)
+        .map((entry) => ({
+          id: entry.cardId,
+          name: entry.card?.name ?? 'Untitled card',
+          columnId: entry.columnId,
+          columnName: column.name,
+        })),
+    });
+    e.dataTransfer.effectAllowed = 'copy';
+  }, []);
+
+  const togglePlanCardSelection = useCallback((cardId: string) => {
+    setSelectedPlanCardIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
     });
   }, []);
+
+  const addSelectionToPlan = useCallback((mode: 'append' | 'newLayer') => {
+    if (!planEditorBridge || selectedPlanCardIds.size === 0) return;
+    const cards = availableBoardCards.filter((card) => selectedPlanCardIds.has(card.id));
+    planEditorBridge.addCards(
+      cards.map((card) => ({
+        id: card.id,
+        name: card.name,
+        subtitle: card.columnName,
+        columnColor: card.columnColor,
+      })),
+      mode,
+    );
+    setSelectedPlanCardIds(new Set());
+  }, [availableBoardCards, planEditorBridge, selectedPlanCardIds]);
 
   const handleDragEnd = useCallback((e: React.DragEvent) => {
     dragCardRef.current = null;
@@ -660,8 +791,9 @@ export function BoardPage() {
     isDraggingRef.current = true;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('application/x-column-id', col.id);
+    const dragTarget = e.currentTarget as HTMLElement;
     requestAnimationFrame(() => {
-      (e.currentTarget as HTMLElement).classList.add(styles.columnDragging);
+      dragTarget.classList.add(styles.columnDragging);
     });
   }, []);
 
@@ -1116,6 +1248,72 @@ export function BoardPage() {
     }
   }, [board, cardsByColumn, confirm, fetchBoard]);
 
+  const handleMoveColumnCards = useCallback(async (sourceColumnId: string, targetColumnId: string) => {
+    if (!board) return;
+    const source = board.columns.find((c) => c.id === sourceColumnId);
+    const target = board.columns.find((c) => c.id === targetColumnId);
+    const sourceCards = cardsByColumn.get(sourceColumnId) || [];
+    if (!source || !target || sourceCards.length === 0) return;
+
+    const targetCount = board.cards.filter((card) => card.columnId === targetColumnId).length;
+    const overWip =
+      target.wipLimit != null &&
+      targetCount + sourceCards.length > target.wipLimit;
+    const confirmed = await confirm({
+      title: 'Move column cards',
+      message: overWip
+        ? `Move ${sourceCards.length} card(s) from "${source.name}" to "${target.name}"? This will exceed the target WIP limit (${targetCount + sourceCards.length}/${target.wipLimit}).`
+        : `Move ${sourceCards.length} card(s) from "${source.name}" to "${target.name}"?`,
+      confirmLabel: 'Move cards',
+    });
+    if (!confirmed) return;
+
+    try {
+      const result = await api<{ moved: number }>(`/boards/${board.id}/columns/${sourceColumnId}/cards/actions`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'move_to_column', targetColumnId }),
+      });
+      if (quickViewCardId && sourceCards.some((bc) => bc.cardId === quickViewCardId)) {
+        setQuickViewCardId(null);
+      }
+      await fetchBoard();
+      toast.success(`Moved ${result.moved} card${result.moved === 1 ? '' : 's'} to ${target.name}`);
+    } catch (err) {
+      if (err instanceof ApiError) toast.error(err.message);
+      else toast.error('Failed to move column cards');
+    }
+  }, [board, cardsByColumn, confirm, fetchBoard, quickViewCardId]);
+
+  const handleClearColumnCards = useCallback(async (columnId: string) => {
+    if (!board) return;
+    const col = board.columns.find((c) => c.id === columnId);
+    const colCards = cardsByColumn.get(columnId) || [];
+    if (!col || colCards.length === 0) return;
+
+    const confirmed = await confirm({
+      title: 'Remove column cards',
+      message: `Remove ${colCards.length} card(s) from "${col.name}" without deleting the column?`,
+      confirmLabel: 'Remove cards',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      const result = await api<{ removed: number }>(`/boards/${board.id}/columns/${columnId}/cards/actions`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'remove_from_board' }),
+      });
+      if (quickViewCardId && colCards.some((bc) => bc.cardId === quickViewCardId)) {
+        setQuickViewCardId(null);
+      }
+      await fetchBoard();
+      toast.success(`Removed ${result.removed} card${result.removed === 1 ? '' : 's'} from ${col.name}`);
+    } catch (err) {
+      if (err instanceof ApiError) toast.error(err.message);
+      else toast.error('Failed to remove column cards');
+    }
+  }, [board, cardsByColumn, confirm, fetchBoard, quickViewCardId]);
+
   useEffect(() => {
     if (!showCollectionPicker) return;
     function onClickOutside(e: MouseEvent) {
@@ -1353,22 +1551,38 @@ export function BoardPage() {
                   className={styles.boardActionsMenu}
                   placement="bottom-end"
                 >
-                  <button
-                    className={styles.boardActionsMenuItem}
-                    onClick={() => { setShowBoardActions(false); void handleClearBoardCards(); }}
+                  <ActionTooltip
+                    label={clearingBoardCards ? 'Board cards are being cleared.' : board.cards.length === 0 ? 'This board has no cards to clear.' : 'Clear all cards from this board.'}
                     disabled={board.cards.length === 0 || clearingBoardCards}
+                    focusable={board.cards.length === 0 || clearingBoardCards}
+                    position="left"
+                    triggerLabel="Clear cards"
                   >
-                    <Trash2 size={14} />
-                    {clearingBoardCards ? 'Clearing cards...' : 'Clear cards'}
-                  </button>
-                  <button
-                    className={styles.boardActionsMenuItem}
-                    onClick={() => { setShowBoardActions(false); void handleDeleteBoard(); }}
+                    <button
+                      className={styles.boardActionsMenuItem}
+                      onClick={() => { setShowBoardActions(false); void handleClearBoardCards(); }}
+                      disabled={board.cards.length === 0 || clearingBoardCards}
+                    >
+                      <Trash2 size={14} />
+                      {clearingBoardCards ? 'Clearing cards...' : 'Clear cards'}
+                    </button>
+                  </ActionTooltip>
+                  <ActionTooltip
+                    label={deletingBoard ? 'Board is being deleted.' : 'Delete board.'}
                     disabled={deletingBoard}
+                    focusable={deletingBoard}
+                    position="left"
+                    triggerLabel="Delete board"
                   >
-                    <Trash2 size={14} />
-                    {deletingBoard ? 'Deleting...' : 'Delete board'}
-                  </button>
+                    <button
+                      className={styles.boardActionsMenuItem}
+                      onClick={() => { setShowBoardActions(false); void handleDeleteBoard(); }}
+                      disabled={deletingBoard}
+                    >
+                      <Trash2 size={14} />
+                      {deletingBoard ? 'Deleting...' : 'Delete board'}
+                    </button>
+                  </ActionTooltip>
                 </AnchoredOverlay>
               )}
             </div>
@@ -1460,47 +1674,87 @@ export function BoardPage() {
         </div>
       )}
 
-      <div className={styles.board}>
-        {sortedColumns.map((col) => {
-          const colCards = cardsByColumn.get(col.id) || [];
-          return (
-            <Column
-              key={col.id}
-              column={col}
-              cards={colCards}
-              agents={agents}
-              users={boardUsers}
-              tags={boardTags}
-              processingCards={processingCards}
-              currentUserId={user?.id ?? null}
-              allColumns={sortedColumns}
-              isCollapsed={collapsedCols.has(col.id)}
-              onToggleCollapse={() => toggleColumnCollapsed(col.id)}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDrop={handleDrop}
-              onAddCard={() => setShowAddCard(col.id)}
-              onQuickAddCard={handleQuickAddCard}
-              onBulkAddCards={handleBulkAddCards}
-              onUpdateColumn={handleUpdateColumn}
-              onDeleteColumn={handleDeleteColumn}
-              onDeleteCard={handleDeleteCard}
-              onMoveCard={handleMoveCard}
-              onDuplicateCard={handleDuplicateCard}
-              onCardClick={setQuickViewCardId}
-              sortOption={columnSorts[col.id] || 'position'}
-              onSortChange={setColumnSort}
-              onColumnDragStart={handleColumnDragStart}
-              onColumnDragEnd={handleColumnDragEnd}
-              onColumnDragOver={handleColumnDragOver}
-              onColumnDragLeave={handleColumnDragLeave}
-              onColumnDrop={handleColumnDrop}
-              isColumnDropTarget={columnDropTarget === col.id}
-            />
-          );
-        })}
-        <AddColumnButton onAdd={handleAddColumn} />
+      <div
+        className={[
+          styles.boardArea,
+          boardDragToPlanActive && (externalPlannerDrag || isDraggingRef.current)
+            ? styles.boardAreaPlanDrop
+            : '',
+        ].filter(Boolean).join(' ')}
+      >
+        <div className={styles.board}>
+          {sortedColumns.map((col) => {
+            const colCards = cardsByColumn.get(col.id) || [];
+            return (
+              <Column
+                key={col.id}
+                column={col}
+                cards={colCards}
+                agents={agents}
+                users={boardUsers}
+                tags={boardTags}
+                processingCards={processingCards}
+                currentUserId={user?.id ?? null}
+                allColumns={sortedColumns}
+                isCollapsed={collapsedCols.has(col.id)}
+                onToggleCollapse={() => toggleColumnCollapsed(col.id)}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDrop={handleDrop}
+                onAddCard={() => setShowAddCard(col.id)}
+                onQuickAddCard={handleQuickAddCard}
+                onBulkAddCards={handleBulkAddCards}
+                onUpdateColumn={handleUpdateColumn}
+                onDeleteColumn={handleDeleteColumn}
+                onMoveColumnCards={handleMoveColumnCards}
+                onClearColumnCards={handleClearColumnCards}
+                onDeleteCard={handleDeleteCard}
+                onMoveCard={handleMoveCard}
+                onDuplicateCard={handleDuplicateCard}
+                onCardClick={setQuickViewCardId}
+                sortOption={columnSorts[col.id] || 'position'}
+                onSortChange={setColumnSort}
+                onColumnDragStart={handleColumnDragStart}
+                onColumnDragEnd={handleColumnDragEnd}
+                onColumnDragOver={handleColumnDragOver}
+                onColumnDragLeave={handleColumnDragLeave}
+                onColumnDrop={handleColumnDrop}
+                isColumnDropTarget={columnDropTarget === col.id}
+                planLayerByCardId={planLayerByCardId}
+                planCardIds={planCardIds}
+                livePlanBadges={planExperiments.liveBadges && plansEditorActive}
+                planSelectionMode={planBoardSelectionActive}
+                selectedPlanCardIds={selectedPlanCardIds}
+                onTogglePlanCardSelection={togglePlanCardSelection}
+                showColumnImportDrag={planExperiments.columnToLayer && plansEditorActive}
+                onColumnImportDragStart={handleColumnImportDragStart}
+              />
+            );
+          })}
+          <AddColumnButton onAdd={handleAddColumn} />
+        </div>
       </div>
+
+      {planExperiments.selectionToolbar && plansEditorActive && selectedPlanCardIds.size > 0 && (
+        <div className={styles.planSelectionBar}>
+          <span className={styles.planSelectionLabel}>
+            {selectedPlanCardIds.size} card{selectedPlanCardIds.size === 1 ? '' : 's'} selected
+          </span>
+          <Button variant="secondary" onClick={() => addSelectionToPlan('append')}>
+            Add to plan
+          </Button>
+          <Button variant="secondary" onClick={() => addSelectionToPlan('newLayer')}>
+            Add as new layer
+          </Button>
+          <button
+            type="button"
+            className={styles.planSelectionClear}
+            onClick={() => setSelectedPlanCardIds(new Set())}
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {(isFiltering || hasChipFilters) && visibleCardCount === 0 && (
         <div className={styles.filterNoResults}>
@@ -1536,12 +1790,17 @@ export function BoardPage() {
         <BoardExecutionPlansPanel
           boardId={board.id}
           availableCards={availableBoardCards}
+          columnColors={columnColors}
+          experiments={planExperiments}
           onClose={() => setShowExecutionPlansPanel(false)}
           onRunPlan={(plan) => {
             setBatchPlanSource(plan);
             setShowExecutionPlansPanel(false);
             setShowBatchRunPanel(true);
           }}
+          onEditorBridgeChange={setPlanEditorBridge}
+          onEditorLayersChange={setPlanEditorLayers}
+          onExternalPlannerDrag={setExternalPlannerDrag}
         />
       )}
 
@@ -1552,6 +1811,11 @@ export function BoardPage() {
           availableCards={availableBoardCards}
           initialManualLayers={batchPlanSource?.layers}
           initialPlanName={batchPlanSource?.name}
+          embedPlanner={planExperiments.embedBatchPlanner && !!batchPlanSource}
+          plannerExperiments={{
+            polish: planExperiments.plannerPolish,
+            dependencyShortcuts: planExperiments.dependencyShortcuts,
+          }}
           onClose={() => {
             setShowBatchRunPanel(false);
             setBatchPlanSource(null);
@@ -1597,9 +1861,13 @@ export function BoardPage() {
             </div>
             <div className={styles.createModalActions}>
               <Button variant="ghost" onClick={() => setShowCreateBoard(false)}>Cancel</Button>
-              <Button onClick={handleCreateBoard} disabled={creatingBoard || !newBoardName.trim()}>
+              <ReasonedActionButton
+                onClick={handleCreateBoard}
+                disabled={creatingBoard || !newBoardName.trim()}
+                disabledReason={creatingBoard ? 'Board is being created.' : 'Enter a board name before creating it.'}
+              >
                 {creatingBoard ? 'Creating...' : 'Create'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </div>
         </Modal>
@@ -1627,6 +1895,8 @@ interface ColumnProps {
   onBulkAddCards: (columnId: string, names: string[]) => Promise<void>;
   onUpdateColumn: (columnId: string, data: Record<string, unknown>) => void;
   onDeleteColumn: (columnId: string) => void;
+  onMoveColumnCards: (sourceColumnId: string, targetColumnId: string) => Promise<void>;
+  onClearColumnCards: (columnId: string) => Promise<void>;
   onDeleteCard: (cardId: string, cardName: string) => void;
   onMoveCard: (cardId: string, targetColumnId: string) => void;
   onDuplicateCard: (cardId: string, columnId: string) => void;
@@ -1639,9 +1909,58 @@ interface ColumnProps {
   onColumnDragLeave: (e: React.DragEvent) => void;
   onColumnDrop: (e: React.DragEvent, columnId: string) => void;
   isColumnDropTarget: boolean;
+  planLayerByCardId?: Map<string, number>;
+  planCardIds?: Set<string>;
+  livePlanBadges?: boolean;
+  planSelectionMode?: boolean;
+  selectedPlanCardIds?: Set<string>;
+  onTogglePlanCardSelection?: (cardId: string) => void;
+  showColumnImportDrag?: boolean;
+  onColumnImportDragStart?: (e: React.DragEvent, column: BoardColumn, cards: BoardCardEntry[]) => void;
 }
 
-const Column = memo(function Column({ column, cards, agents, users, tags, processingCards, currentUserId, allColumns, isCollapsed, onToggleCollapse, onDragStart, onDragEnd, onDrop, onAddCard, onQuickAddCard, onBulkAddCards, onUpdateColumn, onDeleteColumn, onDeleteCard, onMoveCard, onDuplicateCard, onCardClick, sortOption, onSortChange, onColumnDragStart, onColumnDragEnd, onColumnDragOver, onColumnDragLeave, onColumnDrop, isColumnDropTarget }: ColumnProps) {
+const Column = memo(function Column({
+  column,
+  cards,
+  agents,
+  users,
+  tags,
+  processingCards,
+  currentUserId,
+  allColumns,
+  isCollapsed,
+  onToggleCollapse,
+  onDragStart,
+  onDragEnd,
+  onDrop,
+  onAddCard,
+  onQuickAddCard,
+  onBulkAddCards,
+  onUpdateColumn,
+  onDeleteColumn,
+  onMoveColumnCards,
+  onClearColumnCards,
+  onDeleteCard,
+  onMoveCard,
+  onDuplicateCard,
+  onCardClick,
+  sortOption,
+  onSortChange,
+  onColumnDragStart,
+  onColumnDragEnd,
+  onColumnDragOver,
+  onColumnDragLeave,
+  onColumnDrop,
+  isColumnDropTarget,
+  planLayerByCardId,
+  planCardIds,
+  livePlanBadges = false,
+  planSelectionMode = false,
+  selectedPlanCardIds,
+  onTogglePlanCardSelection,
+  showColumnImportDrag = false,
+  onColumnImportDragStart,
+}: ColumnProps) {
   const navigate = useNavigate();
   const [isDragOver, setIsDragOver] = useState(false);
   const [showAgentMenu, setShowAgentMenu] = useState(false);
@@ -1654,6 +1973,10 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
   const [showSortMenu, setShowSortMenu] = useState(false);
   const sortMenuRef = useRef<HTMLDivElement>(null);
   const sortMenuOverlayRef = useRef<HTMLDivElement>(null);
+  const [showColumnActions, setShowColumnActions] = useState(false);
+  const [columnActionBusy, setColumnActionBusy] = useState(false);
+  const columnActionsRef = useRef<HTMLDivElement>(null);
+  const columnActionsOverlayRef = useRef<HTMLDivElement>(null);
   const [showWipInput, setShowWipInput] = useState(false);
   const [wipInputValue, setWipInputValue] = useState('');
   const wipInputRef = useRef<HTMLInputElement>(null);
@@ -1733,6 +2056,21 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
     document.addEventListener('mousedown', onClickOutside);
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [showSortMenu]);
+
+  useEffect(() => {
+    if (!showColumnActions) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        !columnActionsRef.current?.contains(target) &&
+        !columnActionsOverlayRef.current?.contains(target)
+      ) {
+        setShowColumnActions(false);
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showColumnActions]);
 
   useEffect(() => {
     if (!showWipInput) return;
@@ -1851,6 +2189,7 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
   }
 
   const assignedAgent = agents.find((a) => a.id === column.assignAgentId);
+  const otherColumns = allColumns.filter((col) => col.id !== column.id);
   const trimmedAgentPrompt = agentPromptValue.trim();
   const savedAgentPrompt = (column.assignAgentPrompt ?? '').trim();
   const agentPromptDirty = trimmedAgentPrompt !== savedAgentPrompt;
@@ -1861,9 +2200,21 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
     });
   }
 
+  async function runColumnAction(action: () => Promise<void>) {
+    if (columnActionBusy) return;
+    setColumnActionBusy(true);
+    try {
+      setShowColumnActions(false);
+      await action();
+    } finally {
+      setColumnActionBusy(false);
+    }
+  }
+
   function handleDragOver(e: React.DragEvent) {
-    // Ignore column drags — only handle card drags in the card list
+    // Ignore column drags and board→plan drags — only handle in-column card moves
     if (e.dataTransfer.types.includes('application/x-column-id')) return;
+    if (isExternalBoardDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setIsDragOver(true);
@@ -1877,6 +2228,7 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
 
   function handleDrop(e: React.DragEvent) {
     if (e.dataTransfer.types.includes('application/x-column-id')) return;
+    if (isExternalBoardDrag(e.dataTransfer)) return;
     e.preventDefault();
     setIsDragOver(false);
     onDrop(e, column.id);
@@ -1975,6 +2327,18 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
         <div className={styles.columnDragHandle} title="Drag to reorder">
           <GripVertical size={14} />
         </div>
+        {showColumnImportDrag && onColumnImportDragStart && (
+          <button
+            type="button"
+            className={styles.columnImportBtn}
+            draggable
+            onDragStart={(e) => onColumnImportDragStart(e, column, cards)}
+            title="Drag column into execution plan"
+            aria-label="Drag column into plan"
+          >
+            <Layers size={13} />
+          </button>
+        )}
         <div className={styles.colorPickerWrap} ref={colorPickerRef}>
           <button
             className={styles.colorDot}
@@ -2127,34 +2491,42 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
                 placement="bottom-end"
               >
                 <div className={styles.automationMenuTitle}>Auto-assign agent</div>
-                <button
-                  className={styles.automationMenuItem}
-                  onClick={() => {
-                    setShowAgentMenu(false);
-                    setShowAgentPicker(true);
-                  }}
+                <ActionTooltip
+                  label={agents.length === 0 ? 'Create or activate an agent before assigning column automation.' : 'Choose who should receive cards from this column.'}
                   disabled={agents.length === 0}
+                  focusable={agents.length === 0}
+                  position="left"
+                  triggerLabel={assignedAgent ? 'Change worker' : 'Choose worker'}
                 >
-                  {assignedAgent ? (
-                    <>
-                      <AgentAvatar icon={assignedAgent.avatarIcon} bgColor={assignedAgent.avatarBgColor} logoColor={assignedAgent.avatarLogoColor} size={16} />
-                      <span className={styles.automationMenuItemLabel}>
-                        Change worker
-                        <span className={styles.automationMenuItemMeta}>{assignedAgent.name}</span>
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Bot size={14} />
-                      <span className={styles.automationMenuItemLabel}>
-                        Choose worker
-                        <span className={styles.automationMenuItemMeta}>
-                          {agents.length === 0 ? 'No active agents' : 'Pick who should receive cards from this column'}
+                  <button
+                    className={styles.automationMenuItem}
+                    onClick={() => {
+                      setShowAgentMenu(false);
+                      setShowAgentPicker(true);
+                    }}
+                    disabled={agents.length === 0}
+                  >
+                    {assignedAgent ? (
+                      <>
+                        <AgentAvatar icon={assignedAgent.avatarIcon} bgColor={assignedAgent.avatarBgColor} logoColor={assignedAgent.avatarLogoColor} size={16} />
+                        <span className={styles.automationMenuItemLabel}>
+                          Change worker
+                          <span className={styles.automationMenuItemMeta}>{assignedAgent.name}</span>
                         </span>
-                      </span>
-                    </>
-                  )}
-                </button>
+                      </>
+                    ) : (
+                      <>
+                        <Bot size={14} />
+                        <span className={styles.automationMenuItemLabel}>
+                          Choose worker
+                          <span className={styles.automationMenuItemMeta}>
+                            {agents.length === 0 ? 'No active agents' : 'Pick who should receive cards from this column'}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </ActionTooltip>
                 <div className={styles.automationDivider} />
                 <div className={styles.automationMenuSectionTitle}>
                   <AlignLeft size={12} />
@@ -2172,13 +2544,21 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
                     Saved on the column and appended whenever this automation auto-assigns a card.
                   </div>
                   <div className={styles.automationPromptActions}>
-                    <button
-                      className={styles.automationPromptSave}
-                      onClick={saveAgentPrompt}
+                    <ActionTooltip
+                      label={agentPromptDirty ? 'Save prompt.' : 'Change the prompt before saving it.'}
                       disabled={!agentPromptDirty}
+                      focusable={!agentPromptDirty}
+                      position="left"
+                      triggerLabel="Save prompt"
                     >
-                      Save prompt
-                    </button>
+                      <button
+                        className={styles.automationPromptSave}
+                        onClick={saveAgentPrompt}
+                        disabled={!agentPromptDirty}
+                      >
+                        Save prompt
+                      </button>
+                    </ActionTooltip>
                     {savedAgentPrompt && (
                       <button
                         className={styles.automationPromptClear}
@@ -2278,6 +2658,74 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
               </AnchoredOverlay>
             )}
           </div>
+          <div className={styles.automationWrap} ref={columnActionsRef}>
+            <button
+              className={styles.automationBtn}
+              onClick={() => setShowColumnActions(!showColumnActions)}
+              title="Column actions"
+              aria-label="Column actions"
+            >
+              <MoreHorizontal size={13} />
+            </button>
+            {showColumnActions && (
+              <AnchoredOverlay
+                ref={columnActionsOverlayRef}
+                anchorRef={columnActionsRef}
+                className={`${styles.automationMenu} ${styles.columnActionsMenu}`}
+                placement="bottom-end"
+              >
+                <div className={styles.automationMenuTitle}>Column actions</div>
+                <div className={styles.automationMenuSectionTitle}>
+                  <MoveRight size={12} />
+                  Move all cards to
+                </div>
+                {otherColumns.length > 0 ? (
+                  otherColumns.map((targetColumn) => (
+                    <ActionTooltip
+                      key={targetColumn.id}
+                      label={cards.length === 0 ? 'This column has no cards to move.' : `Move all cards to ${targetColumn.name}.`}
+                      disabled={cards.length === 0 || columnActionBusy}
+                      focusable={cards.length === 0 || columnActionBusy}
+                      position="left"
+                      triggerLabel={targetColumn.name}
+                    >
+                      <button
+                        className={styles.automationMenuItem}
+                        disabled={cards.length === 0 || columnActionBusy}
+                        onClick={() => {
+                          void runColumnAction(() => onMoveColumnCards(column.id, targetColumn.id));
+                        }}
+                      >
+                        <span className={styles.columnDot} style={{ background: targetColumn.color }} />
+                        {targetColumn.name}
+                      </button>
+                    </ActionTooltip>
+                  ))
+                ) : (
+                  <div className={styles.columnActionsEmpty}>No other columns</div>
+                )}
+                <div className={styles.automationDivider} />
+                <ActionTooltip
+                  label={cards.length === 0 ? 'This column has no cards to remove.' : 'Remove all cards from this board without deleting the column.'}
+                  disabled={cards.length === 0 || columnActionBusy}
+                  focusable={cards.length === 0 || columnActionBusy}
+                  position="left"
+                  triggerLabel="Remove cards"
+                >
+                  <button
+                    className={`${styles.automationMenuItem} ${styles.automationMenuItemDanger}`}
+                    disabled={cards.length === 0 || columnActionBusy}
+                    onClick={() => {
+                      void runColumnAction(() => onClearColumnCards(column.id));
+                    }}
+                  >
+                    <Trash2 size={14} />
+                    Remove cards from board
+                  </button>
+                </ActionTooltip>
+              </AnchoredOverlay>
+            )}
+          </div>
           <button
             className={styles.collapseBtn}
             onClick={onToggleCollapse}
@@ -2317,14 +2765,28 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
           displayCards.map((bc) => {
             const processingAgentId = processingCards.get(bc.cardId);
             const processingAgent = processingAgentId ? agents.find((a) => a.id === processingAgentId) : null;
+            const planLayer = planLayerByCardId?.get(bc.cardId);
+            const inPlan = planCardIds?.has(bc.cardId) ?? false;
+            const dimCard = livePlanBadges && planCardIds && planCardIds.size > 0 && !inPlan;
+            const selectedForPlan = selectedPlanCardIds?.has(bc.cardId) ?? false;
             return (
             <div
               key={bc.id}
-              className={`${styles.card}${processingAgentId ? ` ${styles.cardProcessing}` : ''}`}
+              className={[
+                styles.card,
+                processingAgentId ? styles.cardProcessing : '',
+                dimCard ? styles.cardNotInPlan : '',
+                selectedForPlan ? styles.cardPlanSelected : '',
+              ].filter(Boolean).join(' ')}
               draggable
               onDragStart={(e) => onDragStart(e, bc)}
               onDragEnd={onDragEnd}
               onClick={(e) => {
+                if (planSelectionMode && e.shiftKey && onTogglePlanCardSelection) {
+                  e.preventDefault();
+                  onTogglePlanCardSelection(bc.cardId);
+                  return;
+                }
                 if (e.metaKey || e.ctrlKey) {
                   window.open(`/cards/${bc.cardId}`, '_blank');
                 } else {
@@ -2344,6 +2806,16 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
                 });
               }}
             >
+              {livePlanBadges && planLayer != null && (
+                <span
+                  className={[
+                    styles.planLayerBadge,
+                    styles[`planLayerBadge_${Math.min(planLayer, 6)}`],
+                  ].filter(Boolean).join(' ')}
+                >
+                  L{planLayer}
+                </span>
+              )}
               {processingAgentId && (
                 <div className={styles.cardProcessingBadge}>
                   {processingAgent && (
@@ -2459,13 +2931,20 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
                 <Layers size={12} />
                 {pastedLines.length} lines detected
               </span>
-              <button
-                className={styles.bulkPasteBtn}
-                onClick={() => void handleBulkSubmit()}
+              <ActionTooltip
+                label={inlineSubmitting ? 'Cards are being created.' : `Create ${pastedLines.length} cards.`}
                 disabled={inlineSubmitting}
+                focusable={inlineSubmitting}
+                triggerLabel={`Create ${pastedLines.length} cards`}
               >
-                {inlineSubmitting ? 'Creating...' : `Create ${pastedLines.length} cards`}
-              </button>
+                <button
+                  className={styles.bulkPasteBtn}
+                  onClick={() => void handleBulkSubmit()}
+                  disabled={inlineSubmitting}
+                >
+                  {inlineSubmitting ? 'Creating...' : `Create ${pastedLines.length} cards`}
+                </button>
+              </ActionTooltip>
               <button
                 className={styles.bulkPasteDismiss}
                 onClick={dismissPastedLines}
@@ -2585,13 +3064,20 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
 
             <div className={styles.inlineToolbarSpacer} />
 
-            <button
-              className={styles.inlineAddSubmit}
-              onClick={() => void handleInlineSubmit()}
+            <ActionTooltip
+              label={inlineSubmitting ? 'Card is being added.' : !inlineName.trim() ? 'Enter a card title before adding it.' : 'Add card.'}
               disabled={!inlineName.trim() || inlineSubmitting}
+              focusable={!inlineName.trim() || inlineSubmitting}
+              triggerLabel="Add card"
             >
-              {inlineSubmitting ? 'Adding...' : 'Add'}
-            </button>
+              <button
+                className={styles.inlineAddSubmit}
+                onClick={() => void handleInlineSubmit()}
+                disabled={!inlineName.trim() || inlineSubmitting}
+              >
+                {inlineSubmitting ? 'Adding...' : 'Add'}
+              </button>
+            </ActionTooltip>
             <button
               className={styles.inlineAddCancel}
               onClick={resetInlineForm}
@@ -2666,6 +3152,9 @@ const Column = memo(function Column({ column, cards, agents, users, tags, proces
             onDeleteCard(cardId, cardName);
             setContextMenu(null);
           }}
+          planSelectionEnabled={planSelectionMode}
+          selectedForPlan={selectedPlanCardIds?.has(contextMenu.cardId) ?? false}
+          onTogglePlanCardSelection={onTogglePlanCardSelection}
           onAssignCard={async (cardId, assigneeId) => {
             try {
               await api(`/cards/${cardId}`, {
@@ -2764,7 +3253,13 @@ function AddColumnButton({ onAdd }: { onAdd: (name: string, color: string) => vo
       </div>
       <div className={styles.addColumnActions}>
         <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-        <Button onClick={handleCreate} disabled={!name.trim()}>Create</Button>
+        <ReasonedActionButton
+          onClick={handleCreate}
+          disabled={!name.trim()}
+          disabledReason="Enter a column name before creating it."
+        >
+          Create
+        </ReasonedActionButton>
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ to update board state as part of the work.
 - Placing an existing card onto a board column.
 - Moving a card to another column as work progresses.
 - Leaving progress, handoff, blocker, or completion notes on the card.
+- Reading, creating, updating, or running a board execution plan.
 
 ## Ground rules
 
@@ -51,6 +52,16 @@ to update board state as part of the work.
   - `PATCH /api/boards/:id/cards/:cardId`
 - Remove a card from a board:
   - `DELETE /api/boards/:id/cards/:cardId`
+- Manage saved execution plans:
+  - `GET /api/boards/:id/execution-plans`
+  - `POST /api/boards/:id/execution-plans`
+  - `GET /api/boards/:id/execution-plans/:planId`
+  - `PATCH /api/boards/:id/execution-plans/:planId`
+  - `DELETE /api/boards/:id/execution-plans/:planId`
+- Run a board batch:
+  - `POST /api/boards/:id/batch-run`
+  - `GET /api/boards/:id/batch-runs/:runId`
+  - `GET /api/boards/:id/batch-runs/:runId/items`
 
 ## Standard workflow
 
@@ -104,6 +115,60 @@ Use `PATCH /api/boards/:id/cards/:cardId` with the destination `columnId`.
   "columnId": "<destination-column-id>"
 }
 ```
+
+### Use a board execution plan
+
+Use this when the user asks about a board "plan" or ordered multi-card agent
+work. A plan is a saved layer graph for a board; it is not itself a running
+batch.
+
+1. Fetch the board and its plans.
+   - `GET /api/boards/:id`
+   - `GET /api/boards/:id/execution-plans`
+2. Create or update the plan with `layers`.
+3. Check the returned `status` and `issues`.
+4. To run it, call `POST /api/boards/:id/batch-run` with the plan's cards and
+   compiled dependencies.
+5. Verify through the batch-run and batch-run-items endpoints.
+
+Plan layer payload:
+
+```json
+{
+  "name": "Release sequence",
+  "description": "Build, verify, then release",
+  "layers": [
+    {
+      "cards": [
+        { "id": "<card-a-id>" }
+      ]
+    },
+    {
+      "cards": [
+        {
+          "id": "<card-b-id>",
+          "dependencyRule": {
+            "mode": "previous_layer",
+            "blockingMode": "all_success"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Dependency rule modes:
+
+- `none`: the card can run immediately.
+- `previous_layer`: depend on every card in the previous non-empty layer.
+- `all_previous_layers`: depend on every card in all earlier layers.
+- `specific_cards`: depend only on listed `cardIds`; those cards must be in
+  earlier layers.
+
+When starting the batch run from a plan, flatten layer card IDs into `cardIds`
+and send `cardDependencies` matching the dependency rules. There is no
+dedicated "run execution plan" endpoint.
 
 ## Completion and handoff policy
 

@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import bcrypt from 'bcrypt';
 import type { FastifyInstance } from 'fastify';
 import { store } from '../db/index.js';
-import { deleteRefreshTokensForUserId, findValidRefreshTokenByHash } from '../db/repositories/refresh-tokens-repository.js';
+import { consumeValidRefreshTokenByHash, deleteRefreshTokensForUserId } from '../db/repositories/refresh-tokens-repository.js';
 import { getUserRecordById } from '../db/repositories/users-repository.js';
 import { env } from '../config/env.js';
 
@@ -36,6 +36,12 @@ function generateAccessToken(app: FastifyInstance, userId: string): string {
 export async function generateTokens(app: FastifyInstance, userId: string) {
   const accessToken = generateAccessToken(app, userId);
 
+  const refreshToken = await generateRefreshToken(userId);
+
+  return { accessToken, refreshToken };
+}
+
+async function generateRefreshToken(userId: string): Promise<string> {
   const rawRefresh = randomBytes(48).toString('base64url');
   const tokenHash = hashToken(rawRefresh);
   const expiresAt = new Date(Date.now() + parseExpiry(env.JWT_REFRESH_EXPIRES_IN)).toISOString();
@@ -46,13 +52,13 @@ export async function generateTokens(app: FastifyInstance, userId: string) {
     expiresAt,
   });
 
-  return { accessToken, refreshToken: rawRefresh };
+  return rawRefresh;
 }
 
 export async function refreshAccessToken(app: FastifyInstance, rawRefreshToken: string) {
   const tokenHash = hashToken(rawRefreshToken);
 
-  const stored = await findValidRefreshTokenByHash(tokenHash);
+  const stored = await consumeValidRefreshTokenByHash(tokenHash);
 
   if (!stored) return null;
 
@@ -60,9 +66,11 @@ export async function refreshAccessToken(app: FastifyInstance, rawRefreshToken: 
 
   if (!user || user.isActive !== true || user.type === 'agent') return null;
 
+  const userId = String(user.id);
+
   return {
-    accessToken: generateAccessToken(app, String(user.id)),
-    refreshToken: rawRefreshToken,
+    accessToken: generateAccessToken(app, userId),
+    refreshToken: await generateRefreshToken(userId),
   };
 }
 

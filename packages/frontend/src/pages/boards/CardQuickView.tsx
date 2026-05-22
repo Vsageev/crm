@@ -5,7 +5,7 @@ import {
   Link2, MessageSquare, ChevronDown, Pencil, Check, Trash2, Loader2, UserPlus,
   ChevronLeft, ChevronRight, Copy, Image,
 } from 'lucide-react';
-import { Button, MarkdownContent, Tooltip } from '../../ui';
+import { ActionTooltip, MarkdownContent, ReasonedActionButton, Tooltip } from '../../ui';
 import { ImageLightbox } from '../../ui/ImageLightbox';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { api, apiUpload, ApiError } from '../../lib/api';
@@ -647,14 +647,21 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                         disabled={savingTitle}
                         maxLength={500}
                       />
-                      <button
-                        className={styles.titleSaveBtn}
-                        onClick={saveTitle}
+                      <ActionTooltip
+                        label={savingTitle ? 'Title is saving.' : !titleDraft.trim() ? 'Enter a card title before saving.' : 'Save title.'}
                         disabled={savingTitle || !titleDraft.trim()}
-                        title="Save (Enter)"
+                        focusable={savingTitle || !titleDraft.trim()}
+                        triggerLabel="Save title"
                       >
-                        <Check size={14} />
-                      </button>
+                        <button
+                          className={styles.titleSaveBtn}
+                          onClick={saveTitle}
+                          disabled={savingTitle || !titleDraft.trim()}
+                          aria-label="Save title"
+                        >
+                          <Check size={14} />
+                        </button>
+                      </ActionTooltip>
                     </div>
                   ) : (
                     <div className={styles.titleRow} onClick={startEditTitle} title="Click to rename">
@@ -804,7 +811,12 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                     rows={4}
                   />
                   <div className={styles.descActions}>
-                    <Tooltip label={uploadingDescImages ? 'Uploading images...' : 'Insert images'}>
+                    <ActionTooltip
+                      label={uploadingDescImages ? 'Wait for image uploads to finish.' : savingDesc ? 'Description is saving.' : 'Insert images'}
+                      disabled={savingDesc || uploadingDescImages}
+                      focusable={savingDesc || uploadingDescImages}
+                      triggerLabel="Insert images"
+                    >
                       <button
                         type="button"
                         className={styles.commentAttachBtn}
@@ -814,14 +826,25 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                       >
                         <Image size={14} />
                       </button>
-                    </Tooltip>
-                    <Button variant="ghost" size="sm" onClick={() => setEditingDesc(false)} disabled={savingDesc || uploadingDescImages}>
+                    </ActionTooltip>
+                    <ReasonedActionButton
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingDesc(false)}
+                      disabled={savingDesc || uploadingDescImages}
+                      disabledReason={uploadingDescImages ? 'Wait for image uploads to finish.' : 'Description is saving.'}
+                    >
                       Cancel
-                    </Button>
-                    <Button size="sm" onClick={saveDesc} disabled={savingDesc || uploadingDescImages}>
+                    </ReasonedActionButton>
+                    <ReasonedActionButton
+                      size="sm"
+                      onClick={saveDesc}
+                      disabled={savingDesc || uploadingDescImages}
+                      disabledReason={uploadingDescImages ? 'Wait for image uploads to finish.' : 'Description is saving.'}
+                    >
                       <Check size={14} />
                       {uploadingDescImages ? 'Uploading...' : savingDesc ? 'Saving...' : 'Save'}
-                    </Button>
+                    </ReasonedActionButton>
                   </div>
                 </div>
               ) : card.description ? (
@@ -957,17 +980,24 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                               }}
                             />
                             <div className={styles.commentEditActions}>
-                              <Button variant="ghost" size="sm" onClick={cancelEditComment} disabled={savingEditComment}>
+                              <ReasonedActionButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={cancelEditComment}
+                                disabled={savingEditComment}
+                                disabledReason="Comment is saving."
+                              >
                                 Cancel
-                              </Button>
-                              <Button
+                              </ReasonedActionButton>
+                              <ReasonedActionButton
                                 size="sm"
                                 onClick={() => void saveEditComment(c.id)}
                                 disabled={!editCommentDraft.trim() || savingEditComment}
+                                disabledReason={savingEditComment ? 'Comment is saving.' : 'Enter a comment before saving.'}
                               >
                                 {savingEditComment ? <Loader2 size={12} className={styles.spinner} /> : <Check size={12} />}
                                 Save
-                              </Button>
+                              </ReasonedActionButton>
                             </div>
                           </div>
                         ) : (
@@ -1037,7 +1067,12 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                     className={styles.commentHiddenFileInput}
                     onChange={handleCommentFileSelect}
                   />
-                  <Tooltip label={stagedImages.length >= MAX_COMMENT_IMAGES ? `Max ${MAX_COMMENT_IMAGES} images` : 'Attach images'}>
+                  <ActionTooltip
+                    label={uploadingImages ? 'Wait for image uploads to finish.' : stagedImages.length >= MAX_COMMENT_IMAGES ? `Remove an image before attaching more than ${MAX_COMMENT_IMAGES}.` : 'Attach images'}
+                    disabled={uploadingImages || stagedImages.length >= MAX_COMMENT_IMAGES}
+                    focusable={uploadingImages || stagedImages.length >= MAX_COMMENT_IMAGES}
+                    triggerLabel="Attach images"
+                  >
                     <button
                       className={styles.commentAttachBtn}
                       onClick={() => commentFileInputRef.current?.click()}
@@ -1046,7 +1081,7 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                     >
                       <Image size={13} />
                     </button>
-                  </Tooltip>
+                  </ActionTooltip>
                   <textarea
                     ref={commentInputRef}
                     className={styles.commentInput}
@@ -1064,15 +1099,21 @@ export function CardQuickView({ cardId, boardId, boardName, onClose, onCardUpdat
                     onPaste={handleCommentPaste}
                     disabled={uploadingImages}
                   />
-                  <Tooltip label="Send (Cmd+Enter)">
+                  <ActionTooltip
+                    label={submitting ? 'Comment is sending.' : (!newComment.trim() && stagedImages.length === 0) ? 'Write a comment or attach an image before sending.' : 'Send (Cmd+Enter)'}
+                    disabled={(!newComment.trim() && stagedImages.length === 0) || submitting}
+                    focusable={(!newComment.trim() && stagedImages.length === 0) || submitting}
+                    triggerLabel="Send comment"
+                  >
                     <button
                       className={styles.commentSend}
                       onClick={addComment}
                       disabled={(!newComment.trim() && stagedImages.length === 0) || submitting}
+                      aria-label="Send comment"
                     >
                       <Send size={13} />
                     </button>
-                  </Tooltip>
+                  </ActionTooltip>
                 </div>
               </div>
             </div>

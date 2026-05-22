@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, Plus, Pencil, Trash2, Clock, Check } from 'lucide-react';
 import { formatDate } from 'shared';
-import { Button } from '../../ui';
+import { Button, ReasonedActionButton } from '../../ui';
 import { Input } from '../../ui/Input';
 import { Textarea } from '../../ui/Textarea';
 import { CronEditor } from '../../ui/CronEditor';
@@ -329,9 +329,13 @@ export function BoardCronTemplatesPanel({ boardId, columns, onClose }: BoardCron
 
               <div className={styles.formActions}>
                 <Button variant="ghost" onClick={resetForm}>Cancel</Button>
-                <Button onClick={() => void handleSubmit()} disabled={submitting || !formName.trim()}>
+                <ReasonedActionButton
+                  onClick={() => void handleSubmit()}
+                  disabled={submitting || !formName.trim()}
+                  disabledReason={submitting ? 'Template is saving.' : 'Enter a template name before saving.'}
+                >
                   {submitting ? 'Saving...' : editingId ? 'Update' : 'Create'}
-                </Button>
+                </ReasonedActionButton>
               </div>
             </div>
           )}

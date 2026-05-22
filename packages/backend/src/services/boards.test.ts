@@ -57,7 +57,7 @@ vi.mock('./collections.js', () => ({
 }));
 vi.mock('./cards.js', () => ({ updateCard: vi.fn() }));
 
-import { deleteBoard } from './boards.js';
+import { clearColumnCards, deleteBoard, moveColumnCards } from './boards.js';
 
 describe('deleteBoard', () => {
   beforeEach(() => {
@@ -96,5 +96,86 @@ describe('deleteBoard', () => {
       'boards:board-1',
     ]);
     expect(mocks.store.reload).toHaveBeenCalledOnce();
+  });
+});
+
+describe('column card bulk actions', () => {
+  beforeEach(() => {
+    for (const collection of Object.keys(mocks.records)) {
+      delete mocks.records[collection];
+    }
+    vi.clearAllMocks();
+    mocks.store.transaction.mockImplementation(async <T>(operation: () => Promise<T> | T) =>
+      operation(),
+    );
+  });
+
+  it('moves all cards from one column to another and appends them in order', async () => {
+    mocks.store.insert('boardColumns', { id: 'source', boardId: 'board-1', position: 0 });
+    mocks.store.insert('boardColumns', { id: 'target', boardId: 'board-1', position: 1 });
+    mocks.store.insert('boardCards', {
+      id: 'existing-target',
+      boardId: 'board-1',
+      columnId: 'target',
+      cardId: 'card-target',
+      position: 0,
+    });
+    mocks.store.insert('boardCards', {
+      id: 'source-2',
+      boardId: 'board-1',
+      columnId: 'source',
+      cardId: 'card-2',
+      position: 1,
+    });
+    mocks.store.insert('boardCards', {
+      id: 'source-1',
+      boardId: 'board-1',
+      columnId: 'source',
+      cardId: 'card-1',
+      position: 0,
+    });
+
+    await expect(moveColumnCards('board-1', 'source', 'target')).resolves.toEqual({ moved: 2 });
+
+    expect(mocks.store.getById('boardCards', 'source-1')).toMatchObject({
+      columnId: 'target',
+      position: 1,
+    });
+    expect(mocks.store.getById('boardCards', 'source-2')).toMatchObject({
+      columnId: 'target',
+      position: 2,
+    });
+    expect(mocks.store.getById('boardColumns', 'source')).toMatchObject({ id: 'source' });
+    expect(mocks.store.getById('boardColumns', 'target')).toMatchObject({ id: 'target' });
+  });
+
+  it('removes cards from a column without deleting the column', async () => {
+    mocks.store.insert('boardColumns', { id: 'source', boardId: 'board-1', position: 0 });
+    mocks.store.insert('boardCards', {
+      id: 'source-1',
+      boardId: 'board-1',
+      columnId: 'source',
+      cardId: 'card-1',
+      position: 0,
+    });
+    mocks.store.insert('boardCards', {
+      id: 'other-board-card',
+      boardId: 'board-2',
+      columnId: 'source',
+      cardId: 'card-2',
+      position: 0,
+    });
+
+    await expect(clearColumnCards('board-1', 'source')).resolves.toEqual({ removed: 1 });
+
+    expect(mocks.store.getById('boardCards', 'source-1')).toBeNull();
+    expect(mocks.store.getById('boardCards', 'other-board-card')).toMatchObject({ id: 'other-board-card' });
+    expect(mocks.store.getById('boardColumns', 'source')).toMatchObject({ id: 'source' });
+  });
+
+  it('rejects moving cards to the same column', async () => {
+    mocks.store.insert('boardColumns', { id: 'source', boardId: 'board-1', position: 0 });
+
+    await expect(moveColumnCards('board-1', 'source', 'source')).resolves.toBeNull();
   });
 });

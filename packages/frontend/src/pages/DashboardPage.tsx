@@ -37,6 +37,7 @@ import { TimeAgo } from '../components/TimeAgo';
 import { getRecentVisits, removeRecentVisit, type RecentVisit } from '../lib/recent-visits';
 import { stripMarkdown } from '../lib/file-utils';
 import { CardQuickView } from './boards/CardQuickView';
+import { ActionTooltip } from '../ui';
 import styles from './DashboardPage.module.css';
 
 interface CardAssignee {
@@ -166,7 +167,6 @@ function getContactInitials(contact: ConversationContact | null): string {
 const CHANNEL_LABELS: Record<string, string> = {
   internal: 'Internal',
   email: 'Email',
-  web_chat: 'Web Chat',
   other: 'Other',
 };
 
@@ -439,6 +439,11 @@ export function DashboardPage() {
   }, [lastRefreshed]);
 
   const greeting = user ? `Welcome back, ${user.firstName}` : 'Dashboard';
+  const refreshDisabledReason = refreshing
+    ? 'Dashboard refresh is already running.'
+    : loading
+      ? 'Wait for the dashboard to finish loading before refreshing.'
+      : null;
 
   return (
     <div className={styles.wrapper}>
@@ -452,15 +457,20 @@ export function DashboardPage() {
                 Updated {formatRefreshTimestamp(lastRefreshed)}
               </span>
             )}
-            <button
-              className={`${styles.refreshBtn}${refreshing ? ` ${styles.refreshBtnSpinning}` : ''}`}
-              onClick={handleRefresh}
-              disabled={refreshing || loading}
-              title="Refresh dashboard"
-              aria-label="Refresh dashboard"
+            <ActionTooltip
+              label={refreshDisabledReason ?? 'Refresh dashboard'}
+              disabled={Boolean(refreshDisabledReason)}
+              triggerLabel="Refresh dashboard"
             >
-              <RefreshCw size={15} />
-            </button>
+              <button
+                className={`${styles.refreshBtn}${refreshing ? ` ${styles.refreshBtnSpinning}` : ''}`}
+                onClick={handleRefresh}
+                disabled={Boolean(refreshDisabledReason)}
+                aria-label="Refresh dashboard"
+              >
+                <RefreshCw size={15} />
+              </button>
+            </ActionTooltip>
           </div>
         }
       />

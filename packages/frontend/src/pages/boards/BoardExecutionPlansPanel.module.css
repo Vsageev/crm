@@ -1,8 +1,3 @@
-@keyframes overlayIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 @keyframes panelIn {
   from {
     opacity: 0;
@@ -14,25 +9,33 @@
   }
 }
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  justify-content: flex-end;
-  z-index: 100;
-  animation: overlayIn 0.15s ease-out;
-}
-
-.panel {
-  width: 100%;
-  max-width: 560px;
+.railPanel {
+  width: min(520px, calc(100vw - 32px));
+  height: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   background: var(--color-card);
-  border-left: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
-  animation: panelIn 0.2s ease-out;
   overflow: hidden;
+  pointer-events: auto;
+  animation: panelIn 0.2s ease-out;
+}
+
+.railShell {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px;
+  pointer-events: none;
+}
+
+.listPanel,
+.editorPanel {
+  min-height: 0;
 }
 
 .header {
@@ -248,38 +251,6 @@
   letter-spacing: 0.04em;
 }
 
-.statusStrip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-}
-
-.statusStrip span {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: var(--color-card);
-  border: 1px solid var(--color-border-subtle);
-}
-
-.statusStrip .statusOk {
-  color: var(--color-success);
-  background: rgba(16, 185, 129, 0.08);
-  border-color: rgba(16, 185, 129, 0.18);
-}
-
-.statusStrip .statusIssue {
-  color: var(--color-error);
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.18);
-}
-
 .issueList {
   display: flex;
   flex-direction: column;
@@ -315,9 +286,65 @@
   flex-shrink: 0;
 }
 
+.templateSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.templateLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.templateCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.templateCard:hover {
+  border-color: var(--color-border);
+  background: var(--color-card);
+}
+
+.templateCardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.templateCardDesc {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  line-height: 1.35;
+}
+
 @media (max-width: 640px) {
-  .panel {
+  .railPanel {
     max-width: none;
+    width: 100%;
+    border-radius: 0;
+  }
+
+  .railShell {
+    padding: 0;
   }
 
   .planItem {
@@ -326,5 +353,25 @@
 
   .planActions {
     flex-direction: column;
+  }
+
+}
+
+@media print {
+  .railShell {
+    position: static;
+    inset: auto;
+    display: block;
+    padding: 0;
+    background: #fff;
+  }
+
+  .railPanel {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    border: none;
+    box-shadow: none;
   }
 }

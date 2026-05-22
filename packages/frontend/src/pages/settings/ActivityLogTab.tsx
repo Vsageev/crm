@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { TimeAgo } from '../../components/TimeAgo';
+import { ActionTooltip } from '../../ui';
 import styles from './ActivityLogTab.module.css';
 
 /* ── Types ── */
@@ -57,7 +58,6 @@ const ENTITY_LABELS: Record<string, string> = {
   user: 'Account',
   workspace: 'Workspace',
   tag: 'Tag',
-  quick_reply_template: 'Template',
   backup: 'Backup',
 };
 
@@ -193,6 +193,7 @@ export function ActivityLogTab() {
   }
 
   const hasMore = entries.length < total;
+  const loadMoreDisabledReason = loadingMore ? 'More activity is already loading.' : null;
 
   // Group entries by date
   const dateGroups: { date: string; label: string; entries: AuditLogEntry[] }[] = [];
@@ -331,17 +332,23 @@ export function ActivityLogTab() {
           ))}
           {hasMore && (
             <div className={styles.loadMore}>
-              <button
-                className={styles.loadMoreBtn}
-                onClick={() => fetchLogs(entries.length, true)}
-                disabled={loadingMore}
+              <ActionTooltip
+                label={loadMoreDisabledReason ?? 'Load more activity'}
+                disabled={Boolean(loadMoreDisabledReason)}
+                triggerLabel="Load more activity"
               >
-                {loadingMore ? (
-                  <><Loader2 size={14} className={styles.spinner} /> Loading...</>
-                ) : (
-                  <>Load more ({total - entries.length} remaining)</>
-                )}
-              </button>
+                <button
+                  className={styles.loadMoreBtn}
+                  onClick={() => fetchLogs(entries.length, true)}
+                  disabled={Boolean(loadMoreDisabledReason)}
+                >
+                  {loadingMore ? (
+                    <><Loader2 size={14} className={styles.spinner} /> Loading...</>
+                  ) : (
+                    <>Load more ({total - entries.length} remaining)</>
+                  )}
+                </button>
+              </ActionTooltip>
             </div>
           )}
         </div>

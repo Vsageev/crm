@@ -130,7 +130,7 @@ export interface Conversation {
   id: string;
   contactId: string;
   assigneeId: string | null;
-  channelType: 'internal' | 'other' | 'email' | 'web_chat';
+  channelType: 'internal' | 'other' | 'email';
   status: 'open' | 'closed' | 'archived';
   subject: string | null;
   externalId: string | null;

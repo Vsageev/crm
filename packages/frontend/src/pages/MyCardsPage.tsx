@@ -118,7 +118,6 @@ export function MyCardsPage() {
   const navigate = useNavigate();
   const [cards, setCards] = useState<CardItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
   const [search, setSearch] = useState('');
@@ -194,7 +193,6 @@ export function MyCardsPage() {
       const data = await api<CardsResponse>(`/cards?${qp.toString()}`);
       setCards(data.entries);
       setTotal(data.total);
-      setTotalCount(data.total);
     } catch (err) {
       setFetchError(true);
       if (err instanceof ApiError) toast.error(err.message);
@@ -237,7 +235,6 @@ export function MyCardsPage() {
     });
     setCards((prev) => [card, ...prev]);
     setTotal((t) => t + 1);
-    setTotalCount((t) => t + 1);
     toast.success('Card created', {
       action: { label: 'Open', onClick: () => navigate(`/cards/${card.id}`) },
     });
@@ -305,7 +302,6 @@ export function MyCardsPage() {
     if (deleted > 0) {
       setCards((prev) => prev.filter((c) => !ids.includes(c.id) || results[ids.indexOf(c.id)]?.status === 'rejected'));
       setTotal((t) => Math.max(0, t - deleted));
-      setTotalCount((t) => Math.max(0, t - deleted));
     }
     if (failed > 0) toast.error(`${failed} card${failed !== 1 ? 's' : ''} failed to delete`);
     else toast.success(`${deleted} card${deleted !== 1 ? 's' : ''} deleted`);
@@ -389,7 +385,6 @@ export function MyCardsPage() {
     setFocusedIndex(-1);
   }, [search, tagFilters]);
 
-  const hasSelection = selectedCardIds.size > 0;
 
   const allTags = useMemo(() => {
     const map = new Map<string, CardTag>();
@@ -821,7 +816,6 @@ export function MyCardsPage() {
                 await api(`/cards/${cardId}`, { method: 'DELETE' });
                 setCards((prev) => prev.filter((c) => c.id !== cardId));
                 setTotal((t) => Math.max(0, t - 1));
-                setTotalCount((t) => Math.max(0, t - 1));
                 toast.success('Card deleted');
               } catch {
                 toast.error('Failed to delete card');

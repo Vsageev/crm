@@ -68,16 +68,19 @@ export const AnchoredOverlay = forwardRef<HTMLDivElement, AnchoredOverlayProps>(
   const overlayRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number | null>(null);
   const layoutRef = useRef<OverlayLayout | null>(null);
-  const resolvedAnchor = anchorElement ?? anchorRef?.current ?? null;
+  const getAnchor = useCallback(
+    () => anchorElement ?? anchorRef?.current ?? null,
+    [anchorElement, anchorRef],
+  );
   const portalContainer = useMemo(
-    () => resolvePortalContainer(resolvedAnchor, document),
-    [resolvedAnchor],
+    () => resolvePortalContainer(anchorElement ?? null, document),
+    [anchorElement],
   );
 
   useImperativeHandle(forwardedRef, () => overlayRef.current as HTMLDivElement, []);
 
   const updatePosition = useCallback(() => {
-    const anchor = resolvedAnchor;
+    const anchor = getAnchor();
     const fallbackRect = anchorRect ?? null;
     const overlay = overlayRef.current;
     if (!overlay) return;
@@ -142,7 +145,7 @@ export const AnchoredOverlay = forwardRef<HTMLDivElement, AnchoredOverlayProps>(
     overlay.style.minWidth = nextLayout.minWidth ? `${nextLayout.minWidth}px` : '';
     overlay.style.maxWidth = nextLayout.maxWidth ? `${nextLayout.maxWidth}px` : '';
     overlay.style.visibility = 'visible';
-  }, [anchorRect, matchAnchorWidth, maxWidth, minWidth, offset, placement, resolvedAnchor]);
+  }, [anchorRect, getAnchor, matchAnchorWidth, maxWidth, minWidth, offset, placement]);
 
   useLayoutEffect(() => {
     updatePosition();
@@ -157,7 +160,7 @@ export const AnchoredOverlay = forwardRef<HTMLDivElement, AnchoredOverlayProps>(
       });
     };
 
-    const anchor = resolvedAnchor;
+    const anchor = getAnchor();
     const scrollOptions = { capture: true, passive: true } as const;
 
     window.addEventListener('resize', reposition);
@@ -181,7 +184,7 @@ export const AnchoredOverlay = forwardRef<HTMLDivElement, AnchoredOverlayProps>(
       window.removeEventListener('scroll', reposition, scrollOptions);
       resizeObserver?.disconnect();
     };
-  }, [anchorRect, resolvedAnchor, updatePosition]);
+  }, [anchorRect, getAnchor, updatePosition]);
 
   const overlayStyle: CSSProperties = {
     position: 'fixed',

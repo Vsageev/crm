@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Eraser, FlipHorizontal2, FlipVertical2, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Trash2, Type, X } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { Tooltip } from '../ui';
+import { ActionTooltip, Tooltip } from '../ui';
 import styles from './AgentAvatar.module.css';
 
 /* ── Icon shapes (16×16 grids, 1 = logo, 0 = background) ── */
@@ -470,16 +470,26 @@ function IconDrawingModal({ initialGrid, bgColor, logoColor, onSave, onClose }: 
             <div className={styles.drawModalToolDivider} />
 
             <div className={styles.drawModalToolGroup}>
-              <Tooltip label="Undo">
+              <ActionTooltip
+                label={undoStack.length === 0 ? 'Draw or edit the shape before undoing' : 'Undo'}
+                disabled={undoStack.length === 0}
+                focusable={undoStack.length === 0}
+                triggerLabel="Undo"
+              >
                 <button type="button" className={styles.drawToolBtn} onClick={handleUndo} disabled={undoStack.length === 0} aria-label="Undo">
                   <RotateCcw size={15} />
                 </button>
-              </Tooltip>
-              <Tooltip label="Redo">
+              </ActionTooltip>
+              <ActionTooltip
+                label={redoStack.length === 0 ? 'Undo a change before redoing' : 'Redo'}
+                disabled={redoStack.length === 0}
+                focusable={redoStack.length === 0}
+                triggerLabel="Redo"
+              >
                 <button type="button" className={styles.drawToolBtn} onClick={handleRedo} disabled={redoStack.length === 0} aria-label="Redo">
                   <RotateCw size={15} />
                 </button>
-              </Tooltip>
+              </ActionTooltip>
             </div>
 
             <div className={styles.drawModalToolDivider} />
@@ -559,18 +569,40 @@ function IconDrawingModal({ initialGrid, bgColor, logoColor, onSave, onClose }: 
             maxLength={80}
             autoFocus
           />
-          <button type="button" className={styles.drawModalCancelBtn} onClick={onClose} disabled={saving}>Cancel</button>
-          <button
-            type="button"
-            className={styles.drawModalSaveBtn}
-            disabled={!hasPixels || saving || !presetName.trim()}
-            onClick={() => {
-              void handleSave();
-            }}
+          <ActionTooltip
+            label={saving ? 'Wait for the shape preset to finish saving' : 'Cancel'}
+            disabled={saving}
+            focusable={saving}
+            triggerLabel="Cancel"
           >
-            <Check size={15} />
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+            <button type="button" className={styles.drawModalCancelBtn} onClick={onClose} disabled={saving}>Cancel</button>
+          </ActionTooltip>
+          <ActionTooltip
+            label={
+              saving
+                ? 'Shape preset save already in progress'
+                : !hasPixels
+                  ? 'Draw at least one pixel before saving'
+                  : !presetName.trim()
+                    ? 'Enter a preset name before saving'
+                    : 'Save shape preset'
+            }
+            disabled={!hasPixels || saving || !presetName.trim()}
+            focusable={!hasPixels || saving || !presetName.trim()}
+            triggerLabel="Save shape preset"
+          >
+            <button
+              type="button"
+              className={styles.drawModalSaveBtn}
+              disabled={!hasPixels || saving || !presetName.trim()}
+              onClick={() => {
+                void handleSave();
+              }}
+            >
+              <Check size={15} />
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </ActionTooltip>
         </div>
       </div>
     </Modal>
@@ -859,9 +891,22 @@ export function AgentAvatarPicker({
                     maxLength={80}
                     autoFocus
                   />
-                  <button type="button" className={styles.shapeInlineBtn} onClick={() => { void handleRenameSavedPreset(preset.id); }} disabled={renamingPresetId === preset.id}>
-                    <Check size={14} />
-                  </button>
+                  <ActionTooltip
+                    label={
+                      renamingPresetId === preset.id
+                        ? 'Rename already in progress'
+                        : !editingPresetName.trim()
+                          ? 'Enter a preset name before saving'
+                          : 'Save preset name'
+                    }
+                    disabled={renamingPresetId === preset.id || !editingPresetName.trim()}
+                    focusable={renamingPresetId === preset.id || !editingPresetName.trim()}
+                    triggerLabel="Save preset name"
+                  >
+                    <button type="button" className={styles.shapeInlineBtn} onClick={() => { void handleRenameSavedPreset(preset.id); }} disabled={renamingPresetId === preset.id || !editingPresetName.trim()}>
+                      <Check size={14} />
+                    </button>
+                  </ActionTooltip>
                   <button type="button" className={styles.shapeInlineBtn} onClick={() => { setEditingPresetId(null); setEditingPresetName(''); setPresetError(null); }}>
                     <X size={14} />
                   </button>
@@ -872,9 +917,20 @@ export function AgentAvatarPicker({
               {isConfirmingDelete && (
                 <div className={styles.shapeDeleteConfirm} onClick={(e) => e.stopPropagation()}>
                   <span className={styles.shapeDeleteText}>Delete?</span>
-                  <button type="button" className={`${styles.shapeInlineBtn} ${styles.shapeActionBtnDanger}`} onClick={() => { void handleDeleteSavedPreset(preset.id); setConfirmDeleteId(null); }} disabled={deletingPresetId === preset.id}>
-                    <Check size={12} />
-                  </button>
+                  <ActionTooltip
+                    label={
+                      deletingPresetId === preset.id
+                        ? 'Delete already in progress'
+                        : 'Confirm preset deletion'
+                    }
+                    disabled={deletingPresetId === preset.id}
+                    focusable={deletingPresetId === preset.id}
+                    triggerLabel="Confirm preset deletion"
+                  >
+                    <button type="button" className={`${styles.shapeInlineBtn} ${styles.shapeActionBtnDanger}`} onClick={() => { void handleDeleteSavedPreset(preset.id); setConfirmDeleteId(null); }} disabled={deletingPresetId === preset.id}>
+                      <Check size={12} />
+                    </button>
+                  </ActionTooltip>
                   <button type="button" className={styles.shapeInlineBtn} onClick={() => setConfirmDeleteId(null)}>
                     <X size={12} />
                   </button>
@@ -984,15 +1040,26 @@ export function AgentAvatarPicker({
                     </button>
                   </Tooltip>
                   {onDeleteColorPreset && (
-                    <button
-                      type="button"
-                      className={styles.colorPresetDeleteBtn}
-                      onClick={() => void handleDeleteColorPreset(cp.id)}
+                    <ActionTooltip
+                      label={
+                        deletingColorPresetId === cp.id
+                          ? 'Delete already in progress'
+                          : `Delete ${cp.name}`
+                      }
                       disabled={deletingColorPresetId === cp.id}
-                      aria-label={`Delete ${cp.name}`}
+                      focusable={deletingColorPresetId === cp.id}
+                      triggerLabel={`Delete ${cp.name}`}
                     >
-                      <X size={10} />
-                    </button>
+                      <button
+                        type="button"
+                        className={styles.colorPresetDeleteBtn}
+                        onClick={() => void handleDeleteColorPreset(cp.id)}
+                        disabled={deletingColorPresetId === cp.id}
+                        aria-label={`Delete ${cp.name}`}
+                      >
+                        <X size={10} />
+                      </button>
+                    </ActionTooltip>
                   )}
                 </div>
               );
@@ -1031,14 +1098,27 @@ export function AgentAvatarPicker({
                 maxLength={80}
                 autoFocus
               />
-              <button
-                type="button"
-                className={styles.shapeAddConfirmBtn}
-                onClick={() => { void handleCreateColorPreset(); }}
+              <ActionTooltip
+                label={
+                  savingColorPreset
+                    ? 'Color preset save already in progress'
+                    : !newColorPresetName.trim()
+                      ? 'Enter a preset name before saving'
+                      : 'Save color preset'
+                }
                 disabled={savingColorPreset || !newColorPresetName.trim()}
+                focusable={savingColorPreset || !newColorPresetName.trim()}
+                triggerLabel="Save color preset"
               >
-                {savingColorPreset ? '...' : 'Save'}
-              </button>
+                <button
+                  type="button"
+                  className={styles.shapeAddConfirmBtn}
+                  onClick={() => { void handleCreateColorPreset(); }}
+                  disabled={savingColorPreset || !newColorPresetName.trim()}
+                >
+                  {savingColorPreset ? '...' : 'Save'}
+                </button>
+              </ActionTooltip>
               <button type="button" className={styles.shapeInlineBtn} onClick={() => { setAddingColorPreset(false); setNewColorPresetName(''); setColorPresetError(null); }}>
                 <X size={14} />
               </button>
@@ -1053,4 +1133,5 @@ export function AgentAvatarPicker({
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export { randomPalette, randomIcon, ICONS, encodePattern };

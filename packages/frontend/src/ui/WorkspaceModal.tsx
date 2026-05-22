@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import { api, ApiError } from '../lib/api';
 import { toast } from '../stores/toast';
 import { Button } from '../ui';
@@ -43,6 +43,8 @@ export function WorkspaceModal({ workspace, onClose, onSaved }: WorkspaceModalPr
   const [boards, setBoards] = useState<Board[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroup[]>([]);
+  const nameHelpId = useId();
+  const nameMissing = !name.trim();
 
   const fetchOptions = useCallback(async () => {
     try {
@@ -115,7 +117,13 @@ export function WorkspaceModal({ workspace, onClose, onSaved }: WorkspaceModalPr
             onChange={(e) => setName(e.target.value)}
             placeholder="Workspace name"
             autoFocus
+            aria-describedby={nameMissing ? nameHelpId : undefined}
           />
+          {nameMissing && (
+            <div id={nameHelpId} className={styles.fieldHelp}>
+              Enter a workspace name before saving.
+            </div>
+          )}
         </div>
 
         <div className={styles.field}>
@@ -177,7 +185,7 @@ export function WorkspaceModal({ workspace, onClose, onSaved }: WorkspaceModalPr
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving || !name.trim()}>
+          <Button onClick={handleSave} disabled={saving || nameMissing}>
             {saving ? 'Saving...' : workspace ? 'Save' : 'Create'}
           </Button>
         </div>

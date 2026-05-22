@@ -12,7 +12,7 @@ import {
 } from '../services/auth.js';
 import { createAuditLog } from '../services/audit-log.js';
 import { authRateLimitConfig } from '../plugins/rate-limit.js';
-import { validatePasswordStrength } from '../utils/password-policy.js';
+import { PASSWORD_POLICY_SUMMARY, validatePasswordStrength } from '../utils/password-policy.js';
 import { ApiError } from '../utils/api-errors.js';
 
 const normalizedEmail = z.string().trim().toLowerCase().email();
@@ -43,7 +43,7 @@ export async function authRoutes(app: FastifyInstance) {
     // Enforce password complexity policy (OWASP A07:2021)
     const passwordCheck = validatePasswordStrength(password);
     if (!passwordCheck.valid) {
-      throw ApiError.badRequest('weak_password', passwordCheck.errors.join('. '), 'Password must be at least 8 characters with uppercase, lowercase, number, and special character');
+      throw ApiError.badRequest('weak_password', passwordCheck.errors.join('. '), PASSWORD_POLICY_SUMMARY);
     }
 
     const existing = await findUserByEmailLower(email);
@@ -199,7 +199,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const passwordCheck = validatePasswordStrength(newPassword);
     if (!passwordCheck.valid) {
-      throw ApiError.badRequest('weak_password', passwordCheck.errors.join('. '), 'Password must be at least 8 characters with uppercase, lowercase, number, and special character');
+      throw ApiError.badRequest('weak_password', passwordCheck.errors.join('. '), PASSWORD_POLICY_SUMMARY);
     }
 
     const newHash = await hashPassword(newPassword);

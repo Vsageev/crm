@@ -889,138 +889,6 @@
   cursor: not-allowed;
 }
 
-/* ── Templates popover ── */
-.templatesAnchor {
-  position: relative;
-}
-
-.templatesPopover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  width: 300px;
-  max-height: 320px;
-  background: var(--color-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  display: flex;
-  flex-direction: column;
-  z-index: 50;
-}
-
-.templatesHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-3);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.templatesTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.templatesTabs {
-  display: flex;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.templatesTabBtn {
-  flex: 1;
-  padding: 6px 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.templatesTabBtn:hover {
-  color: var(--color-text);
-}
-
-.templatesTabBtnActive {
-  color: var(--color-text);
-  border-bottom-color: var(--color-primary-brand);
-}
-
-.templatesSearch {
-  width: 100%;
-  padding: 6px var(--space-3);
-  border: none;
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: 13px;
-  color: var(--color-text);
-  background: transparent;
-  outline: none;
-}
-
-.templatesSearch::placeholder {
-  color: var(--color-text-tertiary);
-}
-
-.templatesList {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.templateItem {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-3);
-  border: none;
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: none;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-}
-
-.templateItem:hover {
-  background: var(--color-surface);
-}
-
-.templateItem:last-child {
-  border-bottom: none;
-}
-
-.templateName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text);
-  margin-bottom: 2px;
-}
-
-.templatePreview {
-  font-size: 12px;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.templateShortcut {
-  font-size: 11px;
-  color: var(--color-text-tertiary);
-  background: var(--color-surface);
-  padding: 0 4px;
-  border-radius: 3px;
-  margin-left: var(--space-2);
-}
-
-.templatesEmpty {
-  padding: var(--space-5);
-  text-align: center;
-  font-size: 13px;
-  color: var(--color-text-tertiary);
-}
-
 /* ── Empty / Loading states ── */
 .emptyPanel {
   flex: 1;
@@ -1529,50 +1397,19 @@ a.inlineKeyboardBtn:hover {
 
 /* ── Scrollbar styling ── */
 .conversationList::-webkit-scrollbar,
-.messagesArea::-webkit-scrollbar,
-.templatesList::-webkit-scrollbar {
+.messagesArea::-webkit-scrollbar {
   width: 6px;
 }
 
 .conversationList::-webkit-scrollbar-thumb,
-.messagesArea::-webkit-scrollbar-thumb,
-.templatesList::-webkit-scrollbar-thumb {
+.messagesArea::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 3px;
 }
 
 .conversationList::-webkit-scrollbar-thumb:hover,
-.messagesArea::-webkit-scrollbar-thumb:hover,
-.templatesList::-webkit-scrollbar-thumb:hover {
+.messagesArea::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
-}
-
-/* ── Template tabs ── */
-.templatesTabs {
-  display: flex;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.templatesTabBtn {
-  flex: 1;
-  padding: 6px 0;
-  border: none;
-  background: none;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: all var(--transition-fast);
-}
-
-.templatesTabBtn:hover {
-  color: var(--color-text-secondary);
-}
-
-.templatesTabBtnActive {
-  color: var(--color-link);
-  border-bottom-color: var(--color-link);
 }
 
 /* ── Media attachments in message bubbles ── */
@@ -1865,8 +1702,7 @@ a.inlineKeyboardBtn:hover {
     display: none;
   }
 
-  .keyboardPopover,
-  .templatesPopover {
+  .keyboardPopover {
     width: calc(100vw - 48px);
     max-width: 340px;
   }

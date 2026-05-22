@@ -31,6 +31,8 @@ export interface BatchDependencyRule {
 export interface BatchPlanCardLike {
   id: string;
   name: string;
+  subtitle?: string | null;
+  columnColor?: string | null;
   dependencyRule?: BatchDependencyRule;
 }
 

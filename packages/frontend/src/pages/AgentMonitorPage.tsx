@@ -8,6 +8,7 @@ import { toast } from '../stores/toast';
 import styles from './AgentMonitorPage.module.css';
 import { MarkdownContent } from '../ui/MarkdownContent';
 import { Tooltip } from '../ui/Tooltip';
+import { ActionTooltip } from '../ui/ActionTooltip';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatAgentOutputForDisplay, formatAgentRunErrorMessage, parseAgentOutputBlocks } from 'shared';
 import type { OutputBlock } from 'shared';
@@ -1507,15 +1508,25 @@ export function AgentMonitorPage() {
         title="Monitor"
         description="Track agent executions in real-time"
         actions={
-          <button
-            className={styles.cleanupButton}
-            onClick={() => cleanupRuns(30)}
+          <ActionTooltip
+            label={
+              cleaningUp
+                ? 'Cleanup already in progress'
+                : 'Delete completed and error runs older than 30 days'
+            }
             disabled={cleaningUp}
-            title="Delete completed and error runs older than 30 days (all agents)"
+            focusable={cleaningUp}
+            triggerLabel="Clean up old runs"
           >
-            <Trash2 size={13} />
-            {cleaningUp ? 'Cleaning…' : 'Clean up all (30d+)'}
-          </button>
+            <button
+              className={styles.cleanupButton}
+              onClick={() => cleanupRuns(30)}
+              disabled={cleaningUp}
+            >
+              <Trash2 size={13} />
+              {cleaningUp ? 'Cleaning…' : 'Clean up all (30d+)'}
+            </button>
+          </ActionTooltip>
         }
       />
 
@@ -1579,14 +1590,25 @@ export function AgentMonitorPage() {
                     <ElapsedTimer startedAt={run.startedAt} />
                   </span>
                   <TriggerLink run={run} navigate={navigate} />
-                  <button
-                    className={styles.killButton}
-                    onClick={(e) => killRun(e, run.id)}
+                  <ActionTooltip
+                    label={
+                      killingRunId === run.id
+                        ? 'Stop request already in progress'
+                        : 'Stop this active run'
+                    }
                     disabled={killingRunId === run.id}
-                    title="Kill this run"
+                    focusable={killingRunId === run.id}
+                    triggerLabel="Stop active run"
                   >
-                    <X size={13} />
-                  </button>
+                    <button
+                      className={styles.killButton}
+                      onClick={(e) => killRun(e, run.id)}
+                      disabled={killingRunId === run.id}
+                      aria-label="Stop active run"
+                    >
+                      <X size={13} />
+                    </button>
+                  </ActionTooltip>
                 </div>
                 {expandedActiveRunId === run.id && <RunLogPanel runId={run.id} runStatus={run.status} />}
               </div>
@@ -1604,16 +1626,27 @@ export function AgentMonitorPage() {
               <span className={styles.countBadge}>{activeBatchRuns.length} active</span>
             )}
             {recentBatchRuns.length > 0 && (
-              <button
-                className={styles.cleanupButton}
-                onClick={cleanupBatchRuns}
-                disabled={cleaningBatch}
-                title="Clear all finished batch runs"
-                style={{ marginLeft: 'auto' }}
-              >
-                <Trash2 size={13} />
-                {cleaningBatch ? 'Clearing...' : 'Clear finished'}
-              </button>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
+                <ActionTooltip
+                  label={
+                    cleaningBatch
+                      ? 'Finished batch cleanup already in progress'
+                      : 'Clear all finished batch runs'
+                  }
+                  disabled={cleaningBatch}
+                  focusable={cleaningBatch}
+                  triggerLabel="Clear finished batch runs"
+                >
+                  <button
+                    className={styles.cleanupButton}
+                    onClick={cleanupBatchRuns}
+                    disabled={cleaningBatch}
+                  >
+                    <Trash2 size={13} />
+                    {cleaningBatch ? 'Clearing...' : 'Clear finished'}
+                  </button>
+                </ActionTooltip>
+              </span>
             )}
           </div>
 
@@ -1652,14 +1685,25 @@ export function AgentMonitorPage() {
                       </span>
                       <IdentityChip label="Batch" value={batch.id} />
                     </div>
-                    <button
-                      className={styles.killButton}
-                      onClick={(e) => cancelBatchRun(e, batch.id)}
+                    <ActionTooltip
+                      label={
+                        cancellingBatchId === batch.id
+                          ? 'Batch cancellation already in progress'
+                          : 'Cancel this batch run'
+                      }
                       disabled={cancellingBatchId === batch.id}
-                      title="Cancel batch run"
+                      focusable={cancellingBatchId === batch.id}
+                      triggerLabel="Cancel batch run"
                     >
-                      <Square size={12} />
-                    </button>
+                      <button
+                        className={styles.killButton}
+                        onClick={(e) => cancelBatchRun(e, batch.id)}
+                        disabled={cancellingBatchId === batch.id}
+                        aria-label="Cancel batch run"
+                      >
+                        <Square size={12} />
+                      </button>
+                    </ActionTooltip>
                   </div>
 
                   <div className={styles.batchPrompt} title={batch.prompt}>

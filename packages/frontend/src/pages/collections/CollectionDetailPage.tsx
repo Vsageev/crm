@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Plus, FileText, Trash2, User, X, Tag, CornerDownLeft, Star, Link2, ExternalLink, Users, ChevronDown, LayoutList, Table2, ChevronUp, Pencil, FolderInput, Layers, ChevronRight, Check, Bookmark, BookmarkPlus, Download, Copy, Bot } from 'lucide-react';
 import { PageHeader } from '../../layout';
-import { AnchoredOverlay, Button, EntitySwitcher, CreateCardModal, Modal } from '../../ui';
+import { AnchoredOverlay, Button, EntitySwitcher, CreateCardModal, Modal, ReasonedActionButton } from '../../ui';
 import { AgentAvatar } from '../../components/AgentAvatar';
 import { api, ApiError } from '../../lib/api';
 import { fetchProcessingCardAgents } from '../../lib/agent-batch';
@@ -1095,25 +1095,26 @@ export function CollectionDetailPage() {
               <Star size={16} />
             </button>
             {!isGeneralCollection(collection) && (
-              <Button
+              <ReasonedActionButton
                 variant="secondary"
                 onClick={() => { void handleDeleteCollection(); }}
                 disabled={deletingCollection}
+                disabledReason="Collection is being deleted."
               >
                 <Trash2 size={14} />
                 {deletingCollection ? 'Deleting...' : 'Delete Collection'}
-              </Button>
+              </ReasonedActionButton>
             )}
-            <Button
+            <ReasonedActionButton
               variant="secondary"
               size="md"
               onClick={() => { void handleExportCSV(); }}
               disabled={exporting || sortedCards.length === 0}
-              title={sortedCards.length === 0 ? 'No cards to export' : `Export${sortedCards.length < total ? ' all matching' : ''} ${sortedCards.length} card${sortedCards.length !== 1 ? 's' : ''} as CSV`}
+              disabledReason={exporting ? 'CSV export is already running.' : 'This collection has no cards to export.'}
             >
               <Download size={14} />
               {exporting ? 'Exporting…' : 'Export CSV'}
-            </Button>
+            </ReasonedActionButton>
             <Button
               variant="secondary"
               size="md"
@@ -1576,7 +1577,6 @@ export function CollectionDetailPage() {
                                 if (e.key === 'Escape') { e.preventDefault(); handleCancelRename(); }
                                 e.stopPropagation();
                               }}
-                              // eslint-disable-next-line jsx-a11y/no-autofocus
                               autoFocus
                               aria-label="Rename card"
                             />
@@ -1842,7 +1842,6 @@ export function CollectionDetailPage() {
                           e.stopPropagation();
                         }}
                         onClick={(e) => e.stopPropagation()}
-                        // eslint-disable-next-line jsx-a11y/no-autofocus
                         autoFocus
                         aria-label="Rename card"
                       />
@@ -2022,9 +2021,13 @@ export function CollectionDetailPage() {
             </div>
             <div className={styles.createModalActions}>
               <Button variant="ghost" onClick={() => setShowCreateCollection(false)}>Cancel</Button>
-              <Button onClick={handleCreateCollection} disabled={creatingCollection || !newCollectionName.trim()}>
+              <ReasonedActionButton
+                onClick={handleCreateCollection}
+                disabled={creatingCollection || !newCollectionName.trim()}
+                disabledReason={creatingCollection ? 'Collection is being created.' : 'Enter a collection name before creating it.'}
+              >
                 {creatingCollection ? 'Creating...' : 'Create'}
-              </Button>
+              </ReasonedActionButton>
             </div>
           </div>
         </Modal>

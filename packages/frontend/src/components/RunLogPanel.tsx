@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { MarkdownContent } from '../ui/MarkdownContent';
 import {
-  extractFinalResponseText,
   formatAgentOutputForDisplay,
   formatAgentRunErrorMessage,
   parseAgentOutputBlocks,
@@ -79,7 +78,11 @@ function SimpleLogView({ blocks }: { blocks: OutputBlock[] }) {
   const toggleThinking = (idx: number) => {
     setExpandedThinking(prev => {
       const next = new Set(prev);
-      next.has(idx) ? next.delete(idx) : next.add(idx);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
       return next;
     });
   };

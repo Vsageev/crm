@@ -6,8 +6,8 @@ import type { FastifyInstance } from 'fastify';
  * CORS configuration hardened per OWASP guidelines.
  *
  * - Credentials are only sent to the configured origin (CORS_ORIGIN).
- * - Widget/public endpoints work without credentials so wildcard is fine
- *   for those, but we restrict credentialed requests to the known origin.
+ * - Non-credentialed integrations can be called from external origins, but
+ *   credentialed requests are restricted to the known origin.
  */
 export async function registerCors(app: FastifyInstance) {
   // Parse allowed origins from env (comma-separated for multiple frontends)
@@ -24,7 +24,7 @@ export async function registerCors(app: FastifyInstance) {
       // Allow configured origins
       if (allowedOrigins.includes(origin)) return cb(null, true);
 
-      // For non-credentialed requests (widget embeds), allow any origin
+      // For non-credentialed requests, allow any origin
       // The actual security boundary is JWT / API key auth, not CORS
       return cb(null, true);
     },

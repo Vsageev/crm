@@ -4,6 +4,10 @@
   gap: 10px;
 }
 
+.rootTimeline {
+  min-width: 0;
+}
+
 /* ── Search / combobox ── */
 
 .combobox {
@@ -125,10 +129,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 0 2px;
 }
 
 .listLabel {
+  flex-shrink: 0;
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
@@ -200,6 +206,14 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   user-select: none;
+}
+
+.layerLabelMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .layerHint {
@@ -587,4 +601,91 @@
   color: var(--color-text-tertiary);
   font-size: 11px;
   line-height: 1.4;
+}
+
+.rootExternalDrag {
+  outline: 1px dashed var(--color-border);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+.emptyStateDropTarget {
+  border-color: var(--color-text-tertiary);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.layerEmptySlot {
+  min-height: 56px;
+  border: 1px dashed var(--color-border);
+  background: var(--color-surface);
+}
+
+.emptyLayerHint {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.cardColumnStrip {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+}
+
+.cardFocused {
+  border-color: var(--color-link);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.dependencyShortcutBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.dependencyShortcutBtn:hover {
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.layerShortcutGroup {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.layerShortcutBtn {
+  padding: 2px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.layerShortcutBtn:hover {
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
 }

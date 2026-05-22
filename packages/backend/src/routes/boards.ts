@@ -19,6 +19,8 @@ import {
   moveCardOnBoard,
   removeCardFromBoard,
   clearBoardCards,
+  moveColumnCards,
+  clearColumnCards,
 } from '../services/boards.js';
 import {
   addWorkspaceContent,
@@ -357,6 +359,68 @@ export async function boardRoutes(app: FastifyInstance) {
       }
 
       return reply.status(204).send();
+    },
+  );
+
+  // Bulk actions for cards in one column
+  typedApp.post(
+    '/api/boards/:id/columns/:columnId/cards/actions',
+    {
+      onRequest: [app.authenticate, requirePermission('boards:update')],
+      schema: {
+        tags: ['Boards'],
+        summary: 'Move or remove all cards in a board column',
+        params: z.object({ id: z.uuid(), columnId: z.uuid() }),
+        body: z.object({
+          action: z.enum(['move_to_column', 'remove_from_board']),
+          targetColumnId: z.uuid().optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) {
+        return reply.notFound('Board not found');
+      }
+
+      if (!board.columns.some((column) => column.id === request.params.columnId)) {
+        return reply.notFound('Column not found');
+      }
+
+      if (request.body.action === 'move_to_column') {
+        const targetColumnId = request.body.targetColumnId;
+        if (!targetColumnId) {
+          throw ApiError.badRequest(
+            'target_column_required',
+            'targetColumnId is required when moving column cards',
+          );
+        }
+
+        if (targetColumnId === request.params.columnId) {
+          throw ApiError.badRequest(
+            'target_column_same_as_source',
+            'Choose a different target column',
+          );
+        }
+
+        if (!board.columns.some((column) => column.id === targetColumnId)) {
+          return reply.notFound('Target column not found');
+        }
+
+        const result = await moveColumnCards(request.params.id, request.params.columnId, targetColumnId);
+        if (!result) {
+          return reply.notFound('Column not found');
+        }
+
+        return reply.send(result);
+      }
+
+      const result = await clearColumnCards(request.params.id, request.params.columnId);
+      if (!result) {
+        return reply.notFound('Column not found');
+      }
+
+      return reply.send(result);
     },
   );
 

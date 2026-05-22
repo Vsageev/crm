@@ -107,6 +107,30 @@ export function DevtoolsMenu({ enabled = isDevtoolsEnabledFromEnv() }: DevtoolsM
                 );
               }
 
+              if (definition.type === 'boolean') {
+                const toggleId = `${panelId}-${definition.key}`;
+
+                return (
+                  <div key={definition.key} className={styles.flagRow}>
+                    <span className={styles.flagCopy}>
+                      <label htmlFor={toggleId} className={styles.flagLabel}>
+                        {definition.label}
+                      </label>
+                      <span className={styles.flagDescription}>{definition.description}</span>
+                    </span>
+                    <input
+                      id={toggleId}
+                      type="checkbox"
+                      className={styles.toggle}
+                      checked={flags[definition.key]}
+                      onChange={(event) =>
+                        setFeatureFlag(definition.key, event.target.checked)
+                      }
+                    />
+                  </div>
+                );
+              }
+
               return null;
             })}
           </div>

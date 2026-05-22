@@ -18,7 +18,7 @@ import type { Conversation } from '../db/types.js';
 const createConversationBody = z.object({
   contactId: z.uuid(),
   assigneeId: z.uuid().optional(),
-  channelType: z.enum(['internal', 'other', 'email', 'web_chat']),
+  channelType: z.enum(['internal', 'other', 'email']),
   status: z.enum(['open', 'closed', 'archived']).optional(),
   subject: z.string().max(255).optional(),
   externalId: z.string().max(255).optional(),

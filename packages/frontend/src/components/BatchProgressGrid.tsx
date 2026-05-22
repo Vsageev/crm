@@ -51,6 +51,12 @@ export function BatchProgressGrid({
     return [];
   }, [items, counts]);
 
+  const legendCounts = useMemo(() => {
+    const c = { queued: 0, processing: 0, completed: 0, failed: 0, cancelled: 0, skipped: 0 };
+    for (const cell of cells) c[cell.status]++;
+    return c;
+  }, [cells]);
+
   if (cells.length === 0) return null;
 
   const total = totalProp ?? cells.length;
@@ -58,12 +64,6 @@ export function BatchProgressGrid({
   // Auto-scale cell size so the grid stays compact for large batches
   const cellSize = cellSizeProp ?? (cells.length > 200 ? 6 : cells.length > 80 ? 8 : 10);
   const cellGap = cells.length > 200 ? 2 : 3;
-
-  const legendCounts = useMemo(() => {
-    const c = { queued: 0, processing: 0, completed: 0, failed: 0, cancelled: 0, skipped: 0 };
-    for (const cell of cells) c[cell.status]++;
-    return c;
-  }, [cells]);
 
   const finished = legendCounts.completed + legendCounts.failed + legendCounts.cancelled + legendCounts.skipped;
 

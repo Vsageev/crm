@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Copy, Monitor, Pencil, Plug, RefreshCw, ShieldOff, X } from 'lucide-react';
-import { Badge, Button, Input } from '../../ui';
+import { ActionTooltip, Badge, Button, Input, ReasonedActionButton } from '../../ui';
 import { api, ApiError } from '../../lib/api';
 import { useWorkspace } from '../../stores/WorkspaceContext';
 import styles from './SettingsPage.module.css';
@@ -59,6 +59,12 @@ export function RunnerDevicesTab() {
     if (!pairingCode) return '';
     return `OPENWORK_SERVER_URL=${getRunnerServerUrl()} OPENWORK_RUNNER_PAIRING_CODE=${pairingCode.code} pnpm --filter openwork-runner dev`;
   }, [pairingCode]);
+  const connectDisabledReason = !activeWorkspaceId
+    ? 'Open a workspace before connecting a runner.'
+    : null;
+  const renameDisabledReason = !editingName.trim()
+    ? 'Enter a runner name before saving.'
+    : null;
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
@@ -160,10 +166,14 @@ export function RunnerDevicesTab() {
           onChange={(event) => setPairingName(event.target.value)}
           placeholder="Runner display name"
         />
-        <Button onClick={() => void createPairingCode()}>
+        <ReasonedActionButton
+          onClick={() => void createPairingCode()}
+          disabled={Boolean(connectDisabledReason)}
+          disabledReason={connectDisabledReason}
+        >
           <Plug size={14} />
           Connect runner
-        </Button>
+        </ReasonedActionButton>
       </div>
 
       {pairingCode && (
@@ -223,32 +233,57 @@ export function RunnerDevicesTab() {
               <div className={styles.botActions}>
                 {editingId === device.id ? (
                   <>
-                    <button className={styles.iconBtn} onClick={() => void saveRename(device)}>
-                      <Check size={16} />
-                    </button>
+                    <ActionTooltip
+                      label={renameDisabledReason ?? 'Save runner name'}
+                      disabled={Boolean(renameDisabledReason)}
+                      triggerLabel="Save runner name"
+                    >
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => void saveRename(device)}
+                        disabled={Boolean(renameDisabledReason)}
+                        aria-label="Save runner name"
+                      >
+                        <Check size={16} />
+                      </button>
+                    </ActionTooltip>
                     <button className={styles.iconBtn} onClick={() => setEditingId(null)}>
                       <X size={16} />
                     </button>
                   </>
                 ) : (
-                  <button
-                    className={styles.iconBtn}
-                    onClick={() => {
-                      setEditingId(device.id);
-                      setEditingName(device.displayName);
-                    }}
+                  <ActionTooltip
+                    label={device.revoked ? 'Revoked runners cannot be renamed.' : 'Rename runner'}
                     disabled={device.revoked}
+                    triggerLabel="Rename runner"
                   >
-                    <Pencil size={16} />
-                  </button>
+                    <button
+                      className={styles.iconBtn}
+                      onClick={() => {
+                        setEditingId(device.id);
+                        setEditingName(device.displayName);
+                      }}
+                      disabled={device.revoked}
+                      aria-label="Rename runner"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  </ActionTooltip>
                 )}
-                <button
-                  className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                  onClick={() => void revoke(device)}
+                <ActionTooltip
+                  label={device.revoked ? 'This runner is already revoked.' : 'Revoke runner'}
                   disabled={device.revoked}
+                  triggerLabel="Revoke runner"
                 >
-                  <ShieldOff size={16} />
-                </button>
+                  <button
+                    className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                    onClick={() => void revoke(device)}
+                    disabled={device.revoked}
+                    aria-label="Revoke runner"
+                  >
+                    <ShieldOff size={16} />
+                  </button>
+                </ActionTooltip>
               </div>
             </div>
           ))}

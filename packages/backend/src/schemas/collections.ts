@@ -168,7 +168,7 @@ export const conversationSchema = z
     id: z.string(),
     contactId: z.string(),
     assigneeId: z.string().nullable().optional(),
-    channelType: z.enum(['internal', 'other', 'agent', 'email', 'web_chat']),
+    channelType: z.enum(['internal', 'other', 'agent', 'email']),
     status: z.enum(['open', 'closed', 'archived']),
     subject: z.string().nullable(),
     externalId: z.string().nullable(),

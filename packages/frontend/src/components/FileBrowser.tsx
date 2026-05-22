@@ -24,7 +24,7 @@ import {
   MoreVertical,
   type LucideIcon,
 } from 'lucide-react';
-import { AnchoredOverlay, Button, Input, Tooltip } from '../ui';
+import { ActionTooltip, AnchoredOverlay, Button, Input, ReasonedActionButton, Tooltip } from '../ui';
 import { api, apiUpload, ApiError } from '../lib/api';
 import { toast } from '../stores/toast';
 import { useConfirm } from '../hooks/useConfirm';
@@ -908,6 +908,22 @@ export function FileBrowser({
     ? (uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : 'Uploading...')
     : 'Upload';
   const shouldShowUploadMenu = showUploadFolder;
+  const bulkDeleteDisabledReason = bulkDeleting
+    ? 'Deletion is already in progress.'
+    : selectedPaths.size === 0
+      ? 'Select one or more files or folders before deleting.'
+      : null;
+  const uploadDisabledReason = uploading ? 'Wait for the current upload to finish.' : null;
+  const createFolderDisabledReason = creatingFolder
+    ? 'Folder creation is already in progress.'
+    : !folderName.trim()
+      ? 'Enter a folder name before creating it.'
+      : null;
+  const renameDisabledReason = renaming
+    ? 'Rename is already in progress.'
+    : !renameValue.trim()
+      ? 'Enter a file or folder name before confirming.'
+      : null;
 
   return (
     <div ref={containerRef} className={`${styles.container} ${isCompact ? styles.compact : ''}`}>
@@ -987,10 +1003,16 @@ export function FileBrowser({
                   Download{selectedFiles.length > 1 ? ` (${selectedFiles.length})` : ''}
                 </Button>
               )}
-              <Button size="sm" variant="danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
+              <ReasonedActionButton
+                size="sm"
+                variant="danger"
+                onClick={handleBulkDelete}
+                disabled={Boolean(bulkDeleteDisabledReason)}
+                disabledReason={bulkDeleteDisabledReason}
+              >
                 <Trash2 size={14} />
                 {bulkDeleting ? 'Deleting...' : `Delete (${selectedPaths.size})`}
-              </Button>
+              </ReasonedActionButton>
               <button className={styles.bulkClear} onClick={() => setSelectedPaths(new Set())}>
                 <X size={14} />
               </button>
@@ -1059,17 +1081,18 @@ export function FileBrowser({
               ) : (
                 <>
                   <span ref={uploadMenuAnchorRef} className={styles.toolbarAnchor}>
-                    <Button
+                    <ReasonedActionButton
                       size="sm"
                       variant="ghost"
                       onClick={() => shouldShowUploadMenu ? setUploadMenuOpen((open) => !open) : openFileUploadPicker()}
-                      disabled={uploading}
+                      disabled={Boolean(uploadDisabledReason)}
+                      disabledReason={uploadDisabledReason}
                       aria-expanded={shouldShowUploadMenu ? uploadMenuOpen : undefined}
                       aria-haspopup={shouldShowUploadMenu ? 'menu' : undefined}
                     >
                       <Upload size={14} />
                       {uploadButtonLabel}
-                    </Button>
+                    </ReasonedActionButton>
                   </span>
                   <Button
                     size="sm"
@@ -1116,9 +1139,14 @@ export function FileBrowser({
                   if (e.key === 'Escape') setShowNewFolder(false);
                 }}
               />
-              <Button size="sm" onClick={handleCreateFolder} disabled={creatingFolder || !folderName.trim()}>
+              <ReasonedActionButton
+                size="sm"
+                onClick={handleCreateFolder}
+                disabled={Boolean(createFolderDisabledReason)}
+                disabledReason={createFolderDisabledReason}
+              >
                 {creatingFolder ? 'Creating...' : 'Create'}
-              </Button>
+              </ReasonedActionButton>
               <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>
                 Cancel
               </Button>
@@ -1190,14 +1218,20 @@ export function FileBrowser({
                         }}
                         disabled={renaming}
                       />
-                      <button
-                        className={styles.renameConfirmBtn}
-                        onClick={handleRename}
-                        disabled={renaming || !renameValue.trim()}
-                        aria-label="Confirm rename"
+                      <ActionTooltip
+                        label={renameDisabledReason ?? 'Confirm rename'}
+                        disabled={Boolean(renameDisabledReason)}
+                        triggerLabel="Confirm rename"
                       >
-                        <Check size={14} />
-                      </button>
+                        <button
+                          className={styles.renameConfirmBtn}
+                          onClick={handleRename}
+                          disabled={Boolean(renameDisabledReason)}
+                          aria-label="Confirm rename"
+                        >
+                          <Check size={14} />
+                        </button>
+                      </ActionTooltip>
                     </div>
                   ) : (
                     <button className={styles.colName} onClick={() => handleEntryClick(entry)}>

@@ -9,7 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import styles from './Tooltip.module.css';
 
-type TooltipPosition = 'top' | 'bottom' | 'left' | 'right';
+export type TooltipPosition = 'top' | 'bottom' | 'left' | 'right';
 type TooltipCoords = { top: number; left: number; placement: TooltipPosition };
 
 interface TooltipProps {

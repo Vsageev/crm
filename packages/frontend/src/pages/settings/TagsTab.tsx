@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Pencil, Plus, Tag, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Check, Pencil, Plus, Tag, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useConfirm } from '../../hooks/useConfirm';
+import { ActionTooltip } from '../../ui';
 import styles from './TagsTab.module.css';
 
 interface TagEntry {
@@ -49,6 +50,14 @@ function TagForm({
   const [name, setName] = useState(initial.name);
   const [color, setColor] = useState(initial.color);
   const nameRef = useRef<HTMLInputElement>(null);
+  const nameHelpId = useId();
+  const trimmedName = name.trim();
+  const nameMissing = !trimmedName;
+  const saveDisabledReason = saving
+    ? 'Tag is already being saved.'
+    : nameMissing
+      ? 'Enter a tag name before saving.'
+      : null;
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -57,9 +66,8 @@ function TagForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    onSave(trimmed, color);
+    if (!trimmedName) return;
+    onSave(trimmedName, color);
   }
 
   return (
@@ -77,7 +85,13 @@ function TagForm({
         value={name}
         onChange={(e) => setName(e.target.value)}
         maxLength={100}
+        aria-describedby={nameMissing ? nameHelpId : undefined}
       />
+      {nameMissing && (
+        <div id={nameHelpId} className={styles.fieldHelp}>
+          Enter a tag name before saving.
+        </div>
+      )}
       <div className={styles.colorGrid}>
         {DEFAULT_COLORS.map((c) => (
           <ColorSwatch key={c} color={c} selected={color === c} onClick={() => setColor(c)} />
@@ -97,7 +111,7 @@ function TagForm({
         <button type="button" className={styles.cancelBtn} onClick={onCancel}>
           Cancel
         </button>
-        <button type="submit" className={styles.saveBtn} disabled={!name.trim() || saving}>
+        <button type="submit" className={styles.saveBtn} disabled={Boolean(saveDisabledReason)}>
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
@@ -264,20 +278,24 @@ export function TagsTab() {
                     {tag.cardCount ?? 0}
                   </span>
                   <div className={styles.tagItemActions}>
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => { setEditingId(tag.id); setCreating(false); }}
-                      title="Edit tag"
-                    >
-                      <Pencil size={13} />
-                    </button>
-                    <button
-                      className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                      onClick={() => void handleDelete(tag)}
-                      title="Delete tag"
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <ActionTooltip label="Edit tag" triggerLabel="Edit tag">
+                      <button
+                        className={styles.iconBtn}
+                        onClick={() => { setEditingId(tag.id); setCreating(false); }}
+                        aria-label="Edit tag"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    </ActionTooltip>
+                    <ActionTooltip label="Delete tag" triggerLabel="Delete tag">
+                      <button
+                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                        onClick={() => void handleDelete(tag)}
+                        aria-label="Delete tag"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </ActionTooltip>
                   </div>
                 </div>
               )}

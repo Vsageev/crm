@@ -41,7 +41,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refetchWorkspaces();
+    const timeoutId = window.setTimeout(() => {
+      void refetchWorkspaces();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [refetchWorkspaces]);
 
   const setActiveWorkspace = useCallback((id: string | null) => {
@@ -70,6 +73,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useWorkspace(): WorkspaceContextValue {
   const ctx = useContext(WorkspaceContext);
   if (!ctx) throw new Error('useWorkspace must be used within WorkspaceProvider');

@@ -73,6 +73,21 @@ export function listBoardCardsByBoardAndColumn(boardId: string, columnId: string
     .filter((r) => r.boardId === boardId && r.columnId === columnId);
 }
 
+export async function listBoardCardsByBoardAndColumnNative(
+  boardId: string,
+  columnId: string,
+): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) return listBoardCardsByBoardAndColumn(boardId, columnId);
+
+  const rows = await db
+    .select()
+    .from(schema.boardCards)
+    .where(and(eq(schema.boardCards.boardId, boardId), eq(schema.boardCards.columnId, columnId)))
+    .orderBy(asc(schema.boardCards.position), asc(schema.boardCards.id));
+  return recordsFromLegacyRows(rows);
+}
+
 export async function countBoardCardsByBoardAndColumnNative(
   boardId: string,
   columnId: string,
@@ -174,6 +189,28 @@ export function deleteBoardCardsByColumnId(columnId: string): void {
   for (const r of store.getAll(BOARD_CARDS)) {
     if (r.columnId === columnId && typeof r.id === 'string') store.delete(BOARD_CARDS, r.id);
   }
+}
+
+export async function deleteBoardCardsByBoardAndColumnNative(
+  boardId: string,
+  columnId: string,
+): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) {
+    const removed: StoreRecord[] = [];
+    for (const r of listBoardCardsByBoardAndColumn(boardId, columnId)) {
+      if (typeof r.id !== 'string') continue;
+      const del = await store.delete(BOARD_CARDS, r.id);
+      if (del) removed.push(del);
+    }
+    return removed;
+  }
+
+  const removed = await db
+    .delete(schema.boardCards)
+    .where(and(eq(schema.boardCards.boardId, boardId), eq(schema.boardCards.columnId, columnId)))
+    .returning();
+  return recordsFromLegacyRows(removed);
 }
 
 export function deleteBoardCardByBoardAndCard(boardId: string, cardId: string): void {
