@@ -100,6 +100,7 @@ vi.mock('./agents.js', () => ({
     workspaceApiKey: null,
     groupId: 'group-1',
   })),
+  isAgentArchived: vi.fn(() => false),
 }));
 vi.mock('./agent-runners.js', () => ({
   dispatchRemoteAgentJob: mocks.dispatchRemoteAgentJob,
@@ -689,6 +690,76 @@ describe('agent chat turn write paths', () => {
     });
   });
 
+  it('links an orphan completed-run answer when settling an already superseded queued turn', async () => {
+    seedMessage('message-1', { content: 'Superseded prompt' });
+    seedMessage('assistant-1', {
+      direction: 'inbound',
+      content: 'Late superseded answer',
+      parentId: 'message-1',
+      metadata: JSON.stringify({ runId: 'run-1' }),
+      createdAt: '2026-05-16T12:02:00.000Z',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: null,
+      status: 'superseded',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      responseText: 'Late superseded answer',
+      stdout: '',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: '2026-05-16T12:01:00.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      prompt: 'Superseded prompt',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: null,
+      lastRunId: 'run-1',
+      responseMessageId: null,
+      nextAttemptAt: null,
+    });
+
+    await __agentChatTestUtils.drainConversationQueue('agent-1', 'conversation-1');
+
+    expect(mocks.dispatchRemoteAgentJob).not.toHaveBeenCalled();
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      responseMessageId: 'assistant-1',
+      runId: null,
+      errorMessage: null,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'superseded',
+      assistantMessageId: 'assistant-1',
+      runId: 'run-1',
+    });
+    expect(getAgentConversationChatView('agent-1', 'conversation-1').entries[0]).toMatchObject({
+      status: 'superseded',
+      assistantMessage: {
+        id: 'assistant-1',
+        content: 'Late superseded answer',
+      },
+    });
+  });
+
   it('links recovered completed run messages back to canonical turns and queue rows', () => {
     seedMessage('message-1', { content: 'Queued prompt' });
     seedTurn('turn-1', {
@@ -1120,6 +1191,100 @@ describe('agent chat turn write paths', () => {
     expect(
       getAgentConversationChatView('agent-1', 'conversation-1').entries.map((entry) => entry.id),
     ).toEqual([String(edit.queueItem.turnId)]);
+  });
+
+  it('links the final answer when a processing queue item is superseded before the runner returns', async () => {
+    seedMessage('message-1', {
+      content: 'Original prompt',
+      createdAt: '2026-05-16T12:00:00.000Z',
+    });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      status: 'queued',
+      createdAt: '2026-05-16T12:00:01.000Z',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      prompt: 'Original prompt',
+      attempts: 0,
+      maxAttempts: 4,
+      runId: null,
+      lastRunId: null,
+      responseMessageId: null,
+      nextAttemptAt: null,
+      createdAt: '2026-05-16T12:00:02.000Z',
+    });
+
+    let resolveJob!: (result: { code: number; stdout: string; stderr: string }) => void;
+    mocks.dispatchRemoteAgentJob.mockImplementation(
+      () =>
+        new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+          resolveJob = resolve;
+        }),
+    );
+
+    await __agentChatTestUtils.drainConversationQueue('agent-1', 'conversation-1');
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.waitFor(() => expect(mocks.dispatchRemoteAgentJob).toHaveBeenCalledTimes(1));
+
+    const runId = String(mocks.store.getAll('agent_runs')[0]?.id);
+    expect(runId).toBeTruthy();
+
+    mocks.store.update('agentChatTurns', 'turn-1', {
+      status: 'superseded',
+      completedAt: new Date().toISOString(),
+    });
+    mocks.store.update('agentChatQueue', 'queue-1', {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      runId: null,
+      lastRunId: runId,
+      errorMessage: 'Queued execution item references a superseded turn',
+    });
+
+    resolveJob({
+      code: 0,
+      stdout: JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'openwork-final-message-run-1',
+          type: 'openwork_final_message',
+          text: 'Late answer after edit',
+        },
+      }),
+      stderr: '',
+    });
+
+    await vi.waitFor(() =>
+      expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+        status: 'completed',
+        runId: null,
+        lastRunId: runId,
+        errorMessage: null,
+      }),
+    );
+
+    const assistantMessage = mocks.store
+      .getAll('messages')
+      .find((message) => message.direction === 'inbound' && message.parentId === 'message-1');
+    expect(assistantMessage).toMatchObject({
+      content: 'Late answer after edit',
+    });
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      responseMessageId: assistantMessage?.id,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'superseded',
+      assistantMessageId: assistantMessage?.id,
+      runId,
+    });
   });
 
   it('keeps a repeated edit on the original branch instead of appending after the previous edit', () => {

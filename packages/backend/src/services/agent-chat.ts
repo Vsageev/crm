@@ -2235,19 +2235,21 @@ function settleQueueItemForNonStartableTurn(
   const nowIso = new Date().toISOString();
   const turnStatus = turn?.status;
 
-  if (turnStatus === 'completed') {
+  if (turnStatus === 'completed' || turnStatus === 'superseded') {
     const assistantMessageId =
       nonEmptyString(turn?.assistantMessageId) ??
       recoverCompletedQueueTurnAssistantMessageId(queueItemId, turn);
-    store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
-      status: 'completed',
-      completedAt: nowIso,
-      nextAttemptAt: null,
-      runId: null,
-      errorMessage: null,
-      responseMessageId: assistantMessageId,
-    });
-    return;
+    if (turnStatus === 'completed' || assistantMessageId) {
+      store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, {
+        status: 'completed',
+        completedAt: nowIso,
+        nextAttemptAt: null,
+        runId: null,
+        errorMessage: null,
+        responseMessageId: assistantMessageId,
+      });
+      return;
+    }
   }
 
   const errorMessage =
@@ -3754,6 +3756,18 @@ function markQueueItemCompleted(queueItemId: string, finalMessage: Record<string
   markAgentChatTurnCompleted(turnId, { assistantMessageId, runId });
 }
 
+function shouldCompleteSettledSupersededQueueItem(
+  queueItem: Record<string, unknown>,
+  turn: Record<string, unknown> | null,
+  runId: string | null,
+): boolean {
+  if (queueItem.status !== 'failed') return false;
+  if (turn?.status !== 'superseded') return false;
+  if (isRunMarkedKilledByUser(runId)) return false;
+  const errorMessage = nonEmptyString(queueItem.errorMessage);
+  return !errorMessage || /superseded turn/i.test(errorMessage);
+}
+
 function markQueueItemCancelledByUser(queueItemId: string, errorMessage = 'Cancelled by user') {
   const item = store.getById(AGENT_CHAT_QUEUE_COLLECTION, queueItemId);
   const turnId = typeof item?.turnId === 'string' ? (item.turnId as string) : null;
@@ -3909,6 +3923,26 @@ function recoverInterruptedQueueItemFromRun(queueItem: Record<string, unknown>):
 
   const runStatus = run.status;
   if (runStatus === 'running') return false;
+  if (runStatus === 'completed' && turn.status === 'superseded') {
+    const runStartedAtMs = parseIsoDateMs(run.startedAt);
+    const runStartedAt = Number.isFinite(runStartedAtMs) ? runStartedAtMs : Date.now();
+    const rawStdout = readRunStdout(run);
+    const responseParentId =
+      typeof run.responseParentId === 'string' ? (run.responseParentId as string) : null;
+    const finalMessage = resolveFinalMessageForCompletedRun(
+      conversationId,
+      runStartedAt,
+      rawStdout,
+      responseParentId,
+      runId,
+    );
+
+    if (finalMessage) {
+      markQueueItemCompleted(queueItemId, finalMessage);
+      return true;
+    }
+  }
+
   if (turn.status === 'stopped' || turn.status === 'failed' || turn.status === 'superseded') {
     const errorMessage =
       turn.status === 'stopped'
@@ -4031,7 +4065,17 @@ async function processQueueItem(
       turnId,
     });
     const latestItem = store.getById(AGENT_CHAT_QUEUE_COLLECTION, readyItemId);
-    if (!latestItem || latestItem.status !== 'processing') return;
+    if (!latestItem) return;
+    const completedRunId =
+      nonEmptyString(latestItem.runId) ?? nonEmptyString(latestItem.lastRunId) ?? spawnedRunId;
+    const latestTurnId = getQueueItemTurnId(latestItem);
+    const latestTurn = latestTurnId ? getAgentChatTurn(latestTurnId) : null;
+    if (
+      latestItem.status !== 'processing' &&
+      !shouldCompleteSettledSupersededQueueItem(latestItem, latestTurn, completedRunId)
+    ) {
+      return;
+    }
     markQueueItemCompleted(readyItemId, finalMessage);
   } catch (err) {
     const latestItem = store.getById(AGENT_CHAT_QUEUE_COLLECTION, readyItemId);
