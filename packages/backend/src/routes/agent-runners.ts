@@ -4,24 +4,32 @@ import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
   disconnectRemoteAgentRunner,
+  getLiveRunnerCapabilitiesMap,
   getLiveRunnerStatusMap,
   listConnectedAgentRunners,
 } from '../services/agent-runners.js';
 import {
+  assertWorkspaceAccessible,
+  canAccessWorkspace,
   createRunnerPairingCode,
   listRunnerDevices,
   pairRunnerWithCode,
   renameRunnerDevice,
   revokeRunnerDevice,
+  RunnerActivationError,
 } from '../services/runner-devices.js';
+
+const runnerConnectionScopeSchema = z.enum(['account', 'project']);
 
 const workspaceQuery = z.object({
   workspaceId: z.uuid().optional(),
+  connectionScope: runnerConnectionScopeSchema.optional(),
 });
 
 const createPairingBody = z.object({
   workspaceId: z.uuid(),
   displayName: z.string().min(1).max(120).optional(),
+  connectionScope: runnerConnectionScopeSchema.optional(),
 });
 
 const pairBody = z.object({
@@ -49,13 +57,52 @@ export async function agentRunnerRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      return reply.send({
-        entries: listRunnerDevices(
-          request.user.sub,
-          request.query.workspaceId,
-          getLiveRunnerStatusMap(),
-        ),
-      });
+      const { workspaceId, connectionScope } = request.query;
+      if (connectionScope === 'project') {
+        if (!workspaceId) {
+          return reply.status(400).send({
+            statusCode: 400,
+            error: 'Bad Request',
+            message: 'workspaceId is required when listing project runners',
+            code: 'runner_connection_workspace_required',
+          });
+        }
+        try {
+          await assertWorkspaceAccessible(request.user.sub, workspaceId);
+        } catch (error) {
+          if (error instanceof RunnerActivationError && error.code === 'runner_connection_forbidden') {
+            return reply.status(403).send({
+              statusCode: 403,
+              error: 'Forbidden',
+              message: error.message,
+              code: error.code,
+            });
+          }
+          throw error;
+        }
+      }
+
+      const accessibleWorkspaceIds = new Set<string>();
+      if (workspaceId && canAccessWorkspace(request.user.sub, workspaceId)) {
+        accessibleWorkspaceIds.add(workspaceId);
+      }
+      const workspaceAccess =
+        workspaceId !== undefined
+          ? (candidateWorkspaceId: string) => accessibleWorkspaceIds.has(candidateWorkspaceId)
+          : undefined;
+
+      const entries = listRunnerDevices(
+        request.user.sub,
+        {
+          workspaceId,
+          connectionScope,
+        },
+        getLiveRunnerStatusMap(),
+        getLiveRunnerCapabilitiesMap(),
+        workspaceAccess,
+      );
+
+      return reply.send({ entries });
     },
   );
 
@@ -90,6 +137,7 @@ export async function agentRunnerRoutes(app: FastifyInstance) {
             userId: request.user.sub,
             workspaceId: request.body.workspaceId,
             displayName: request.body.displayName ?? 'Runner',
+            connectionScope: request.body.connectionScope,
           },
           {
             userId: request.user.sub,
@@ -100,6 +148,14 @@ export async function agentRunnerRoutes(app: FastifyInstance) {
         return reply.status(201).send(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to create pairing code';
+        if (message === 'Invalid runner connection scope') {
+          return reply.status(400).send({
+            statusCode: 400,
+            error: 'Bad Request',
+            message,
+            code: 'runner_connection_invalid_scope',
+          });
+        }
         return reply.badRequest(message);
       }
     },

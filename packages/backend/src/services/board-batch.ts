@@ -19,6 +19,7 @@ export interface BoardBatchOptions {
   maxParallel?: number;
   stages?: AgentBatchStageInput[];
   cardDependencies?: AgentBatchCardDependencyInput[];
+  activationActorId?: string | null;
 }
 
 export interface BoardBatchResult {
@@ -72,6 +73,7 @@ export async function runBoardAgentBatch(options: BoardBatchOptions): Promise<Bo
     maxParallel = 3,
     stages,
     cardDependencies,
+    activationActorId,
   } = options;
 
   const agent = getAgent(agentId);
@@ -138,6 +140,7 @@ export async function runBoardAgentBatch(options: BoardBatchOptions): Promise<Bo
     maxParallel,
     stages,
     cardDependencies,
+    activationActorId,
     cards: cards.map((card) => ({
       id: card.id,
       name: card.name,

@@ -7,6 +7,7 @@ import {
   findAgentRunIdsForRetentionCleanup,
   findAgentRunsByListFilterPaged,
   findAgentRunsWithLegacyTriggerTypes,
+  findQueuedAgentRunsAsync,
   findRunningAgentRunsAsync,
 } from '../db/repositories/agent-execution-repository.js';
 import { env } from '../config/env.js';
@@ -19,6 +20,7 @@ import {
 } from '../lib/agent-output.js';
 import { cancelRemoteAgentRun, isRemoteAgentRunPending } from './agent-runners.js';
 import {
+  getAgentChatTurn,
   markAgentChatTurnCompleted,
   markAgentChatTurnFailed,
   markAgentChatTurnStopped,
@@ -32,6 +34,7 @@ const RUNS_DIR = path.resolve(env.DATA_DIR, 'agent-runs');
 const LOG_RETENTION_DAYS = 7;
 const MAX_CARD_AUTO_COMMENT_LENGTH = 5000;
 const CARD_COMMENT_TERMINAL_STATUSES = new Set<RunStatus>(['completed', 'error']);
+const RUNNER_PROVIDER_IDS = new Set(['claude', 'codex', 'qwen', 'cursor', 'opencode']);
 
 interface CreateAgentRunParams {
   id?: string;
@@ -42,6 +45,8 @@ interface CreateAgentRunParams {
   avatarLogoColor?: string | null;
   model?: string | null;
   modelId?: string | null;
+  runtime?: string | null;
+  provider?: string | null;
   triggerType: TriggerType;
   conversationId?: string | null;
   cardId?: string | null;
@@ -70,6 +75,12 @@ export interface AgentRunLifecycleEvent {
 }
 
 const MAX_RUN_LIFECYCLE_EVENTS = 80;
+
+function inferProviderFromModel(model: string | null | undefined): string | null {
+  if (!model) return null;
+  const normalized = model.trim().toLowerCase();
+  return RUNNER_PROVIDER_IDS.has(normalized) ? normalized : null;
+}
 
 function parseRunLifecycle(run: Record<string, unknown>): AgentRunLifecycleEvent[] {
   const lifecycle = run.runnerLifecycle;
@@ -112,6 +123,8 @@ export function createAgentRun(params: CreateAgentRunParams): Record<string, unk
     avatarLogoColor: params.avatarLogoColor ?? null,
     model: params.model ?? null,
     modelId: params.modelId ?? null,
+    runtime: params.runtime ?? 'openwork',
+    provider: params.provider ?? inferProviderFromModel(params.model),
     triggerType: params.triggerType,
     status: params.status ?? ('running' as RunStatus),
     conversationId: params.conversationId ?? null,
@@ -252,7 +265,9 @@ function buildCardAssignmentTerminalComment(params: {
     summary = `${summary.slice(0, MAX_CARD_AUTO_COMMENT_LENGTH - 3)}...`;
   }
 
-  return summary;
+  const runId = typeof run.id === 'string' && run.id ? run.id : 'unknown';
+  const status = typeof patch.status === 'string' && patch.status ? patch.status : 'unknown';
+  return `${summary}\n\nRun: ${runId}\nStatus: ${status}`;
 }
 
 function persistTerminalCardAssignmentComment(
@@ -302,6 +317,20 @@ function persistTerminalCardAssignmentComment(
   }
 }
 
+function shouldApplyRunLifecycleToTurn(
+  turnId: string | null,
+  runId: string,
+  nextStatus: 'completed' | 'failed' | 'stopped',
+): boolean {
+  if (!turnId) return false;
+  const turn = getAgentChatTurn(turnId);
+  if (!turn) return false;
+  const currentRunId = typeof turn.runId === 'string' && turn.runId ? turn.runId : null;
+  if (currentRunId && currentRunId !== runId) return false;
+  if (turn.status === 'completed' && nextStatus !== 'completed') return false;
+  return true;
+}
+
 export async function completeAgentRun(
   runId: string,
   errorMessage: string | null = null,
@@ -310,20 +339,20 @@ export async function completeAgentRun(
   return store.transaction(async () => {
     await store.lockAgentRunRowForUpdate(runId);
     const run = store.getById('agent_runs', runId);
-    if (!run || run.status !== 'running') return null;
+    if (!run || (run.status !== 'running' && run.status !== 'queued')) return null;
     const patch = buildAgentRunCompletionPatch(run, errorMessage, logs);
     let updated = store.update('agent_runs', runId, patch);
     if (!updated) return null;
     const turnId = typeof run.turnId === 'string' ? (run.turnId as string) : null;
-    if (turnId) {
-      if (patch.status === 'completed') {
+    if (patch.status === 'completed') {
+      if (shouldApplyRunLifecycleToTurn(turnId, runId, 'completed')) {
         markAgentChatTurnCompleted(turnId, { runId });
-      } else {
-        markAgentChatTurnFailed(turnId, {
-          runId,
-          errorMessage: typeof patch.errorMessage === 'string' ? patch.errorMessage : null,
-        });
       }
+    } else if (shouldApplyRunLifecycleToTurn(turnId, runId, 'failed')) {
+      markAgentChatTurnFailed(turnId, {
+        runId,
+        errorMessage: typeof patch.errorMessage === 'string' ? patch.errorMessage : null,
+      });
     }
 
     const sideEffect = persistTerminalCardAssignmentComment(run, patch);
@@ -374,10 +403,13 @@ export async function failAgentRunCompletionSideEffect(
     };
     let updated = store.update('agent_runs', runId, patch);
     if (!updated) return null;
-    markAgentChatTurnFailed(typeof run.turnId === 'string' ? (run.turnId as string) : null, {
-      runId,
-      errorMessage: patch.errorMessage,
-    });
+    const turnId = typeof run.turnId === 'string' ? (run.turnId as string) : null;
+    if (shouldApplyRunLifecycleToTurn(turnId, runId, 'failed')) {
+      markAgentChatTurnFailed(turnId, {
+        runId,
+        errorMessage: patch.errorMessage,
+      });
+    }
     const sideEffect = persistTerminalCardAssignmentComment(run, patch);
     if (!sideEffect.ok) {
       updated = store.update('agent_runs', runId, {
@@ -504,10 +536,13 @@ export async function killAgentRun(runId: string): Promise<{ ok: boolean; error?
     const patch = buildAgentRunCompletionPatch(run, 'Killed by user', undefined);
     const finalPatch = { ...patch, killedByUser: true };
     store.update('agent_runs', runId, finalPatch);
-    markAgentChatTurnStopped(typeof run.turnId === 'string' ? (run.turnId as string) : null, {
-      runId,
-      errorMessage: 'Killed by user',
-    });
+    const turnId = typeof run.turnId === 'string' ? (run.turnId as string) : null;
+    if (shouldApplyRunLifecycleToTurn(turnId, runId, 'stopped')) {
+      markAgentChatTurnStopped(turnId, {
+        runId,
+        errorMessage: 'Killed by user',
+      });
+    }
     const sideEffect = persistTerminalCardAssignmentComment(run, finalPatch);
     if (!sideEffect.ok) {
       store.update('agent_runs', runId, {
@@ -710,11 +745,12 @@ export async function reconcileRunsOnStartup(
 
 export async function reconcileUnrecoveredRemoteRuns(): Promise<number> {
   const running = await findRunningAgentRunsAsync();
+  const queued = await findQueuedAgentRunsAsync();
   let finalized = 0;
   const now = Date.now();
   const minAgeMs = env.REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS;
 
-  for (const run of running) {
+  for (const run of [...running, ...queued]) {
     const id = typeof run.id === 'string' ? run.id : null;
     const executor = typeof run.executor === 'string' ? run.executor : 'local';
     const pid = run.pid as number | null;

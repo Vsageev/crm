@@ -140,4 +140,44 @@ describe('BoardExecutionPlansPanel layer list mode', () => {
     expect(screen.queryByText('1 issue')).not.toBeInTheDocument();
     expect(screen.queryByText('0 dependency rules')).not.toBeInTheDocument();
   });
+
+  it('moves the plan rail when dragging the move handle', async () => {
+    localStorage.clear();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/boards/board-1/execution-plans') {
+        return jsonResponse({ entries: [], total: 0 });
+      }
+      return jsonResponse({ message: 'Unexpected request' }, { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { container } = render(
+      <BoardExecutionPlansPanel
+        boardId="board-1"
+        availableCards={[]}
+        experiments={baseExperiments}
+        onClose={vi.fn()}
+        onRunPlan={vi.fn()}
+      />,
+    );
+
+    await screen.findByText('Execution Plans');
+    const panel = container.querySelector('[class*="railPanel"]') as HTMLElement;
+    const initialLeft = Number.parseInt(panel.style.left, 10);
+    const initialTop = Number.parseInt(panel.style.top, 10);
+
+    const handle = screen.getByRole('button', { name: 'Move execution plans panel' });
+    fireEvent.mouseDown(handle, { clientX: 600, clientY: 200, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 540, clientY: 200 });
+    fireEvent.mouseUp(window, { clientX: 540, clientY: 200 });
+
+    await waitFor(() => {
+      expect(Number.parseInt(panel.style.left, 10)).toBe(initialLeft - 60);
+    });
+    expect(JSON.parse(localStorage.getItem('execution-plans-rail-position') ?? '{}')).toEqual({
+      x: initialLeft - 60,
+      y: initialTop,
+    });
+  });
 });

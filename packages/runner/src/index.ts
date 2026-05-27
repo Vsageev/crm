@@ -2,33 +2,46 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { WebSocket } from 'ws';
 import {
   RUNNER_PROTOCOL_VERSION,
   extractFinalResponseText,
   parseRunnerJobIntent,
   parseServerRunnerMessage,
+  type RunnerAgentInventoryEntry,
   type RunnerCapabilities,
+  type RunnerFilesystemRequest,
+  type RunnerFilesystemResult,
   type RunnerProvider,
   type RunnerRejectionCode,
   type RunnerServerMessage,
   type ServerRunnerMessage,
 } from 'shared';
+import { materializeStagedAttachments } from './attachment-staging.js';
 import { finalizeCodexRunnerLogs } from './codex-final-message.js';
 import { buildRunnerTerminalMessage } from './terminal-message.js';
 import {
   PROVIDER_BINARIES,
   createExecutionPlan,
   isPolicyFailure,
+  materializeRunnerWorkspace,
   resolveProviderExecutable,
   spawnDetachedExecutionPlan,
   type DetachedExecutionProcess,
 } from './executor.js';
+import {
+  handleAgentWorkspaceFileRequest,
+  importAttachmentToWorkspace,
+  prepareWorkspacePath,
+  RunnerFilesystemError,
+  validateRepositoryRoot,
+} from './workspace-prepare.js';
 
 const RUNNER_VERSION = '0.0.1';
 const serverUrl = process.env.OPENWORK_SERVER_URL;
 const runnerName = process.env.OPENWORK_RUNNER_NAME || os.hostname();
-const workspaceRoot = process.env.OPENWORK_RUNNER_WORKSPACE_ROOT;
+const workspaceRoot = path.resolve(process.env.OPENWORK_RUNNER_WORKSPACE_ROOT || process.cwd());
 const configPath =
   process.env.OPENWORK_RUNNER_CONFIG ||
   path.join(os.homedir(), '.openwork-runner', 'config.json');
@@ -40,6 +53,8 @@ interface RunnerConfig {
   serverUrl?: string;
   runnerId?: string;
   credential?: string;
+  runnerVersion?: string;
+  pairedAt?: string;
 }
 
 if (!serverUrl) {
@@ -90,13 +105,143 @@ interface PersistedJob {
 
 const jobs = new Map<string, SupervisedJob>();
 let activeWs: WebSocket | null = null;
+let pairingRetryInFlight = false;
+let pairingRetryAttempted = false;
 const pendingServerMessages: RunnerServerMessage[] = [];
 const JOB_LOG_POLL_MS = 500;
+const RUNNER_HEARTBEAT_INTERVAL_MS = 30_000;
+const JOB_DEBUG_CLEANUP_TTL_MS = Number(process.env.OPENWORK_RUNNER_JOB_DEBUG_TTL_MS ?? 5 * 60 * 1000);
+const SUPPORTED_FILESYSTEM_OPERATIONS: NonNullable<RunnerCapabilities['filesystemOperations']> = [
+  'browse',
+  'pick_folder',
+  'reveal',
+  'validate_repository_root',
+  'prepare_workspace',
+  'list_agent_files',
+  'read_agent_file',
+  'write_agent_file',
+  'create_agent_folder',
+  'delete_agent_path',
+  'reveal_agent_path',
+  'import_agent_files',
+  'import_attachment',
+];
+
+function directoryMtimeIso(dirPath: string, fallback: string): string {
+  try {
+    return fs.statSync(dirPath).mtime.toISOString();
+  } catch {
+    return fallback;
+  }
+}
+
+function listDirectoryEntries(dirPath: string): fs.Dirent[] {
+  try {
+    return fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+const REPOSITORY_SCAN_IGNORE_DIRS = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.cache',
+]);
+
+type DiscoveredRunnerAgentInventoryEntry = RunnerAgentInventoryEntry & {
+  repositoryRootPath?: string;
+  source?: 'no_repository_workspace' | 'repository_workspace' | 'repository_scan';
+};
+
+function discoverRunnerAgentInventory(advertisedAt: string): DiscoveredRunnerAgentInventoryEntry[] {
+  const entries: DiscoveredRunnerAgentInventoryEntry[] = [];
+  const seen = new Set<string>();
+
+  const addEntry = (entry: DiscoveredRunnerAgentInventoryEntry) => {
+    const key = `${entry.agentId}:${entry.workspaceRootPath ?? ''}:${entry.repositoryRootPath ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
+  };
+
+  const noRepositoryRoot = path.join(workspaceRoot, '.openwork', 'no-repository-agents');
+  for (const agentDir of listDirectoryEntries(noRepositoryRoot)) {
+    if (!agentDir.isDirectory()) continue;
+    const agentWorkspacePath = path.join(noRepositoryRoot, agentDir.name, 'workspace');
+    try {
+      if (!fs.statSync(agentWorkspacePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    addEntry({
+      agentId: agentDir.name,
+      readiness: 'ready',
+      fileOperations: SUPPORTED_FILESYSTEM_OPERATIONS,
+      workspaceRootPath: agentWorkspacePath,
+      source: 'no_repository_workspace',
+      updatedAt: directoryMtimeIso(agentWorkspacePath, advertisedAt),
+    });
+  }
+
+  const scanRepositoryRoot = (
+    repositoryRoot: string,
+    source: NonNullable<DiscoveredRunnerAgentInventoryEntry['source']>,
+  ) => {
+    const repositoryAgentsRoot = path.join(repositoryRoot, '.openwork', 'agents');
+    for (const agentDir of listDirectoryEntries(repositoryAgentsRoot)) {
+      if (!agentDir.isDirectory()) continue;
+      const agentWorkspacePath = path.join(repositoryAgentsRoot, agentDir.name);
+      addEntry({
+        agentId: agentDir.name,
+        readiness: 'ready',
+        fileOperations: SUPPORTED_FILESYSTEM_OPERATIONS,
+        workspaceRootPath: agentWorkspacePath,
+        repositoryRootPath: repositoryRoot,
+        source,
+        updatedAt: directoryMtimeIso(agentWorkspacePath, advertisedAt),
+      });
+    }
+  };
+
+  scanRepositoryRoot(workspaceRoot, 'repository_workspace');
+
+  const scanForRepositories = (dirPath: string, depthRemaining: number) => {
+    if (depthRemaining <= 0) return;
+    for (const entry of listDirectoryEntries(dirPath)) {
+      if (!entry.isDirectory()) continue;
+      if (REPOSITORY_SCAN_IGNORE_DIRS.has(entry.name)) continue;
+      const childPath = path.join(dirPath, entry.name);
+      scanRepositoryRoot(childPath, 'repository_scan');
+      scanForRepositories(childPath, depthRemaining - 1);
+    }
+  };
+  scanForRepositories(workspaceRoot, 3);
+
+  return entries;
+}
 
 export function buildRunnerCapabilities(): RunnerCapabilities {
   const supportedProviders = Object.entries(PROVIDER_BINARIES)
     .filter(([provider]) => resolveProviderExecutable(provider as keyof typeof PROVIDER_BINARIES))
     .map(([provider]) => provider as keyof typeof PROVIDER_BINARIES);
+  const advertisedAt = new Date().toISOString();
+  const agents = discoverRunnerAgentInventory(advertisedAt);
+  const inventoryRevision = [
+    RUNNER_PROTOCOL_VERSION,
+    RUNNER_VERSION,
+    workspaceRoot,
+    supportedProviders.join(','),
+    SUPPORTED_FILESYSTEM_OPERATIONS.join(','),
+    agents.map((agent) => `${agent.agentId}:${agent.updatedAt}`).join(','),
+  ].join('|');
 
   return {
     protocolVersion: RUNNER_PROTOCOL_VERSION,
@@ -104,10 +249,35 @@ export function buildRunnerCapabilities(): RunnerCapabilities {
     arch: os.arch(),
     runnerVersion: RUNNER_VERSION,
     workspaceRoot,
-    supportedAgentKinds: ['dev_agent'],
+    installedProviders: supportedProviders,
     supportedProviders,
+    supportedTools: supportedProviders,
+    approvalModes: ['dangerous'],
+    workspaceModes: ['shared', 'subfolder'],
+    concurrency: {
+      activeJobs: jobs.size,
+      maxJobs: null,
+    },
     supportsCancellation: true,
     supportsArtifacts: true,
+    supportsFilesystem: true,
+    filesystemOperations: SUPPORTED_FILESYSTEM_OPERATIONS,
+    agentInventory: {
+      protocolVersion: 1,
+      revision: inventoryRevision,
+      advertisedAt,
+      ttlMs: RUNNER_HEARTBEAT_INTERVAL_MS * 4,
+      workspaceRoots: [
+        {
+          id: 'default',
+          path: workspaceRoot,
+          scope: 'workspace',
+          writable: true,
+        },
+      ],
+      fileOperations: SUPPORTED_FILESYSTEM_OPERATIONS,
+      agents,
+    },
     policy: {
       workspaceRootRequired: Boolean(workspaceRoot),
       allowedTools: supportedProviders,
@@ -117,6 +287,129 @@ export function buildRunnerCapabilities(): RunnerCapabilities {
       network: true,
       shell: true,
     },
+  };
+}
+
+function revealPathInFileManager(targetPath: string) {
+  if (process.platform === 'darwin') {
+    const stat = fs.statSync(targetPath);
+    spawn('open', stat.isDirectory() ? [targetPath] : ['-R', targetPath], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+    return;
+  }
+  if (process.platform === 'win32') {
+    spawn('explorer', [`/select,${targetPath}`], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  const target = fs.statSync(targetPath).isDirectory() ? targetPath : path.dirname(targetPath);
+  spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+): Promise<{ code: number | null; stdout: string; stderr: string; error?: Error }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => resolve({ code: null, stdout, stderr, error }));
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+function escapeAppleScriptString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+async function pickFolder(startPath?: string): Promise<string | null> {
+  if (process.platform !== 'darwin') {
+    throw new Error('Native folder picker is not available on this runner platform.');
+  }
+  const defaultLocation =
+    startPath && fs.existsSync(startPath)
+      ? ` default location POSIX file "${escapeAppleScriptString(startPath)}"`
+      : '';
+  const result = await runCommand('osascript', [
+    '-e',
+    `POSIX path of (choose folder with prompt "Select repository folder"${defaultLocation})`,
+  ]);
+  if (result.code === 0) return result.stdout.trim() || null;
+  if (/cancel|-128/i.test(`${result.stdout}\n${result.stderr}\n${result.error?.message ?? ''}`)) {
+    return null;
+  }
+  throw new Error(result.stderr.trim() || result.error?.message || 'Folder picker failed');
+}
+
+async function handleFilesystemRequest(
+  request: RunnerFilesystemRequest,
+): Promise<RunnerFilesystemResult> {
+  if (request.action === 'prepare_workspace') {
+    return prepareWorkspacePath(request, workspaceRoot);
+  }
+  if (request.action === 'import_attachment') {
+    const credential = process.env.OPENWORK_RUNNER_CREDENTIAL || readConfig().credential || '';
+    return importAttachmentToWorkspace(request, workspaceRoot, {
+      serverUrl: serverUrl!,
+      credential,
+    });
+  }
+  if (
+    request.action === 'list_agent_files' ||
+    request.action === 'read_agent_file' ||
+    request.action === 'write_agent_file' ||
+    request.action === 'create_agent_folder' ||
+    request.action === 'delete_agent_path' ||
+    request.action === 'reveal_agent_path' ||
+    request.action === 'import_agent_files'
+  ) {
+    return handleAgentWorkspaceFileRequest(request, workspaceRoot, {
+      revealPath: revealPathInFileManager,
+    });
+  }
+  if (request.action === 'browse') {
+    const dirPath = path.resolve(request.path);
+    const stat = fs.statSync(dirPath);
+    if (!stat.isDirectory()) throw new Error('Path is not a directory');
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true }).flatMap((entry) => {
+      const entryPath = path.join(dirPath, entry.name);
+      let entryStat: fs.Stats;
+      try {
+        entryStat = fs.statSync(entryPath);
+      } catch {
+        return [];
+      }
+      return [{
+        name: entry.name,
+        path: entryPath,
+        type: entry.isDirectory() ? ('directory' as const) : ('file' as const),
+        size: entryStat.size,
+        modifiedAt: entryStat.mtime.toISOString(),
+      }];
+    });
+    return { action: 'browse', path: dirPath, entries };
+  }
+  if (request.action === 'pick_folder') {
+    return { action: 'pick_folder', path: await pickFolder(request.startPath) };
+  }
+  if (request.action === 'reveal') {
+    const targetPath = path.resolve(request.path);
+    if (!fs.existsSync(targetPath)) throw new Error('Path not found');
+    revealPathInFileManager(targetPath);
+    return { action: 'reveal' };
+  }
+  const validated = validateRepositoryRoot(request.path, workspaceRoot);
+  return {
+    action: 'validate_repository_root',
+    ...validated,
   };
 }
 
@@ -134,6 +427,7 @@ function writeConfig(config: RunnerConfig) {
 }
 
 async function pairWithCode(code: string): Promise<RunnerConfig> {
+  console.log(`Pairing runner with ${serverUrl}...`);
   const res = await fetch(new URL('/api/agent-runners/pair', serverUrl), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -148,19 +442,30 @@ async function pairWithCode(code: string): Promise<RunnerConfig> {
     throw new Error(`Pairing failed with HTTP ${res.status}: ${await res.text()}`);
   }
   const data = (await res.json()) as { runner: { id: string }; credential: string };
-  const config = { serverUrl, runnerId: data.runner.id, credential: data.credential };
+  const config = {
+    serverUrl,
+    runnerId: data.runner.id,
+    credential: data.credential,
+    runnerVersion: RUNNER_VERSION,
+    pairedAt: new Date().toISOString(),
+  };
   writeConfig(config);
   console.log(`Paired runner ${data.runner.id}. Credential saved to ${configPath}`);
   return config;
 }
 
-function buildWebSocketUrl() {
+function buildWebSocketUrl(): URL {
   const config = readConfig();
-  const credential = process.env.OPENWORK_RUNNER_CREDENTIAL || config.credential;
+  const credentialFromEnv = process.env.OPENWORK_RUNNER_CREDENTIAL;
+  if (!credentialFromEnv && config.credential && config.serverUrl && config.serverUrl !== serverUrl) {
+    throw new Error(
+      `Saved runner credential is for ${config.serverUrl}, but OPENWORK_SERVER_URL is ${serverUrl}. Set OPENWORK_RUNNER_PAIRING_CODE to pair this server or set OPENWORK_RUNNER_CREDENTIAL explicitly.`,
+    );
+  }
+  const credential = credentialFromEnv || config.credential;
   const runnerId = process.env.OPENWORK_RUNNER_ID || config.runnerId;
   if (!credential) {
-    console.error('Runner is not paired. Set OPENWORK_RUNNER_PAIRING_CODE once to pair this runner.');
-    process.exit(1);
+    throw new Error('Runner is not paired. Set OPENWORK_RUNNER_PAIRING_CODE once to pair this runner.');
   }
   const url = new URL('/api/runners/ws', serverUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -264,11 +569,20 @@ function persistJob(job: SupervisedJob) {
 }
 
 function removePersistedJob(job: SupervisedJob) {
-  try {
-    fs.rmSync(jobDir(job.jobId, job.runId), { recursive: true, force: true });
-  } catch {
-    // Best-effort cleanup.
+  const dir = jobDir(job.jobId, job.runId);
+  const cleanup = () => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup.
+    }
+  };
+  if (JOB_DEBUG_CLEANUP_TTL_MS <= 0) {
+    cleanup();
+    return;
   }
+  const timer = setTimeout(cleanup, JOB_DEBUG_CLEANUP_TTL_MS);
+  timer.unref?.();
 }
 
 function readFile(filePath: string): string {
@@ -512,8 +826,8 @@ function readOutputLastMessage(filePath: string | undefined): string {
   }
 }
 
-function startJob(ws: WebSocket, jobId: string, job: ServerRunnerMessage & { type: 'job_offer' }) {
-  const intent = parseRunnerJobIntent(job.job);
+async function startJob(ws: WebSocket, jobId: string, job: ServerRunnerMessage & { type: 'job_offer' }) {
+  let intent = parseRunnerJobIntent(job.job);
 
   if (job.protocolVersion !== RUNNER_PROTOCOL_VERSION) {
     rejectJob(
@@ -532,6 +846,26 @@ function startJob(ws: WebSocket, jobId: string, job: ServerRunnerMessage & { typ
   }
 
   const runId = intent.runId;
+  try {
+    const credential = process.env.OPENWORK_RUNNER_CREDENTIAL || readConfig().credential;
+    if (!credential && intent.stagingManifest?.attachments.length) {
+      throw new Error('Runner credential is unavailable for attachment staging');
+    }
+    intent = await materializeStagedAttachments(intent, {
+      serverUrl: serverUrl!,
+      credential: credential ?? '',
+    });
+  } catch (error) {
+    rejectJob(
+      ws,
+      jobId,
+      runId,
+      'invalid_job',
+      `Attachment materialization failed: ${(error as Error).message}`,
+    );
+    return;
+  }
+
   const plan = createExecutionPlan(intent, buildRunnerCapabilities());
   if (isPolicyFailure(plan)) {
     rejectJob(ws, jobId, runId, plan.code, plan.message);
@@ -601,20 +935,77 @@ function startJob(ws: WebSocket, jobId: string, job: ServerRunnerMessage & { typ
   }
 }
 
-function connect() {
-  const ws = new WebSocket(buildWebSocketUrl());
-  const config = readConfig();
-  const runnerId = process.env.OPENWORK_RUNNER_ID || config.runnerId || '';
-
-  ws.on('open', () => {
-    activeWs = ws;
+function handleWorkspaceSetup(
+  ws: WebSocket,
+  message: ServerRunnerMessage & { type: 'workspace_setup' },
+) {
+  try {
+    materializeRunnerWorkspace(message.setup);
     send(ws, {
-      type: 'runner_hello',
+      type: 'workspace_setup_completed',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      setupId: message.setupId,
+    });
+  } catch (error) {
+    send(ws, {
+      type: 'workspace_setup_failed',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      setupId: message.setupId,
+      message: (error as Error).message,
+    });
+  }
+}
+
+function retryPairAfterAuthRejection(): boolean {
+  const pairingCode = process.env.OPENWORK_RUNNER_PAIRING_CODE;
+  if (!pairingCode || pairingRetryInFlight || pairingRetryAttempted) return false;
+  pairingRetryAttempted = true;
+  pairingRetryInFlight = true;
+  console.warn('Saved runner credential was rejected. Re-pairing with OPENWORK_RUNNER_PAIRING_CODE...');
+  void pairWithCode(pairingCode)
+    .catch((error: Error) => {
+      console.error(error.message);
+    })
+    .finally(() => {
+      pairingRetryInFlight = false;
+      setTimeout(connect, 2000);
+    });
+  return true;
+}
+
+function connect() {
+  const config = readConfig();
+  let wsUrl: URL;
+  try {
+    wsUrl = buildWebSocketUrl();
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
+  }
+  const ws = new WebSocket(wsUrl);
+  const runnerId = process.env.OPENWORK_RUNNER_ID || config.runnerId || '';
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let authRetryScheduled = false;
+  let authRejected = false;
+
+  const sendRunnerAdvertisement = (type: 'runner_hello' | 'runner_heartbeat') => {
+    send(ws, {
+      type,
       protocolVersion: RUNNER_PROTOCOL_VERSION,
       runnerId,
       name: runnerName,
       capabilities: buildRunnerCapabilities(),
     });
+  };
+
+  ws.on('open', () => {
+    activeWs = ws;
+    sendRunnerAdvertisement('runner_hello');
+    heartbeatTimer = setInterval(
+      () => sendRunnerAdvertisement('runner_heartbeat'),
+      RUNNER_HEARTBEAT_INTERVAL_MS,
+    );
+    heartbeatTimer.unref?.();
     flushPendingServerMessages();
     announceActiveJobs(ws);
     console.log(`Connected runner ${runnerId} to ${serverUrl}`);
@@ -625,16 +1016,53 @@ function connect() {
     if (!message) return;
     if (message.type === 'server_hello') return;
     if (message.type === 'job_offer') {
-      startJob(ws, message.jobId, message);
+      void startJob(ws, message.jobId, message);
+      return;
+    }
+    if (message.type === 'workspace_setup') {
+      handleWorkspaceSetup(ws, message);
       return;
     }
     if (message.type === 'cancel') {
       const job = jobs.get(message.jobId);
       if (job) terminateJob(job);
+      return;
+    }
+    if (message.type === 'filesystem_request') {
+      void handleFilesystemRequest(message.request)
+        .then((result) => {
+          send(ws, {
+            type: 'filesystem_response',
+            protocolVersion: RUNNER_PROTOCOL_VERSION,
+            requestId: message.requestId,
+            ok: true,
+            result,
+          });
+        })
+        .catch((error) => {
+          const code =
+            error instanceof RunnerFilesystemError
+              ? error.code
+              : /not found/i.test((error as Error).message)
+                ? 'not_found'
+                : 'operation_failed';
+          send(ws, {
+            type: 'filesystem_response',
+            protocolVersion: RUNNER_PROTOCOL_VERSION,
+            requestId: message.requestId,
+            ok: false,
+            code,
+            message: (error as Error).message,
+          });
+        });
     }
   });
 
   ws.on('close', (closeCode, closeReason) => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     const inFlight = jobs.size;
     if (inFlight > 0) {
       console.warn(
@@ -642,7 +1070,19 @@ function connect() {
       );
     }
     if (activeWs === ws) activeWs = null;
+    if (authRetryScheduled) return;
+    if (authRejected && retryPairAfterAuthRejection()) {
+      authRetryScheduled = true;
+      return;
+    }
     setTimeout(connect, 2000);
+  });
+
+  ws.on('unexpected-response', (_request, response) => {
+    if (response.statusCode !== 401) return;
+    authRejected = true;
+    response.resume();
+    if (retryPairAfterAuthRejection()) authRetryScheduled = true;
   });
 
   ws.on('error', (error) => {
@@ -652,9 +1092,15 @@ function connect() {
 
 async function main() {
   const pairingCode = process.env.OPENWORK_RUNNER_PAIRING_CODE;
+  const forcePair = process.env.OPENWORK_RUNNER_FORCE_PAIR === 'true';
   const config = readConfig();
-  if (pairingCode && (!config.credential || config.serverUrl !== serverUrl)) {
+  if (pairingCode && (forcePair || !config.credential || config.serverUrl !== serverUrl)) {
     await pairWithCode(pairingCode);
+    pairingRetryAttempted = true;
+  } else if (pairingCode) {
+    console.log(
+      `Using saved runner credential from ${configPath}. If the server rejects it, the provided pairing code will be used once.`,
+    );
   }
   recoverPersistedJobs();
   connect();

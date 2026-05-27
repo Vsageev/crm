@@ -74,7 +74,7 @@ export function BoardsListPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const { activeWorkspaceId } = useWorkspace();
+  const { activeWorkspaceId, workspaces } = useWorkspace();
   const { isFavorite, toggleFavorite } = useFavorites();
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
@@ -178,23 +178,56 @@ export function BoardsListPage() {
     }
   }, [searchParams, loading]);
 
-  const willRedirect = useMemo(() => {
+  const autoOpenBoardId = useMemo(() => {
     const forceList = searchParams.get('list') === '1';
     const forceCreate = searchParams.get('action') === 'create';
-    return !forceList && !forceCreate && !search && !loading && !provisioningStarter && !error && boards.length > 0;
-  }, [searchParams, search, loading, provisioningStarter, error, boards.length]);
-
-  useEffect(() => {
-    if (!willRedirect) return;
+    if (
+      forceList ||
+      forceCreate ||
+      search ||
+      loading ||
+      provisioningStarter ||
+      error ||
+      boards.length === 0
+    ) {
+      return null;
+    }
 
     const preferredBoardId = getPreferredBoardId();
-    const targetBoardId =
-      preferredBoardId && boards.some((board) => board.id === preferredBoardId)
-        ? preferredBoardId
-        : boards[0].id;
+    if (preferredBoardId && boards.some((board) => board.id === preferredBoardId)) {
+      return preferredBoardId;
+    }
 
-    navigate(`/boards/${targetBoardId}`, { replace: true });
-  }, [willRedirect, boards, navigate]);
+    if (activeWorkspaceId) {
+      return boards[0].id;
+    }
+
+    if (workspaces.length === 0) {
+      return null;
+    }
+
+    if (workspaces.length > 1) {
+      return null;
+    }
+
+    return boards[0].id;
+  }, [
+    activeWorkspaceId,
+    searchParams,
+    search,
+    loading,
+    provisioningStarter,
+    error,
+    boards,
+    workspaces.length,
+  ]);
+
+  const willRedirect = Boolean(autoOpenBoardId);
+
+  useEffect(() => {
+    if (!autoOpenBoardId) return;
+    navigate(`/boards/${autoOpenBoardId}`, { replace: true });
+  }, [autoOpenBoardId, navigate]);
 
   async function handleCreate() {
     if (!createName.trim()) return;
@@ -271,6 +304,28 @@ export function BoardsListPage() {
 
     return previews;
   }, [boardDetails]);
+
+  const showWorkspaceSections = !activeWorkspaceId && workspaces.length > 1;
+  const workspaceSections = useMemo(() => {
+    if (!showWorkspaceSections) return [];
+
+    const assignedIds = new Set<string>();
+    const sections = workspaces
+      .map((workspace) => {
+        const boardIds = new Set(workspace.boardIds);
+        const items = sortedBoards.filter((board) => boardIds.has(board.id));
+        items.forEach((board) => assignedIds.add(board.id));
+        return { id: workspace.id, name: workspace.name, items };
+      })
+      .filter((section) => section.items.length > 0);
+
+    const unassigned = sortedBoards.filter((board) => !assignedIds.has(board.id));
+    if (unassigned.length > 0) {
+      sections.push({ id: '__unassigned__', name: 'Unassigned', items: unassigned });
+    }
+
+    return sections;
+  }, [showWorkspaceSections, sortedBoards, workspaces]);
 
   async function handleDeleteBoard(board: Board) {
     if (isGeneralBoard(board)) return;
@@ -387,89 +442,47 @@ export function BoardsListPage() {
             Create board &ldquo;{search}&rdquo;
           </Button>
         </div>
+      ) : showWorkspaceSections ? (
+        <div className={styles.workspaceSections}>
+          {workspaceSections.map((section) => (
+            <section key={section.id} className={styles.workspaceSection}>
+              <div className={styles.workspaceSectionHeader}>
+                <h2 className={styles.workspaceSectionTitle}>{section.name}</h2>
+                <span className={styles.workspaceSectionCount}>
+                  {section.items.length} {section.items.length === 1 ? 'board' : 'boards'}
+                </span>
+              </div>
+              <div className={styles.grid}>
+                {section.items.map((board) => (
+                  <BoardCard
+                    key={board.id}
+                    board={board}
+                    debouncedSearch={debouncedSearch}
+                    preview={boardPreviews[board.id]}
+                    deletingBoardId={deletingBoardId}
+                    isFavorite={isFavorite}
+                    toggleFavorite={toggleFavorite}
+                    onDelete={handleDeleteBoard}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       ) : (
         <div className={styles.grid}>
-          {sortedBoards.map((board) => {
-            const preview = boardPreviews[board.id];
-            const columns = preview?.columns ?? [];
-            const totalCards = preview?.totalCards ?? 0;
-            return (
-            <article key={board.id} className={styles.boardCard}>
-              <Link to={`/boards/${board.id}`} className={styles.boardLink}>
-                <div className={styles.boardName}>{highlightMatch(board.name, debouncedSearch)}</div>
-                {board.description && (
-                  <div className={styles.boardDescription}>{highlightMatch(board.description, debouncedSearch)}</div>
-                )}
-                {columns.length > 0 && (
-                  <div className={styles.columnPreview}>
-                    <div className={styles.columnBars}>
-                      {columns.map((col) => (
-                        <div
-                          key={col.id}
-                          className={styles.columnBar}
-                          style={{
-                            flex: totalCards > 0 ? Math.max(col.count, 0.15 * totalCards) : 1,
-                            backgroundColor: col.color,
-                          }}
-                          title={`${col.name}: ${col.count} card${col.count !== 1 ? 's' : ''}`}
-                        />
-                      ))}
-                    </div>
-                    <div className={styles.columnLabels}>
-                      {columns.map((col) => (
-                        <span key={col.id} className={styles.columnLabel} title={col.name}>
-                          <span className={styles.columnDot} style={{ backgroundColor: col.color }} />
-                          {col.name}
-                          <span className={styles.columnCount}>{col.count}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className={styles.boardMeta}>
-                  {totalCards > 0 && (
-                    <span className={styles.cardCountMeta}>
-                      <FileText size={12} />
-                      {totalCards} {totalCards === 1 ? 'card' : 'cards'}
-                    </span>
-                  )}
-                  <span>Created {new Date(board.createdAt).toLocaleDateString()}</span>
-                </div>
-              </Link>
-              <div className={styles.cardActions}>
-                <button
-                  type="button"
-                  className={`${styles.favoriteButton} ${isFavorite(board.id) ? styles.favoriteButtonActive : ''}`}
-                  onClick={() => toggleFavorite({ id: board.id, type: 'board', name: board.name })}
-                  aria-label={isFavorite(board.id) ? 'Remove from favorites' : 'Add to favorites'}
-                >
-                  <Star size={14} />
-                </button>
-                {isGeneralBoard(board) ? (
-                  <span className={styles.generalBadge}>General</span>
-                ) : (
-                  <ActionTooltip
-                    label={deletingBoardId === board.id ? `"${board.name}" is being deleted.` : `Delete ${board.name}.`}
-                    disabled={deletingBoardId === board.id}
-                    focusable={deletingBoardId === board.id}
-                    triggerLabel={`Delete ${board.name}`}
-                  >
-                    <button
-                      type="button"
-                      className={styles.deleteButton}
-                      onClick={() => { void handleDeleteBoard(board); }}
-                      disabled={deletingBoardId === board.id}
-                      aria-label={`Delete ${board.name}`}
-                    >
-                      <Trash2 size={14} />
-                      {deletingBoardId === board.id ? 'Deleting...' : 'Delete'}
-                    </button>
-                  </ActionTooltip>
-                )}
-              </div>
-            </article>
-            );
-          })}
+          {sortedBoards.map((board) => (
+            <BoardCard
+              key={board.id}
+              board={board}
+              debouncedSearch={debouncedSearch}
+              preview={boardPreviews[board.id]}
+              deletingBoardId={deletingBoardId}
+              isFavorite={isFavorite}
+              toggleFavorite={toggleFavorite}
+              onDelete={handleDeleteBoard}
+            />
+          ))}
         </div>
       )}
 
@@ -511,5 +524,112 @@ export function BoardsListPage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+interface BoardCardProps {
+  board: Board;
+  debouncedSearch: string;
+  preview?: BoardPreview;
+  deletingBoardId: string | null;
+  isFavorite: (id: string) => boolean;
+  toggleFavorite: (item: { id: string; type: 'board'; name: string }) => void;
+  onDelete: (board: Board) => Promise<void>;
+}
+
+function BoardCard({
+  board,
+  debouncedSearch,
+  preview,
+  deletingBoardId,
+  isFavorite,
+  toggleFavorite,
+  onDelete,
+}: BoardCardProps) {
+  const columns = preview?.columns ?? [];
+  const totalCards = preview?.totalCards ?? 0;
+
+  return (
+    <article className={styles.boardCard}>
+      <Link to={`/boards/${board.id}`} className={styles.boardLink}>
+        <div className={styles.boardName}>{highlightMatch(board.name, debouncedSearch)}</div>
+        {board.description && (
+          <div className={styles.boardDescription}>
+            {highlightMatch(board.description, debouncedSearch)}
+          </div>
+        )}
+        {columns.length > 0 && (
+          <div className={styles.columnPreview}>
+            <div className={styles.columnBars}>
+              {columns.map((col) => (
+                <div
+                  key={col.id}
+                  className={styles.columnBar}
+                  style={{
+                    flex: totalCards > 0 ? Math.max(col.count, 0.15 * totalCards) : 1,
+                    backgroundColor: col.color,
+                  }}
+                />
+              ))}
+            </div>
+            <div className={styles.columnLabels}>
+              {columns.map((col) => (
+                <span key={col.id} className={styles.columnLabel}>
+                  <span className={styles.columnDot} style={{ backgroundColor: col.color }} />
+                  {col.name}
+                  <span className={styles.columnCount}>{col.count}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className={styles.boardMeta}>
+          {totalCards > 0 && (
+            <span className={styles.cardCountMeta}>
+              <FileText size={12} />
+              {totalCards} {totalCards === 1 ? 'card' : 'cards'}
+            </span>
+          )}
+          <span>Created {new Date(board.createdAt).toLocaleDateString()}</span>
+        </div>
+      </Link>
+      <div className={styles.cardActions}>
+        <button
+          type="button"
+          className={`${styles.favoriteButton} ${isFavorite(board.id) ? styles.favoriteButtonActive : ''}`}
+          onClick={() => toggleFavorite({ id: board.id, type: 'board', name: board.name })}
+          aria-label={isFavorite(board.id) ? 'Remove from favorites' : 'Add to favorites'}
+        >
+          <Star size={14} />
+        </button>
+        {isGeneralBoard(board) ? (
+          <span className={styles.generalBadge}>General</span>
+        ) : (
+          <ActionTooltip
+            label={
+              deletingBoardId === board.id
+                ? `"${board.name}" is being deleted.`
+                : `Delete ${board.name}.`
+            }
+            disabled={deletingBoardId === board.id}
+            focusable={deletingBoardId === board.id}
+            triggerLabel={`Delete ${board.name}`}
+          >
+            <button
+              type="button"
+              className={styles.deleteButton}
+              onClick={() => {
+                void onDelete(board);
+              }}
+              disabled={deletingBoardId === board.id}
+              aria-label={`Delete ${board.name}`}
+            >
+              <Trash2 size={14} />
+              {deletingBoardId === board.id ? 'Deleting...' : 'Delete'}
+            </button>
+          </ActionTooltip>
+        )}
+      </div>
+    </article>
   );
 }

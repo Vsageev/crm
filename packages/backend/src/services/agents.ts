@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { store } from '../db/index.js';
 import { createApiKey, deleteApiKey, validateApiKey } from './api-keys.js';
+import { env } from '../config/env.js';
 import { getApiKeyRecord } from '../db/repositories/api-keys-repository.js';
 import { deleteRefreshTokensForUserId } from '../db/repositories/refresh-tokens-repository.js';
 import {
@@ -15,20 +16,16 @@ import {
   listAllAgentRecordIds,
   maxAgentGroupOrder,
 } from '../db/repositories/agents-query-repository.js';
-import { findSkillRecordByNameLower } from '../db/repositories/skills-repository.js';
+import { listSkillRecords } from '../db/repositories/skills-repository.js';
 import { deleteAgentEnvVarsByAgentId } from './agent-env-vars.js';
 import { stopAllAgentCronJobs } from './agent-cron.js';
 import type { CronJob } from './agent-cron.js';
 import { hashPassword } from './auth.js';
 import {
-  deriveAgentWorkspacePath,
-  getLegacyAgentWorkspacePath,
-  getLegacyAgentsDir,
   normalizeRepositoryRoot,
-  resolveAgentWorkspacePath,
-  resolveAgentWorkspacePathFromRecord,
+  normalizeRepositoryRootOrigin,
 } from './agent-workspaces.js';
-import { attachSkillToAgent } from './skills.js';
+import type { RunnerAgentWorkspaceImportFile } from 'shared';
 
 // ---------------------------------------------------------------------------
 // Preset definitions (loaded from packages/backend/src/presets/)
@@ -169,7 +166,7 @@ const AGENT_PRESETS = loadPresets();
 // CLI availability check
 // ---------------------------------------------------------------------------
 
-interface CliInfo {
+export interface CliInfo {
   id: string;
   name: string;
   command: string;
@@ -210,6 +207,10 @@ const CLI_DEFS: { id: string; name: string; command: string; downloadUrl: string
     downloadUrl: 'https://qwenlm.github.io/qwen-code-docs/',
   },
 ];
+
+export function listCliDefinitions(): Array<Omit<CliInfo, 'installed' | 'resolvedCommand'>> {
+  return CLI_DEFS.map((def) => ({ ...def }));
+}
 
 const MODEL_ID_BY_ALIAS = new Map<string, string>(
   CLI_DEFS.flatMap((def) => [
@@ -399,9 +400,45 @@ export function updateAgentGroup(
 export async function deleteAgentGroup(id: string): Promise<boolean> {
   const group = store.getById('agentGroups', id);
   if (!group) return false;
+
+  let replacementGroupId: string | null = null;
+  const existingGroupIds = new Set(
+    store
+      .getAll('agentGroups')
+      .map((entry) => (typeof entry.id === 'string' ? entry.id : ''))
+      .filter((entryId) => entryId && entryId !== id),
+  );
+
+  for (const workspace of store.getAll('workspaces')) {
+    if (!Array.isArray(workspace.agentGroupIds) || !workspace.agentGroupIds.includes(id)) {
+      continue;
+    }
+
+    let nextGroupIds = workspace.agentGroupIds.filter(
+      (groupId): groupId is string => typeof groupId === 'string' && groupId !== id,
+    );
+    replacementGroupId = nextGroupIds.find((groupId) => existingGroupIds.has(groupId)) ?? null;
+
+    if (!replacementGroupId) {
+      const replacementGroup = await createAgentGroup('Agents');
+      replacementGroupId = replacementGroup.id;
+      existingGroupIds.add(replacementGroupId);
+      nextGroupIds = [...nextGroupIds, replacementGroupId];
+    }
+
+    store.update('workspaces', String(workspace.id), {
+      agentGroupIds: nextGroupIds,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   const agentIds = await listAgentIdsWithGroupId(id);
+  if (!replacementGroupId && agentIds.length > 0) {
+    const fallbackGroup = await createAgentGroup('Agents');
+    replacementGroupId = fallbackGroup.id;
+  }
   for (const agentId of agentIds) {
-    store.update('agents', agentId, { groupId: null });
+    store.update('agents', agentId, { groupId: replacementGroupId });
   }
   store.delete('agentGroups', id);
   return true;
@@ -523,11 +560,43 @@ export interface AgentRecord {
   description: string;
   model: string;
   modelId: string | null;
+  runtime: 'openwork';
+  provider: string | null;
   thinkingLevel: 'low' | 'medium' | 'high' | null;
   preset: string;
   presetParameters: Record<string, string>;
   repositoryRoot: string | null;
-  workspacePath: string;
+  repositoryRootOrigin: 'runner_local' | 'backend_local_legacy' | 'unknown' | null;
+  repositoryRootRunnerId: string | null;
+  repositoryRootVerifiedAt: string | null;
+  repositoryRootRepairRequired: boolean;
+  runnerInventoryRunnerId: string | null;
+  runnerInventoryWorkspaceId: string | null;
+  runnerInventoryVersion: number | null;
+  runnerInventoryCapabilityRefs: Record<string, unknown> | null;
+  runnerInventoryWorkspaceRootOrigin:
+    | 'runner_advertised'
+    | 'repository_root'
+    | 'backend_local_legacy'
+    | 'unknown'
+    | null;
+  runnerInventoryWorkspaceRootVerifiedAt: string | null;
+  runnerInventoryVerifiedAt: string | null;
+  legacyAgentFileState:
+    | 'not_applicable'
+    | 'unknown_backend_legacy'
+    | 'legacy_importable'
+    | 'no_legacy_files'
+    | null;
+  legacyAgentFileRepairState:
+    | 'not_required'
+    | 'needs_runner_validation'
+    | 'needs_runner_import'
+    | 'runner_validated'
+    | 'runner_imported'
+    | null;
+  legacyAgentFileCheckedAt: string | null;
+  workspacePath: string | null;
   status: 'active' | 'inactive' | 'error';
   apiKeyId: string;
   apiKeyName: string;
@@ -557,17 +626,6 @@ export type PublicAgentRecord = Omit<AgentRecord, 'workspaceApiKey' | 'workspace
 // Helpers
 // ---------------------------------------------------------------------------
 
-function ensureAgentsDir() {
-  const legacyAgentsDir = getLegacyAgentsDir();
-  if (!fs.existsSync(legacyAgentsDir)) {
-    fs.mkdirSync(legacyAgentsDir, { recursive: true });
-  }
-}
-
-function agentDir(agentId: string): string {
-  return resolveAgentWorkspacePath(agentId);
-}
-
 function normalizePresetModelKey(model: string): string {
   return model.trim().toLowerCase();
 }
@@ -587,58 +645,6 @@ function getPresetApplicableFiles(preset: PresetDef, model: string): PresetFileD
   );
 }
 
-function getPresetModelScopedFiles(preset: PresetDef, model: string): PresetFileDef[] {
-  const normalizedModel = normalizePresetModelKey(model);
-  return preset.files.filter((file) =>
-    file.models?.some((candidate) => normalizePresetModelKey(candidate) === normalizedModel),
-  );
-}
-
-function areEquivalentPresetFiles(left: PresetFileDef, right: PresetFileDef): boolean {
-  if (left.type !== right.type) return false;
-  if (left.type === 'file' && right.type === 'file') {
-    return left.template === right.template;
-  }
-  if (left.type === 'symlink' && right.type === 'symlink') {
-    return left.target === right.target;
-  }
-  return false;
-}
-
-function syncPresetModelScopedFiles(
-  agentId: string,
-  presetId: string,
-  previousModel: string,
-  nextModel: string,
-): void {
-  if (previousModel === nextModel) return;
-
-  const preset = AGENT_PRESETS[presetId];
-  if (!preset) return;
-
-  const previousFiles = getPresetModelScopedFiles(preset, previousModel);
-  const nextFiles = getPresetModelScopedFiles(preset, nextModel);
-  if (previousFiles.length === 0 || nextFiles.length === 0) return;
-
-  const dir = agentDir(agentId);
-
-  for (const nextFile of nextFiles) {
-    const nextPath = path.join(dir, nextFile.name);
-    if (fs.existsSync(nextPath)) continue;
-
-    const previousFile = previousFiles.find(
-      (candidate) =>
-        candidate.name !== nextFile.name && areEquivalentPresetFiles(candidate, nextFile),
-    );
-    if (!previousFile) continue;
-
-    const previousPath = path.join(dir, previousFile.name);
-    if (!fs.existsSync(previousPath)) continue;
-
-    fs.renameSync(previousPath, nextPath);
-  }
-}
-
 function asAgent(rec: Record<string, unknown>): AgentRecord {
   const presetParameters =
     rec.presetParameters && typeof rec.presetParameters === 'object' && !Array.isArray(rec.presetParameters)
@@ -652,6 +658,13 @@ function asAgent(rec: Record<string, unknown>): AgentRecord {
     ...rec,
     model: typeof rec.model === 'string' ? normalizeModelValue(rec.model) : '',
     modelId: typeof rec.modelId === 'string' ? rec.modelId : null,
+    runtime: 'openwork',
+    provider:
+      typeof rec.provider === 'string' && rec.provider.trim()
+        ? rec.provider.trim()
+        : typeof rec.model === 'string'
+          ? normalizeModelValue(rec.model)
+          : null,
     thinkingLevel: ['low', 'medium', 'high'].includes(rec.thinkingLevel as string)
       ? (rec.thinkingLevel as AgentRecord['thinkingLevel'])
       : null,
@@ -659,7 +672,83 @@ function asAgent(rec: Record<string, unknown>): AgentRecord {
     repositoryRoot: normalizeRepositoryRoot(
       typeof rec.repositoryRoot === 'string' ? rec.repositoryRoot : null,
     ),
-    workspacePath: resolveAgentWorkspacePathFromRecord(rec),
+    repositoryRootOrigin: normalizeRepositoryRootOrigin(rec.repositoryRootOrigin),
+    repositoryRootRunnerId:
+      typeof rec.repositoryRootRunnerId === 'string' && rec.repositoryRootRunnerId.trim()
+        ? rec.repositoryRootRunnerId.trim()
+        : null,
+    repositoryRootVerifiedAt:
+      typeof rec.repositoryRootVerifiedAt === 'string'
+        ? rec.repositoryRootVerifiedAt
+        : rec.repositoryRootVerifiedAt instanceof Date
+          ? rec.repositoryRootVerifiedAt.toISOString()
+          : null,
+    repositoryRootRepairRequired: rec.repositoryRootRepairRequired === true,
+    runnerInventoryRunnerId:
+      typeof rec.runnerInventoryRunnerId === 'string' && rec.runnerInventoryRunnerId.trim()
+        ? rec.runnerInventoryRunnerId.trim()
+        : null,
+    runnerInventoryWorkspaceId:
+      typeof rec.runnerInventoryWorkspaceId === 'string' && rec.runnerInventoryWorkspaceId.trim()
+        ? rec.runnerInventoryWorkspaceId.trim()
+        : null,
+    runnerInventoryVersion:
+      typeof rec.runnerInventoryVersion === 'number' && Number.isFinite(rec.runnerInventoryVersion)
+        ? rec.runnerInventoryVersion
+        : null,
+    runnerInventoryCapabilityRefs:
+      rec.runnerInventoryCapabilityRefs &&
+      typeof rec.runnerInventoryCapabilityRefs === 'object' &&
+      !Array.isArray(rec.runnerInventoryCapabilityRefs)
+        ? (rec.runnerInventoryCapabilityRefs as Record<string, unknown>)
+        : null,
+    runnerInventoryWorkspaceRootOrigin: [
+      'runner_advertised',
+      'repository_root',
+      'backend_local_legacy',
+      'unknown',
+    ].includes(rec.runnerInventoryWorkspaceRootOrigin as string)
+      ? (rec.runnerInventoryWorkspaceRootOrigin as AgentRecord['runnerInventoryWorkspaceRootOrigin'])
+      : null,
+    runnerInventoryWorkspaceRootVerifiedAt:
+      typeof rec.runnerInventoryWorkspaceRootVerifiedAt === 'string'
+        ? rec.runnerInventoryWorkspaceRootVerifiedAt
+        : rec.runnerInventoryWorkspaceRootVerifiedAt instanceof Date
+          ? rec.runnerInventoryWorkspaceRootVerifiedAt.toISOString()
+          : null,
+    runnerInventoryVerifiedAt:
+      typeof rec.runnerInventoryVerifiedAt === 'string'
+        ? rec.runnerInventoryVerifiedAt
+        : rec.runnerInventoryVerifiedAt instanceof Date
+          ? rec.runnerInventoryVerifiedAt.toISOString()
+          : null,
+    legacyAgentFileState: [
+      'not_applicable',
+      'unknown_backend_legacy',
+      'legacy_importable',
+      'no_legacy_files',
+    ].includes(rec.legacyAgentFileState as string)
+      ? (rec.legacyAgentFileState as AgentRecord['legacyAgentFileState'])
+      : null,
+    legacyAgentFileRepairState: [
+      'not_required',
+      'needs_runner_validation',
+      'needs_runner_import',
+      'runner_validated',
+      'runner_imported',
+    ].includes(rec.legacyAgentFileRepairState as string)
+      ? (rec.legacyAgentFileRepairState as AgentRecord['legacyAgentFileRepairState'])
+      : null,
+    legacyAgentFileCheckedAt:
+      typeof rec.legacyAgentFileCheckedAt === 'string'
+        ? rec.legacyAgentFileCheckedAt
+        : rec.legacyAgentFileCheckedAt instanceof Date
+          ? rec.legacyAgentFileCheckedAt.toISOString()
+          : null,
+    workspacePath:
+      typeof rec.workspacePath === 'string' && rec.workspacePath.trim()
+        ? path.resolve(rec.workspacePath.trim())
+        : null,
     skipPermissions: Boolean(rec.skipPermissions),
     separateFolderPerChat: rec.separateFolderPerChat === true,
     cronJobs: Array.isArray(rec.cronJobs) ? rec.cronJobs : [],
@@ -704,6 +793,12 @@ export interface CreateAgentParams {
   avatarIcon?: string;
   avatarBgColor?: string;
   avatarLogoColor?: string;
+  repositoryRootValidation?: {
+    path: string;
+    runnerId: string;
+    workspaceId?: string | null;
+    verifiedAt: string;
+  };
 }
 
 const WORKSPACE_API_PERMISSIONS = [
@@ -862,6 +957,9 @@ async function normalizeAgentServiceUser(
 export async function createAgent(params: CreateAgentParams): Promise<AgentRecord> {
   const preset = AGENT_PRESETS[params.preset];
   if (!preset) throw new Error(`Unknown preset: ${params.preset}`);
+  if (!params.groupId) {
+    throw new Error('Agent group is required');
+  }
   const presetParameters = resolvePresetParameters(preset, params.presetParameters);
   const workspaceApiPermissions = deriveWorkspaceApiPermissions(
     params.capabilities,
@@ -869,11 +967,14 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
   );
 
   const agentId = randomUUID();
-  const repositoryRoot = normalizeRepositoryRoot(presetParameters.workingDirectory);
-  const workspacePath = repositoryRoot
-    ? deriveAgentWorkspacePath(repositoryRoot, params.name)
-    : getLegacyAgentWorkspacePath(agentId);
-  let workspaceInitialized = false;
+  const validatedRepositoryRoot = params.repositoryRootValidation
+    ? normalizeRepositoryRoot(params.repositoryRootValidation.path)
+    : null;
+  const repositoryRoot =
+    validatedRepositoryRoot ?? normalizeRepositoryRoot(presetParameters.workingDirectory);
+  if (validatedRepositoryRoot) {
+    presetParameters.workingDirectory = validatedRepositoryRoot;
+  }
   let serviceUserId: string | null = null;
   let wsKeyId: string | null = null;
   const normalizedModel = normalizeModelValue(params.model);
@@ -899,11 +1000,45 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
       description: params.description,
       model: normalizedModel,
       modelId: params.modelId ?? null,
+      runtime: 'openwork',
+      provider: normalizedModel,
       thinkingLevel: params.thinkingLevel ?? null,
       preset: params.preset,
       presetParameters,
       repositoryRoot,
-      workspacePath,
+      repositoryRootOrigin: repositoryRoot
+        ? params.repositoryRootValidation
+          ? 'runner_local'
+          : 'unknown'
+        : null,
+      repositoryRootRunnerId: repositoryRoot
+        ? (params.repositoryRootValidation?.runnerId ?? null)
+        : null,
+      repositoryRootVerifiedAt: repositoryRoot
+        ? (params.repositoryRootValidation?.verifiedAt ?? null)
+        : null,
+      repositoryRootRepairRequired: Boolean(repositoryRoot && !params.repositoryRootValidation),
+      runnerInventoryRunnerId: params.repositoryRootValidation?.runnerId ?? null,
+      runnerInventoryWorkspaceId: params.repositoryRootValidation?.workspaceId ?? null,
+      runnerInventoryVersion: 1,
+      runnerInventoryCapabilityRefs: params.repositoryRootValidation
+        ? {
+            runnerId: params.repositoryRootValidation.runnerId,
+            workspaceId: params.repositoryRootValidation.workspaceId ?? null,
+            capabilitySource: 'agent_runners.capabilities',
+          }
+        : null,
+      runnerInventoryWorkspaceRootOrigin: repositoryRoot ? 'repository_root' : 'unknown',
+      runnerInventoryWorkspaceRootVerifiedAt: params.repositoryRootValidation?.verifiedAt ?? null,
+      runnerInventoryVerifiedAt: params.repositoryRootValidation?.verifiedAt ?? null,
+      legacyAgentFileState: repositoryRoot ? 'not_applicable' : 'unknown_backend_legacy',
+      legacyAgentFileRepairState: repositoryRoot
+        ? params.repositoryRootValidation
+          ? 'not_required'
+          : 'needs_runner_validation'
+        : 'needs_runner_validation',
+      legacyAgentFileCheckedAt: null,
+      workspacePath: null,
       status: 'active',
       apiKeyId: params.apiKeyId,
       apiKeyName: params.apiKeyName,
@@ -922,54 +1057,6 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
       avatarLogoColor: params.avatarLogoColor ?? '#e94560',
     });
 
-    // Step 4: Scaffold workspace folder
-    ensureAgentsDir();
-    const dir = resolveAgentWorkspacePathFromRecord(record);
-    if (fs.existsSync(dir)) {
-      const stats = fs.statSync(dir);
-      if (!stats.isDirectory()) {
-        throw new Error(`Agent workspace path is not a directory: ${dir}`);
-      }
-      const existingEntries = fs.readdirSync(dir);
-      if (existingEntries.length > 0) {
-        throw new Error(`Agent workspace already exists: ${dir}`);
-      }
-    }
-    fs.mkdirSync(dir, { recursive: true });
-    workspaceInitialized = true;
-
-    const applicableFiles = getPresetApplicableFiles(preset, normalizedModel);
-    const templateVars = buildPresetTemplateVars(preset, {
-      agentName: params.name,
-      description: params.description,
-      presetParameters,
-    });
-
-    for (const fileDef of applicableFiles) {
-      const filePath = path.join(dir, fileDef.name);
-      if (fileDef.type === 'file') {
-        const content = renderTemplate(fileDef.template, templateVars);
-        fs.writeFileSync(filePath, content, 'utf-8');
-        continue;
-      }
-
-      fs.symlinkSync(fileDef.target, filePath);
-    }
-
-    // Step 5: Auto-attach default skills from preset
-    if (preset.defaultSkills.length > 0) {
-      for (const skillName of preset.defaultSkills) {
-        const skill = await findSkillRecordByNameLower(skillName.toLowerCase());
-        if (skill) {
-          try {
-            attachSkillToAgent(agentId, skill.id as string);
-          } catch {
-            // Non-fatal: skill attachment failure shouldn't block agent creation
-          }
-        }
-      }
-    }
-
     return asAgent(record);
   } catch (error) {
     // Rollback: delete created resources on failure
@@ -982,12 +1069,176 @@ export async function createAgent(params: CreateAgentParams): Promise<AgentRecor
     if (agentId) {
       await store.delete('agents', agentId);
     }
-    const dir = workspacePath;
-    if (workspaceInitialized && fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
     throw error;
   }
+}
+
+export async function rollbackCreatedAgentMetadata(agent: AgentRecord): Promise<void> {
+  const workspaceApiKeyId =
+    typeof agent.workspaceApiKeyId === 'string' ? agent.workspaceApiKeyId : null;
+  if (workspaceApiKeyId) {
+    await deleteApiKey(workspaceApiKeyId).catch(() => {});
+  }
+  if (typeof agent.serviceUserId === 'string' && agent.serviceUserId) {
+    await store.delete('users', agent.serviceUserId);
+  }
+  await store.delete('agents', agent.id);
+}
+
+export function buildInitialAgentWorkspaceImportFiles(
+  agent: Pick<
+    AgentRecord,
+    'name' | 'description' | 'model' | 'preset' | 'presetParameters'
+  >,
+): RunnerAgentWorkspaceImportFile[] {
+  const preset = AGENT_PRESETS[agent.preset];
+  if (!preset) return [];
+
+  const vars = buildPresetTemplateVars(preset, {
+    agentName: agent.name,
+    description: agent.description,
+    presetParameters: agent.presetParameters,
+  });
+
+  const defaultSkillImports = buildDefaultSkillImportFiles(preset.defaultSkills);
+  const skillSection =
+    defaultSkillImports.references.length > 0
+      ? buildDefaultSkillsSection(defaultSkillImports.references)
+      : '';
+
+  return [
+    ...getPresetApplicableFiles(preset, agent.model)
+    .filter((file): file is PresetTextFileDef => file.type === 'file')
+    .map((file) => {
+      const content = renderTemplate(file.template, vars) + skillSection;
+      return {
+        path: normalizePath(file.name),
+        contentBase64: Buffer.from(content, 'utf-8').toString('base64'),
+        sizeBytes: Buffer.byteLength(content, 'utf-8'),
+      };
+    }),
+    ...defaultSkillImports.files,
+  ];
+}
+
+interface DefaultSkillImportReference {
+  name: string;
+  description: string;
+  path: string;
+}
+
+const SKILLS_START = '<!-- skills:start -->';
+const SKILLS_END = '<!-- skills:end -->';
+const SKILLS_DIR = path.resolve(env.DATA_DIR, 'skills');
+
+function slugifySkillName(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'skill'
+  );
+}
+
+function buildDefaultSkillsSection(skills: DefaultSkillImportReference[]): string {
+  const lines = skills.map((skill) =>
+    skill.description
+      ? `- \`${skill.name}\` — ${skill.description} Path: \`${skill.path}\`.`
+      : `- \`${skill.name}\` Path: \`${skill.path}\`.`,
+  );
+
+  return `\n\n${[SKILLS_START, '## Skills', ...lines, SKILLS_END].join('\n')}\n`;
+}
+
+function readDefaultSkillDisplay(srcDir: string, fallbackName: string): {
+  name: string;
+  description: string;
+} {
+  const indexPath = path.join(srcDir, 'index.md');
+  if (!fs.existsSync(indexPath)) return { name: fallbackName, description: '' };
+
+  const lines = fs.readFileSync(indexPath, 'utf-8').split(/\r?\n/);
+  let name = fallbackName;
+  let description = '';
+
+  if (lines[0]?.trim() === '---') {
+    for (const line of lines.slice(1)) {
+      const trimmed = line.trim();
+      if (trimmed === '---') break;
+      if (trimmed.startsWith('name:')) {
+        name = trimmed.slice('name:'.length).trim().replace(/^['"]|['"]$/g, '') || name;
+      } else if (trimmed.startsWith('description:')) {
+        description =
+          trimmed.slice('description:'.length).trim().replace(/^['"]|['"]$/g, '') || description;
+      }
+    }
+  }
+
+  return { name, description };
+}
+
+function collectSkillFiles(
+  srcDir: string,
+  destDir: string,
+  files: RunnerAgentWorkspaceImportFile[],
+): void {
+  if (!fs.existsSync(srcDir)) return;
+
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.name === 'skill.json') continue;
+
+    const srcPath = path.join(srcDir, entry.name);
+    const destPath = path.posix.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      collectSkillFiles(srcPath, destPath, files);
+      continue;
+    }
+
+    const content = fs.readFileSync(srcPath);
+    files.push({
+      path: normalizePath(destPath),
+      contentBase64: content.toString('base64'),
+      sizeBytes: content.byteLength,
+    });
+  }
+}
+
+function buildDefaultSkillImportFiles(skillNames: string[]): {
+  files: RunnerAgentWorkspaceImportFile[];
+  references: DefaultSkillImportReference[];
+} {
+  if (skillNames.length === 0) return { files: [], references: [] };
+
+  const skillRecords = listSkillRecords();
+  const files: RunnerAgentWorkspaceImportFile[] = [];
+  const references: DefaultSkillImportReference[] = [];
+
+  for (const skillName of skillNames) {
+    const skill = skillRecords.find(
+      (record) =>
+        typeof record.name === 'string' &&
+        record.name.toLowerCase() === skillName.toLowerCase(),
+    );
+    if (!skill || typeof skill.id !== 'string' || typeof skill.name !== 'string') continue;
+
+    const slug = slugifySkillName(skill.name);
+    const srcDir = path.join(SKILLS_DIR, skill.id);
+    const destDir = path.posix.join('/skills', slug);
+    const beforeCount = files.length;
+    collectSkillFiles(srcDir, destDir, files);
+    if (files.length === beforeCount) continue;
+
+    const display = readDefaultSkillDisplay(srcDir, skill.name);
+    references.push({
+      name: display.name,
+      description:
+        display.description || (typeof skill.description === 'string' ? skill.description : ''),
+      path: path.posix.join('skills', slug, 'index.md'),
+    });
+  }
+
+  return { files, references };
 }
 
 export async function listAgents(): Promise<AgentRecord[]> {
@@ -1065,15 +1316,6 @@ export async function updateAgent(
 
   const updated = await store.update('agents', id, patch);
   if (!updated) return null;
-
-  if (data.model !== undefined) {
-    syncPresetModelScopedFiles(
-      id,
-      currentAgent.preset,
-      currentAgent.model,
-      patch.model as string,
-    );
-  }
 
   if (data.name !== undefined) {
     const serviceUserId = updated.serviceUserId as string | null | undefined;
@@ -1327,241 +1569,10 @@ export async function ensureAgentServiceAccounts(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Workspace file operations (scoped to the resolved agent workspace root)
-// ---------------------------------------------------------------------------
-
-export interface AgentFileEntry {
-  name: string;
-  path: string;
-  type: 'file' | 'folder';
-  size: number;
-  createdAt: string;
-  isReference?: boolean;
-  target?: string;
-}
-
 function normalizePath(p: string): string {
   let normalized = p.trim().replace(/\\/g, '/');
   if (!normalized) normalized = '/';
   if (!normalized.startsWith('/')) normalized = '/' + normalized;
   if (normalized !== '/' && normalized.endsWith('/')) normalized = normalized.slice(0, -1);
   return normalized;
-}
-
-function resolveAgentDiskPath(agentId: string, filePath: string): string {
-  const dir = agentDir(agentId);
-  return path.resolve(dir, '.' + filePath);
-}
-
-function validateAgentPath(agentId: string, p: string): string {
-  const normalized = normalizePath(p);
-  const resolved = resolveAgentDiskPath(agentId, normalized);
-  const root = agentDir(agentId);
-  const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
-  if (resolved !== root && !resolved.startsWith(rootPrefix)) {
-    throw new Error('Path traversal detected');
-  }
-  return normalized;
-}
-
-export function listAgentFiles(agentId: string, dirPath: string): AgentFileEntry[] {
-  const normalized = validateAgentPath(agentId, dirPath);
-  const diskDir = resolveAgentDiskPath(agentId, normalized);
-
-  if (!fs.existsSync(diskDir)) return [];
-  const stats = fs.statSync(diskDir);
-  if (!stats.isDirectory()) throw new Error('Path is not a directory');
-
-  return fs
-    .readdirSync(diskDir, { withFileTypes: true })
-    .map((entry) => {
-      const fullPath = path.join(diskDir, entry.name);
-      if (!entry.isFile() && !entry.isDirectory() && !entry.isSymbolicLink()) return null;
-
-      // Resolve symlinks to expose their target kind in the file explorer.
-      let st: fs.Stats;
-      try {
-        st = fs.statSync(fullPath);
-      } catch {
-        return null;
-      }
-
-      const resolvedType = st.isFile() ? 'file' : st.isDirectory() ? 'folder' : null;
-      if (!resolvedType) return null;
-
-      const isSymlink = entry.isSymbolicLink();
-      const relative = path.relative(agentDir(agentId), fullPath).split(path.sep).join('/');
-      const createdAtSource =
-        Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
-      const fileEntry: AgentFileEntry = {
-        name: entry.name,
-        path: normalizePath('/' + relative),
-        type: resolvedType,
-        size: resolvedType === 'file' ? st.size : 0,
-        createdAt: createdAtSource.toISOString(),
-      };
-
-      if (isSymlink) {
-        fileEntry.isReference = true;
-        fileEntry.target = fs.readlinkSync(fullPath);
-      }
-
-      return fileEntry;
-    })
-    .filter((e): e is AgentFileEntry => e !== null);
-}
-
-export function getAgentFilePath(agentId: string, filePath: string): string | null {
-  const normalized = validateAgentPath(agentId, filePath);
-  const diskPath = resolveAgentDiskPath(agentId, normalized);
-  if (!fs.existsSync(diskPath)) return null;
-  const stats = fs.statSync(diskPath);
-  if (!stats.isFile()) return null;
-  return diskPath;
-}
-
-export function getAgentEntryPath(agentId: string, entryPath: string): string | null {
-  const normalized = validateAgentPath(agentId, entryPath);
-  const diskPath = resolveAgentDiskPath(agentId, normalized);
-  if (!fs.existsSync(diskPath)) return null;
-  return diskPath;
-}
-
-export function readAgentFileContent(agentId: string, filePath: string): string | null {
-  const diskPath = getAgentFilePath(agentId, filePath);
-  if (!diskPath) return null;
-  return fs.readFileSync(diskPath, 'utf-8');
-}
-
-export function writeAgentFileContent(agentId: string, filePath: string, content: string): void {
-  const normalized = validateAgentPath(agentId, filePath);
-  const diskPath = resolveAgentDiskPath(agentId, normalized);
-  const diskDir = path.dirname(diskPath);
-
-  if (!fs.existsSync(diskDir)) {
-    fs.mkdirSync(diskDir, { recursive: true });
-  }
-
-  if (fs.existsSync(diskPath) && fs.statSync(diskPath).isDirectory()) {
-    throw new Error('Path is a directory');
-  }
-
-  fs.writeFileSync(diskPath, content, 'utf-8');
-}
-
-export async function uploadAgentFile(
-  agentId: string,
-  dirPath: string,
-  fileName: string,
-  _mimeType: string,
-  buffer: Buffer,
-): Promise<AgentFileEntry> {
-  const parentPath = validateAgentPath(agentId, dirPath);
-  const safeName = fileName.replace(/[/\\:*?"<>|]/g, '_').trim();
-  if (!safeName) throw new Error('Invalid file name');
-
-  const fullPath = parentPath === '/' ? '/' + safeName : parentPath + '/' + safeName;
-  validateAgentPath(agentId, fullPath);
-
-  const diskPath = resolveAgentDiskPath(agentId, fullPath);
-  const diskDir = path.dirname(diskPath);
-  if (!fs.existsSync(diskDir)) {
-    fs.mkdirSync(diskDir, { recursive: true });
-  }
-
-  fs.writeFileSync(diskPath, buffer);
-
-  const st = fs.statSync(diskPath);
-  const createdAtSource =
-    Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
-
-  return {
-    name: safeName,
-    path: fullPath,
-    type: 'file',
-    size: buffer.length,
-    createdAt: createdAtSource.toISOString(),
-  };
-}
-
-export function createAgentFolder(agentId: string, dirPath: string, name: string): AgentFileEntry {
-  const parentPath = validateAgentPath(agentId, dirPath);
-  const safeName = name.replace(/[/\\:*?"<>|]/g, '_').trim();
-  if (!safeName) throw new Error('Invalid folder name');
-
-  const fullPath = parentPath === '/' ? '/' + safeName : parentPath + '/' + safeName;
-  validateAgentPath(agentId, fullPath);
-
-  const diskPath = resolveAgentDiskPath(agentId, fullPath);
-  if (fs.existsSync(diskPath)) {
-    throw new Error('A file or folder with this name already exists');
-  }
-  fs.mkdirSync(diskPath, { recursive: true });
-
-  const st = fs.statSync(diskPath);
-  const createdAtSource =
-    Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
-
-  return {
-    name: safeName,
-    path: fullPath,
-    type: 'folder',
-    size: 0,
-    createdAt: createdAtSource.toISOString(),
-  };
-}
-
-export function createAgentReference(
-  agentId: string,
-  dirPath: string,
-  name: string,
-  target: string,
-): AgentFileEntry {
-  const parentPath = validateAgentPath(agentId, dirPath);
-  const safeName = name.replace(/[/\\:*?"<>|]/g, '_').trim();
-  if (!safeName) throw new Error('Invalid reference name');
-
-  const fullPath = parentPath === '/' ? '/' + safeName : parentPath + '/' + safeName;
-  validateAgentPath(agentId, fullPath);
-
-  const diskPath = resolveAgentDiskPath(agentId, fullPath);
-  if (fs.existsSync(diskPath)) {
-    throw new Error('A file or folder with this name already exists');
-  }
-
-  fs.symlinkSync(target, diskPath);
-
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(diskPath);
-  } catch {
-    throw new Error('Failed to create reference — target may be invalid');
-  }
-
-  const resolvedType = st.isFile() ? 'file' : st.isDirectory() ? 'folder' : null;
-  if (!resolvedType) throw new Error('Failed to create reference — target is not a file or folder');
-
-  const createdAtSource =
-    Number.isFinite(st.birthtimeMs) && st.birthtimeMs > 0 ? st.birthtime : st.mtime;
-
-  return {
-    name: safeName,
-    path: fullPath,
-    type: resolvedType,
-    size: resolvedType === 'file' ? st.size : 0,
-    createdAt: createdAtSource.toISOString(),
-    isReference: true,
-    target,
-  };
-}
-
-export function deleteAgentFile(agentId: string, filePath: string): boolean {
-  const normalized = validateAgentPath(agentId, filePath);
-  if (normalized === '/') return false;
-
-  const diskPath = resolveAgentDiskPath(agentId, normalized);
-  if (!fs.existsSync(diskPath)) return false;
-  fs.rmSync(diskPath, { recursive: true, force: true });
-  return true;
 }

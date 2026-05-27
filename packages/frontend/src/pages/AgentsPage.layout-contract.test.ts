@@ -265,4 +265,5 @@ describe('AgentsPage layout contract', () => {
       });
     }
   });
+
 });

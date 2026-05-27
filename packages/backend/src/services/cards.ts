@@ -249,15 +249,21 @@ export async function createCard(
   if (data.assigneeId) {
     const agent = getAgent(data.assigneeId);
     if (agent && agent.status === 'active') {
-      executeCardTask(agent.id, {
-        id: card.id,
-        name: card.name,
-        description: card.description,
-        collectionId: card.collectionId,
-      }, {
-        onDone: () => {},
-        onError: (err) => console.error(`Agent task error for card ${card.id}:`, err),
-      });
+      executeCardTask(
+        agent.id,
+        {
+          id: card.id,
+          name: card.name,
+          description: card.description,
+          collectionId: card.collectionId,
+        },
+        {
+          onDone: () => {},
+          onError: (err) => console.error(`Agent task error for card ${card.id}:`, err),
+        },
+        undefined,
+        audit?.userId,
+      );
     }
   }
 
@@ -303,15 +309,21 @@ export async function updateCard(
     const agent = getAgent(data.assigneeId);
     if (agent && agent.status === 'active') {
       const refreshed = updated as unknown as Card;
-      executeCardTask(agent.id, {
-        id,
-        name: refreshed.name,
-        description: refreshed.description,
-        collectionId: refreshed.collectionId,
-      }, {
-        onDone: () => {},
-        onError: (err) => console.error(`Agent task error for card ${id}:`, err),
-      }, options?.assignmentPrompt);
+      executeCardTask(
+        agent.id,
+        {
+          id,
+          name: refreshed.name,
+          description: refreshed.description,
+          collectionId: refreshed.collectionId,
+        },
+        {
+          onDone: () => {},
+          onError: (err) => console.error(`Agent task error for card ${id}:`, err),
+        },
+        options?.assignmentPrompt,
+        audit?.userId,
+      );
     }
   }
 

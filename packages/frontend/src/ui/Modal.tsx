@@ -5,7 +5,7 @@ import styles from './Modal.module.css';
 export interface ModalProps {
   children: ReactNode;
   onClose: () => void;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** aria-label for the dialog (used when there's no visible title) */
   ariaLabel?: string;
 }

@@ -10,6 +10,9 @@ export const AGENT_RUNS_COLLECTION = 'agent_runs';
 export const AGENT_CHAT_QUEUE_COLLECTION = 'agentChatQueue';
 export const AGENT_BATCH_RUNS_COLLECTION = 'agentBatchRuns';
 export const AGENT_BATCH_RUN_ITEMS_COLLECTION = 'agentBatchRunItems';
+export const EXECUTION_JOBS_COLLECTION = 'executionJobs';
+export const EXECUTION_ATTEMPTS_COLLECTION = 'executionAttempts';
+export const EXECUTION_EVENTS_COLLECTION = 'executionEvents';
 
 function parseIsoDateMs(value: unknown): number {
   if (typeof value !== 'string') return Number.NaN;
@@ -207,6 +210,14 @@ export async function clearAgentRunRetentionReferences(runId: string): Promise<v
   for (const itemId of batchItemIds) {
     await store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId, { agentRunId: null });
   }
+
+  const executionAttemptIds = store
+    .getAll(EXECUTION_ATTEMPTS_COLLECTION)
+    .filter((attempt) => attempt.agentRunId === runId)
+    .map((attempt) => String(attempt.id));
+  for (const attemptId of executionAttemptIds) {
+    await store.update(EXECUTION_ATTEMPTS_COLLECTION, attemptId, { agentRunId: null });
+  }
 }
 
 export function listConversationChatQueueItems(
@@ -374,6 +385,18 @@ export async function findRunningAgentRunsAsync(): Promise<StoreRecord[]> {
     .select()
     .from(schema.agentRuns)
     .where(eq(schema.agentRuns.status, 'running'))
+    .orderBy(desc(schema.agentRuns.startedAt));
+  return recordsFromLegacyRows(rows);
+}
+
+export async function findQueuedAgentRunsAsync(): Promise<StoreRecord[]> {
+  const db = await getFlushedNativeDb();
+  if (!db) return store.getAll('agent_runs').filter((run) => run.status === 'queued');
+
+  const rows = await db
+    .select()
+    .from(schema.agentRuns)
+    .where(eq(schema.agentRuns.status, 'queued'))
     .orderBy(desc(schema.agentRuns.startedAt));
   return recordsFromLegacyRows(rows);
 }

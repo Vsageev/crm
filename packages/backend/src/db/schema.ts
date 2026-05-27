@@ -106,6 +106,22 @@ export const agents = pgTable(
     groupId: text('group_id').references(() => agentGroups.id),
     serviceUserId: text('service_user_id').references(() => users.id),
     repositoryRoot: text('repository_root'),
+    repositoryRootOrigin: text('repository_root_origin'),
+    repositoryRootRunnerId: text('repository_root_runner_id'),
+    repositoryRootVerifiedAt: timestamp('repository_root_verified_at', { withTimezone: true }),
+    repositoryRootRepairRequired: boolean('repository_root_repair_required'),
+    runnerInventoryRunnerId: text('runner_inventory_runner_id'),
+    runnerInventoryWorkspaceId: text('runner_inventory_workspace_id'),
+    runnerInventoryVersion: integer('runner_inventory_version'),
+    runnerInventoryCapabilityRefs: jsonb('runner_inventory_capability_refs'),
+    runnerInventoryWorkspaceRootOrigin: text('runner_inventory_workspace_root_origin'),
+    runnerInventoryWorkspaceRootVerifiedAt: timestamp('runner_inventory_workspace_root_verified_at', {
+      withTimezone: true,
+    }),
+    runnerInventoryVerifiedAt: timestamp('runner_inventory_verified_at', { withTimezone: true }),
+    legacyAgentFileState: text('legacy_agent_file_state'),
+    legacyAgentFileRepairState: text('legacy_agent_file_repair_state'),
+    legacyAgentFileCheckedAt: timestamp('legacy_agent_file_checked_at', { withTimezone: true }),
     workspacePath: text('workspace_path'),
     separateFolderPerChat: boolean('separate_folder_per_chat'),
     skillIds: jsonb('skill_ids'),
@@ -657,6 +673,11 @@ export const agentRunners = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id),
+    connectionScope: text('connection_scope'),
+    ownerAccountId: text('owner_account_id').references(() => users.id),
+    boundWorkspaceId: text('bound_workspace_id').references(() => workspaces.id),
+    originalBoundWorkspaceId: text('original_bound_workspace_id').references(() => workspaces.id),
+    legacyConnectionScope: boolean('legacy_connection_scope'),
     displayName: text('display_name').notNull(),
     credentialHash: text('credential_hash').notNull(),
     credentialPrefix: text('credential_prefix').notNull(),
@@ -684,6 +705,7 @@ export const agentRunnerPairingCodes = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id),
+    connectionScope: text('connection_scope'),
     codeHash: text('code_hash').notNull(),
     displayName: text('display_name').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -744,6 +766,88 @@ export const agentChatQueue = pgTable(
     index('agent_chat_queue_run_processing_idx')
       .on(table.runId)
       .where(sql`${table.status} = 'processing' and ${table.runId} is not null`),
+  ],
+);
+
+export const executionJobs = pgTable(
+  'execution_jobs',
+  {
+    id: text('id').primaryKey(),
+    ownerType: text('owner_type').notNull(),
+    ownerId: text('owner_id').notNull(),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    targetType: text('target_type').notNull(),
+    targetId: text('target_id').notNull(),
+    status: text('status').notNull(),
+    policySnapshot: jsonb('policy_snapshot'),
+    activeAttemptId: text('active_attempt_id'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    errorMessage: text('error_message'),
+    ...timestamps,
+    ...legacyPayload,
+  },
+  (table) => [
+    uniqueIndex('execution_jobs_idempotency_key_idx').on(table.idempotencyKey),
+    uniqueIndex('execution_jobs_active_owner_idx')
+      .on(table.ownerType, table.ownerId)
+      .where(sql`${table.status} in ('queued', 'dispatching', 'running')`),
+    uniqueIndex('execution_jobs_active_target_idx')
+      .on(table.agentId, table.targetType, table.targetId)
+      .where(sql`${table.status} in ('queued', 'dispatching', 'running')`),
+    index('execution_jobs_owner_idx').on(table.ownerType, table.ownerId),
+    index('execution_jobs_target_status_idx').on(table.agentId, table.targetType, table.targetId, table.status),
+    index('execution_jobs_status_idx').on(table.status),
+  ],
+);
+
+export const executionAttempts = pgTable(
+  'execution_attempts',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => executionJobs.id),
+    attemptIndex: integer('attempt_index').notNull(),
+    role: text('role').notNull(),
+    provider: text('provider'),
+    model: text('model'),
+    modelId: text('model_id'),
+    agentRunId: text('agent_run_id').references(() => agentRuns.id),
+    status: text('status').notNull(),
+    errorClass: text('error_class'),
+    errorMessage: text('error_message'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    ...timestamps,
+    ...legacyPayload,
+  },
+  (table) => [
+    index('execution_attempts_job_idx').on(table.jobId, table.attemptIndex),
+    index('execution_attempts_agent_run_idx').on(table.agentRunId),
+    index('execution_attempts_status_idx').on(table.status),
+  ],
+);
+
+export const executionEvents = pgTable(
+  'execution_events',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => executionJobs.id),
+    attemptId: text('attempt_id').references(() => executionAttempts.id),
+    type: text('type').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+    ...legacyPayload,
+  },
+  (table) => [
+    index('execution_events_job_created_idx').on(table.jobId, table.createdAt),
+    index('execution_events_attempt_idx').on(table.attemptId),
   ],
 );
 
@@ -810,6 +914,7 @@ export const agentBatchRunItems = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     agentRunId: text('agent_run_id').references(() => agentRuns.id),
+    executionJobId: text('execution_job_id').references(() => executionJobs.id),
     stageId: text('stage_id'),
     dependsOnItemIds: jsonb('depends_on_item_ids'),
     blockingMode: text('blocking_mode'),
@@ -820,6 +925,7 @@ export const agentBatchRunItems = pgTable(
     index('agent_batch_run_items_run_id_idx').on(table.runId),
     index('agent_batch_run_items_card_id_idx').on(table.cardId),
     index('agent_batch_run_items_agent_run_id_idx').on(table.agentRunId),
+    index('agent_batch_run_items_execution_job_id_idx').on(table.executionJobId),
     index('agent_batch_run_items_run_status_idx').on(table.runId, table.status),
   ],
 );

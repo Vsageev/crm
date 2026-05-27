@@ -2,7 +2,11 @@ import { store } from '../db/index.js';
 import {
   AGENT_BATCH_RUN_ITEMS_COLLECTION,
   AGENT_BATCH_RUNS_COLLECTION,
+  AGENT_RUNS_COLLECTION,
   deleteBatchRunItemsForRun,
+  EXECUTION_ATTEMPTS_COLLECTION,
+  EXECUTION_EVENTS_COLLECTION,
+  EXECUTION_JOBS_COLLECTION,
   findBatchRunItemsQueuedOrProcessingNative,
   findBatchRunItemsWithStatusNative,
   findBatchRunsEligibleForHistoryPrune,
@@ -12,7 +16,7 @@ import {
 } from '../db/repositories/agent-execution-repository.js';
 import { ApiError } from '../utils/api-errors.js';
 import { getAgent, isAgentArchived } from './agents.js';
-import { executeCardTask } from './agent-chat.js';
+import { AgentChatError, executeCardTask, preflightAgentRunner } from './agent-chat.js';
 import { killAgentRun } from './agent-runs.js';
 
 const AGENT_BATCH_DEFAULT_MAX_PARALLEL = 3;
@@ -34,6 +38,8 @@ export type AgentBatchItemStatus =
   | 'skipped';
 export type AgentBatchRunFilterStatus = AgentBatchRunStatus | 'active';
 export type AgentBatchBlockingMode = 'all_success' | 'all_settled';
+type ExecutionJobStatus = 'queued' | 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+type ExecutionAttemptStatus = 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 interface QueueDrainTimer {
   timer: ReturnType<typeof setTimeout>;
@@ -71,6 +77,7 @@ export interface EnqueueAgentBatchRunOptions {
   cards: AgentBatchCardSnapshot[];
   stages?: AgentBatchStageInput[];
   cardDependencies?: AgentBatchCardDependencyInput[];
+  activationActorId?: string | null;
 }
 
 export interface AgentBatchStartResult {
@@ -397,6 +404,31 @@ function normalizeMaxAttempts(value: unknown): number {
   return Math.floor(parsed);
 }
 
+function toApiError(error: AgentChatError): ApiError {
+  if (error.statusCode === 404) {
+    return ApiError.notFound(error.code, error.message, error.hint);
+  }
+  if (error.statusCode === 409) {
+    return ApiError.conflict(error.code, error.message, error.hint);
+  }
+  if (error.statusCode === 403) {
+    return ApiError.forbidden(error.code, error.message, error.hint);
+  }
+  return ApiError.badRequest(error.code, error.message, error.hint);
+}
+
+function assertAgentRunnerAvailableForBatch(
+  agentId: string,
+  activationActorId?: string | null,
+): void {
+  try {
+    preflightAgentRunner(agentId, { activationActorId });
+  } catch (error) {
+    if (error instanceof AgentChatError) throw toApiError(error);
+    throw error;
+  }
+}
+
 function getItemRetryDelayMs(attempt: number): number {
   return Math.min(
     AGENT_BATCH_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1),
@@ -406,6 +438,242 @@ function getItemRetryDelayMs(attempt: number): number {
 
 function listItemsForRun(runId: string): Record<string, unknown>[] {
   return listOrderedBatchRunItemsForRun(runId) as Record<string, unknown>[];
+}
+
+function listAttemptsForJob(jobId: string): Record<string, unknown>[] {
+  return store
+    .getAll(EXECUTION_ATTEMPTS_COLLECTION)
+    .filter((attempt) => attempt.jobId === jobId)
+    .sort((a, b) => Number(a.attemptIndex ?? 0) - Number(b.attemptIndex ?? 0));
+}
+
+function appendExecutionEvent(
+  jobId: string,
+  type: string,
+  payload: Record<string, unknown>,
+  attemptId: string | null = null,
+) {
+  store.insert(EXECUTION_EVENTS_COLLECTION, {
+    jobId,
+    attemptId,
+    type,
+    payload,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function getOrCreateBatchExecutionJob(params: {
+  runId: string;
+  item: Record<string, unknown>;
+  agentId: string;
+  cardId: string;
+  attemptNumber: number;
+}): Record<string, unknown> {
+  const ownerId = String(params.item.id);
+  const idempotencyKey = `agent-batch-item:${params.runId}:${ownerId}:attempt:${params.attemptNumber}`;
+  const existing = store
+    .getAll(EXECUTION_JOBS_COLLECTION)
+    .find((job) => job.idempotencyKey === idempotencyKey);
+  if (existing) return existing;
+
+  const nowIso = new Date().toISOString();
+  const job = store.insert(EXECUTION_JOBS_COLLECTION, {
+    ownerType: 'batch_item',
+    ownerId,
+    agentId: params.agentId,
+    targetType: 'card',
+    targetId: params.cardId,
+    status: 'dispatching' satisfies ExecutionJobStatus,
+    policySnapshot: {
+      engine: 'agent_batch_card_execution',
+      batchRunId: params.runId,
+      batchItemId: ownerId,
+      retryAttempt: params.attemptNumber,
+      fallback: 'owned_by_executeCardTask_compatibility_wrapper',
+    },
+    activeAttemptId: null,
+    idempotencyKey,
+    startedAt: nowIso,
+    finishedAt: null,
+    errorMessage: null,
+  });
+  appendExecutionEvent(job.id as string, 'job.created', {
+    ownerType: 'batch_item',
+    ownerId,
+    targetType: 'card',
+    targetId: params.cardId,
+  });
+  return job;
+}
+
+function updateExecutionJobStatus(
+  jobId: string,
+  status: ExecutionJobStatus,
+  patch: Record<string, unknown> = {},
+) {
+  const terminal = status === 'succeeded' || status === 'failed' || status === 'cancelled';
+  const nowIso = new Date().toISOString();
+  store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+    status,
+    finishedAt: terminal ? nowIso : null,
+    ...patch,
+  });
+  appendExecutionEvent(jobId, `job.${status}`, patch);
+}
+
+function createExecutionAttemptForRun(jobId: string, agentRunId: string): Record<string, unknown> {
+  const existing = store
+    .getAll(EXECUTION_ATTEMPTS_COLLECTION)
+    .find((attempt) => attempt.jobId === jobId && attempt.agentRunId === agentRunId);
+  if (existing) return existing;
+
+  const attempts = listAttemptsForJob(jobId);
+  const runRecord = store.getById(AGENT_RUNS_COLLECTION, agentRunId);
+  const attemptIndex = attempts.length + 1;
+  const nowIso = new Date().toISOString();
+  const attempt = store.insert(EXECUTION_ATTEMPTS_COLLECTION, {
+    jobId,
+    attemptIndex,
+    role: attemptIndex === 1 ? 'primary' : 'fallback',
+    provider: typeof runRecord?.provider === 'string' ? runRecord.provider : null,
+    model: typeof runRecord?.model === 'string' ? runRecord.model : null,
+    modelId: typeof runRecord?.modelId === 'string' ? runRecord.modelId : null,
+    agentRunId,
+    status: 'running' satisfies ExecutionAttemptStatus,
+    errorClass: null,
+    errorMessage: null,
+    startedAt: nowIso,
+    finishedAt: null,
+  });
+  store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+    status: 'running' satisfies ExecutionJobStatus,
+    activeAttemptId: attempt.id,
+    finishedAt: null,
+    errorMessage: null,
+  });
+  appendExecutionEvent(jobId, 'attempt.started', { agentRunId, attemptIndex }, attempt.id as string);
+  return attempt;
+}
+
+function updateAttemptFromRunRecord(
+  attempt: Record<string, unknown>,
+  runRecord: Record<string, unknown> | null,
+): Record<string, unknown> {
+  if (!runRecord) return attempt;
+  const attemptId = String(attempt.id);
+  const currentStatus = String(attempt.status ?? '');
+  if (currentStatus === 'succeeded' || currentStatus === 'failed' || currentStatus === 'cancelled') {
+    return attempt;
+  }
+
+  if (runRecord.status === 'running' || runRecord.status === 'queued') return attempt;
+
+  if (runRecord.killedByUser === true || runRecord.errorMessage === 'Killed by user') {
+    return (
+      store.update(EXECUTION_ATTEMPTS_COLLECTION, attemptId, {
+        status: 'cancelled' satisfies ExecutionAttemptStatus,
+        finishedAt: new Date().toISOString(),
+        errorMessage: 'Killed by user',
+      }) ?? attempt
+    );
+  }
+
+  if (runRecord.status === 'completed') {
+    return (
+      store.update(EXECUTION_ATTEMPTS_COLLECTION, attemptId, {
+        status: 'succeeded' satisfies ExecutionAttemptStatus,
+        finishedAt: runRecord.finishedAt ?? new Date().toISOString(),
+        errorMessage: null,
+      }) ?? attempt
+    );
+  }
+
+  const errorMessage =
+    typeof runRecord.errorMessage === 'string' && runRecord.errorMessage
+      ? runRecord.errorMessage
+      : 'Agent run failed';
+  return (
+    store.update(EXECUTION_ATTEMPTS_COLLECTION, attemptId, {
+      status: 'failed' satisfies ExecutionAttemptStatus,
+      finishedAt: runRecord.finishedAt ?? new Date().toISOString(),
+      errorMessage,
+      errorClass: 'agent_run_error',
+    }) ?? attempt
+  );
+}
+
+function syncExecutionJobFromAttempts(jobId: string): Record<string, unknown> | null {
+  const job = store.getById(EXECUTION_JOBS_COLLECTION, jobId);
+  if (!job) return null;
+
+  const attempts = listAttemptsForJob(jobId).map((attempt) => {
+    const runId = typeof attempt.agentRunId === 'string' ? attempt.agentRunId : null;
+    return updateAttemptFromRunRecord(
+      attempt,
+      runId ? store.getById(AGENT_RUNS_COLLECTION, runId) : null,
+    );
+  });
+
+  if (attempts.some((attempt) => attempt.status === 'succeeded')) {
+    return (
+      store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+        status: 'succeeded' satisfies ExecutionJobStatus,
+        finishedAt: new Date().toISOString(),
+        errorMessage: null,
+      }) ?? job
+    );
+  }
+
+  const activeAttempt = [...attempts]
+    .reverse()
+    .find((attempt) => attempt.status === 'running' || attempt.status === 'dispatching');
+  if (activeAttempt) {
+    return (
+      store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+        status: 'running' satisfies ExecutionJobStatus,
+        activeAttemptId: activeAttempt.id,
+        finishedAt: null,
+      }) ?? job
+    );
+  }
+
+  if (attempts.length === 0) return job;
+
+  if (attempts.every((attempt) => attempt.status === 'cancelled')) {
+    return (
+      store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+        status: 'cancelled' satisfies ExecutionJobStatus,
+        finishedAt: new Date().toISOString(),
+        errorMessage: 'Killed by user',
+      }) ?? job
+    );
+  }
+
+  if (attempts.every((attempt) => attempt.status === 'failed' || attempt.status === 'cancelled')) {
+    const lastError = [...attempts]
+      .reverse()
+      .map((attempt) => attempt.errorMessage)
+      .find((value) => typeof value === 'string' && value);
+    return (
+      store.update(EXECUTION_JOBS_COLLECTION, jobId, {
+        status: 'failed' satisfies ExecutionJobStatus,
+        finishedAt: new Date().toISOString(),
+        errorMessage: typeof lastError === 'string' ? lastError : 'Batch item failed',
+      }) ?? job
+    );
+  }
+
+  return job;
+}
+
+function deleteExecutionJobTree(jobId: string) {
+  for (const event of store.getAll(EXECUTION_EVENTS_COLLECTION)) {
+    if (event.jobId === jobId) store.delete(EXECUTION_EVENTS_COLLECTION, String(event.id));
+  }
+  for (const attempt of store.getAll(EXECUTION_ATTEMPTS_COLLECTION)) {
+    if (attempt.jobId === jobId) store.delete(EXECUTION_ATTEMPTS_COLLECTION, String(attempt.id));
+  }
+  store.delete(EXECUTION_JOBS_COLLECTION, jobId);
 }
 
 function countItemsByStatus(
@@ -577,6 +845,7 @@ function retryOrFailItem(
       errorMessage,
       nextAttemptAt: new Date(Date.now() + retryDelayMs).toISOString(),
       agentRunId: null,
+      executionJobId: null,
     });
     return;
   }
@@ -599,15 +868,60 @@ async function reconcileProcessingItems(runId: string) {
 
   for (const item of processingItems) {
     const itemId = item.id as string;
+    const executionJobId =
+      typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
     const agentRunId =
       typeof item.agentRunId === 'string' && item.agentRunId ? item.agentRunId : null;
 
     if (runCancelled) {
-      if (agentRunId) {
-        await killAgentRun(agentRunId);
+      const attemptRunIds = executionJobId
+        ? listAttemptsForJob(executionJobId)
+            .map((attempt) => attempt.agentRunId)
+            .filter((value): value is string => typeof value === 'string' && Boolean(value))
+        : [];
+      for (const runToKill of new Set([...attemptRunIds, ...(agentRunId ? [agentRunId] : [])])) {
+        await killAgentRun(runToKill);
+      }
+      if (executionJobId) {
+        updateExecutionJobStatus(executionJobId, 'cancelled', { errorMessage: 'Cancelled by user' });
       }
       markItemCancelled(itemId);
       continue;
+    }
+
+    if (executionJobId) {
+      const job = syncExecutionJobFromAttempts(executionJobId);
+      if (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued') {
+        const startedAtMs = parseIsoDateMs(job.startedAt ?? item.startedAt);
+        if (!Number.isFinite(startedAtMs) || now - startedAtMs < AGENT_BATCH_PROCESSING_STALE_MS) {
+          continue;
+        }
+        const attempts = listAttemptsForJob(executionJobId);
+        if (attempts.length === 0) {
+          updateExecutionJobStatus(executionJobId, 'failed', {
+            errorMessage: 'Batch item dispatch did not create an agent run',
+          });
+        } else {
+          continue;
+        }
+      }
+      const syncedJob = store.getById(EXECUTION_JOBS_COLLECTION, executionJobId);
+      if (syncedJob?.status === 'succeeded') {
+        markItemCompleted(itemId);
+        continue;
+      }
+      if (syncedJob?.status === 'cancelled') {
+        markItemCancelled(itemId);
+        continue;
+      }
+      if (syncedJob?.status === 'failed') {
+        const errorMessage =
+          typeof syncedJob.errorMessage === 'string' && syncedJob.errorMessage
+            ? syncedJob.errorMessage
+            : 'Batch item failed';
+        retryOrFailItem(item, errorMessage);
+        continue;
+      }
     }
 
     if (!agentRunId) {
@@ -702,6 +1016,16 @@ function markBatchItemProcessing(runId: string, item: Record<string, unknown>): 
     errorMessage: null,
     agentRunId: null,
   });
+  const job = getOrCreateBatchExecutionJob({
+    runId,
+    item,
+    agentId,
+    cardId,
+    attemptNumber: attempts + 1,
+  });
+  store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId, {
+    executionJobId: job.id,
+  });
   store.update(AGENT_BATCH_RUNS_COLLECTION, runId, {
     status: 'running',
     startedAt: latestRun.startedAt ?? new Date().toISOString(),
@@ -727,8 +1051,14 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
     typeof item.cardCollectionId === 'string' ? item.cardCollectionId : null;
   const cardDescription =
     typeof item.cardDescription === 'string' ? item.cardDescription : null;
+  const activationActorId =
+    typeof latestRun.activationActorId === 'string' && latestRun.activationActorId.trim()
+      ? latestRun.activationActorId.trim()
+      : undefined;
 
   if (!agentId || !cardId || !cardName || !cardCollectionId) return;
+  const executionJobId =
+    typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
 
   executeCardTask(
     agentId,
@@ -742,13 +1072,28 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
       onRunCreated: (agentRunId) => {
         const latest = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
         if (!latest || latest.status !== 'processing') return;
-        store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId, { agentRunId });
+        const latestExecutionJobId =
+          typeof latest.executionJobId === 'string' && latest.executionJobId
+            ? latest.executionJobId
+            : executionJobId;
+        if (latestExecutionJobId) {
+          createExecutionAttemptForRun(latestExecutionJobId, agentRunId);
+        }
+        store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId, {
+          agentRunId,
+          executionJobId: latestExecutionJobId,
+        });
       },
       onDone: () => {
         const latest = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
         if (!latest || latest.status !== 'processing') {
           scheduleRunDrain(runId, 0);
           return;
+        }
+        const latestExecutionJobId =
+          typeof latest.executionJobId === 'string' && latest.executionJobId ? latest.executionJobId : null;
+        if (latestExecutionJobId) {
+          updateExecutionJobStatus(latestExecutionJobId, 'succeeded', { errorMessage: null });
         }
         markItemCompleted(itemId);
         scheduleRunDrain(runId, 0);
@@ -763,16 +1108,27 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
         const latestRunRecord = store.getById(AGENT_BATCH_RUNS_COLLECTION, runId);
         if (!latestRunRecord) return;
         if (latestRunRecord.status === 'cancelled') {
+          const latestExecutionJobId =
+            typeof latest.executionJobId === 'string' && latest.executionJobId ? latest.executionJobId : null;
+          if (latestExecutionJobId) {
+            updateExecutionJobStatus(latestExecutionJobId, 'cancelled', { errorMessage: err });
+          }
           markItemCancelled(itemId);
           scheduleRunDrain(runId, 0);
           return;
         }
 
+        const latestExecutionJobId =
+          typeof latest.executionJobId === 'string' && latest.executionJobId ? latest.executionJobId : null;
+        if (latestExecutionJobId) {
+          updateExecutionJobStatus(latestExecutionJobId, 'failed', { errorMessage: err });
+        }
         retryOrFailItem(latest, err);
         scheduleRunDrain(runId, 0);
       },
     },
     prompt,
+    activationActorId,
   );
 }
 
@@ -881,6 +1237,11 @@ export function cleanupFinishedBatchRuns(): number {
 
   for (const run of finishedRuns) {
     const runId = run.id as string;
+    for (const item of listItemsForRun(runId)) {
+      if (typeof item.executionJobId === 'string' && item.executionJobId) {
+        deleteExecutionJobTree(item.executionJobId);
+      }
+    }
     deleteBatchRunItemsForRun(runId);
     clearRunDrainTimer(runId);
     store.delete(AGENT_BATCH_RUNS_COLLECTION, runId);
@@ -897,6 +1258,11 @@ function pruneBatchHistory() {
 
   for (const run of staleRuns) {
     const runId = run.id as string;
+    for (const item of listItemsForRun(runId)) {
+      if (typeof item.executionJobId === 'string' && item.executionJobId) {
+        deleteExecutionJobTree(item.executionJobId);
+      }
+    }
     deleteBatchRunItemsForRun(runId);
     clearRunDrainTimer(runId);
     store.delete(AGENT_BATCH_RUNS_COLLECTION, runId);
@@ -912,6 +1278,34 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
   for (const item of processingItems) {
     const runId = typeof item.runId === 'string' ? item.runId : null;
     if (!runId) continue;
+
+    const executionJobId =
+      typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
+    if (executionJobId) {
+      const job = syncExecutionJobFromAttempts(executionJobId);
+      if (
+        preserveActiveProcessing &&
+        (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued')
+      ) {
+        continue;
+      }
+      if (job?.status === 'succeeded') {
+        markItemCompleted(item.id as string);
+        continue;
+      }
+      if (job?.status === 'cancelled') {
+        markItemCancelled(item.id as string);
+        continue;
+      }
+      if (job?.status === 'failed') {
+        const errorMessage =
+          typeof job.errorMessage === 'string' && job.errorMessage
+            ? job.errorMessage
+            : 'Recovered from backend restart';
+        retryOrFailItem(item, errorMessage);
+        continue;
+      }
+    }
 
     const agentRunId =
       typeof item.agentRunId === 'string' && item.agentRunId ? item.agentRunId : null;
@@ -976,6 +1370,7 @@ export function enqueueAgentBatchRun(options: EnqueueAgentBatchRunOptions): Agen
     };
   }
 
+  assertAgentRunnerAvailableForBatch(agentId, options.activationActorId);
   pruneBatchHistory();
 
   let resolvedDependencies: ResolvedBatchDependencies;
@@ -996,6 +1391,7 @@ export function enqueueAgentBatchRun(options: EnqueueAgentBatchRunOptions): Agen
     sourceName,
     agentId,
     prompt: trimmedPrompt,
+    activationActorId: options.activationActorId ?? null,
     maxParallel,
     status: 'queued' as AgentBatchRunStatus,
     total: cards.length,
@@ -1033,6 +1429,7 @@ export function enqueueAgentBatchRun(options: EnqueueAgentBatchRunOptions): Agen
     completedAt: null,
     errorMessage: null,
     agentRunId: null,
+    executionJobId: null,
   }));
   const insertedItems = store.insertMany(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemsToInsert);
   const itemIdByCardId = new Map(
@@ -1151,10 +1548,23 @@ export async function cancelAgentBatchRun(
 
   const processingItems = listItemsForRun(runId).filter((item) => item.status === 'processing');
   for (const item of processingItems) {
+    const executionJobId =
+      typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
     const agentRunId =
       typeof item.agentRunId === 'string' && item.agentRunId ? item.agentRunId : null;
-    if (agentRunId) {
-      await killAgentRun(agentRunId);
+    const attemptRunIds = executionJobId
+      ? listAttemptsForJob(executionJobId)
+          .map((attempt) => attempt.agentRunId)
+          .filter((value): value is string => typeof value === 'string' && Boolean(value))
+      : [];
+    const runIdsToKill = new Set([...attemptRunIds, ...(agentRunId ? [agentRunId] : [])]);
+    if (runIdsToKill.size > 0) {
+      for (const runToKill of runIdsToKill) {
+        await killAgentRun(runToKill);
+      }
+      if (executionJobId) {
+        updateExecutionJobStatus(executionJobId, 'cancelled', { errorMessage: reason });
+      }
     } else {
       markItemCancelled(item.id as string, reason);
     }

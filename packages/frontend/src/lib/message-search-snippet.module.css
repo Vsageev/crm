@@ -1,0 +1,116 @@
+.root {
+  display: inline;
+}
+
+.mark {
+  background: rgba(250, 204, 21, 0.35);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* inline-text */
+.inlineUser {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.inlineAgent {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.inlineSep {
+  margin: 0 4px;
+  color: var(--color-text-tertiary);
+}
+
+/* inbox-prefix */
+.prefixUser {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.prefixAgent {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+/* badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  margin-right: 6px;
+  border-radius: var(--radius-pill, 9999px);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: baseline;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badgeUser {
+  border: 1px solid color-mix(in srgb, var(--color-primary-brand) 25%, transparent);
+  background: color-mix(in srgb, var(--color-primary-brand) 10%, transparent);
+  color: var(--color-primary-brand);
+}
+
+.badgeAgent {
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 88%, var(--color-border) 12%);
+  color: var(--color-text-secondary);
+}
+
+/* accent-bar */
+.accentBar {
+  display: block;
+  padding-left: 8px;
+  border-left: 3px solid;
+}
+
+.accentBarUser {
+  border-left-color: var(--color-primary-brand);
+}
+
+.accentBarAgent {
+  border-left-color: color-mix(in srgb, var(--color-text-tertiary) 55%, var(--color-border) 45%);
+}
+
+/* role-dot */
+.roleDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.roleDotUser {
+  background: var(--color-primary-brand);
+}
+
+.roleDotAgent {
+  background: var(--color-text-tertiary);
+}
+
+.roleLabelUser {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.roleLabelAgent {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.roleSep {
+  margin: 0 4px;
+  color: var(--color-text-tertiary);
+}

@@ -1,10 +1,11 @@
 import Fastify from 'fastify';
 import sensible from '@fastify/sensible';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerErrorHandler } from '../plugins/error-handler.js';
 import { agentChatRoutes } from './agent-chat.js';
 import { backfillLegacyAgentChatTurns } from '../services/agent-chat-turns.js';
+import { env } from '../config/env.js';
 
 type RecordMap = Map<string, Map<string, Record<string, unknown>>>;
 
@@ -65,9 +66,12 @@ const mocks = vi.hoisted(() => {
     async flush() {},
   };
 
-  return { store };
+  return { store, spawn: vi.fn(() => ({ unref: vi.fn() })) };
 });
 
+vi.mock('node:child_process', () => ({
+  spawn: mocks.spawn,
+}));
 vi.mock('../db/index.js', () => ({ store: mocks.store }));
 vi.mock('../db/connection.js', () => ({ store: mocks.store }));
 
@@ -726,6 +730,99 @@ describe('agent chat canonical view endpoint', () => {
     await app.close();
   });
 
+
+
+  it('keeps the default transcript selected while the compatibility export returns all branches', async () => {
+    seedAgentConversation('conversation-1', {
+      activeBranches: {
+        'turn:__root__': 'turn-root',
+        'turn:turn-root': 'turn-edit',
+      },
+    });
+    addMessage('message-root', { content: 'root prompt' });
+    addMessage('message-original', {
+      content: 'original branch',
+      previousUserMessageId: 'message-root',
+    });
+    addMessage('message-edit', {
+      content: 'edited branch',
+      previousUserMessageId: 'message-root',
+    });
+    addMessage('message-alt', {
+      content: 'alternate branch',
+      previousUserMessageId: 'message-root',
+    });
+    addTurn('turn-root', {
+      userMessageId: 'message-root',
+      status: 'completed',
+    });
+    addTurn('turn-original', {
+      parentTurnId: 'turn-root',
+      userMessageId: 'message-original',
+      status: 'superseded',
+    });
+    addTurn('turn-edit', {
+      parentTurnId: 'turn-root',
+      userMessageId: 'message-edit',
+      status: 'completed',
+      turnType: 'edit',
+      supersedesTurnId: 'turn-original',
+    });
+    addTurn('turn-alt', {
+      parentTurnId: 'turn-root',
+      userMessageId: 'message-alt',
+      status: 'completed',
+    });
+
+    const app = await buildRouteApp();
+    const viewResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/conversations/conversation-1/view',
+    });
+    const activeExportResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/messages?conversationId=conversation-1',
+    });
+    const allExportResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/chat/messages?conversationId=conversation-1&scope=all',
+    });
+
+    expect(viewResponse.statusCode).toBe(200);
+    expect(activeExportResponse.statusCode).toBe(200);
+    expect(allExportResponse.statusCode).toBe(200);
+    expect(viewResponse.json().entries.map((turn: Record<string, unknown>) => turn.id)).toEqual([
+      'turn-root',
+      'turn-edit',
+    ]);
+    expect(
+      activeExportResponse
+        .json()
+        .entries.map((message: Record<string, unknown>) => message.id),
+    ).toEqual(['message-root', 'message-edit']);
+    expect(
+      allExportResponse
+        .json()
+        .entries.map((message: Record<string, unknown>) => message.id),
+    ).toEqual(['message-root', 'message-original', 'message-edit', 'message-alt']);
+    expect(
+      allExportResponse
+        .json()
+        .entries.map((message: Record<string, unknown>) => message.siblingIds),
+    ).toEqual([
+      undefined,
+      ['message-original', 'message-edit', 'message-alt'],
+      ['message-original', 'message-edit', 'message-alt'],
+      ['message-original', 'message-edit', 'message-alt'],
+    ]);
+
+    await app.close();
+  });
+
+
+
+
+
   it('returns 404 for a conversation that does not belong to the agent', async () => {
     seedAgentConversation();
     const app = await buildRouteApp();
@@ -740,6 +837,44 @@ describe('agent chat canonical view endpoint', () => {
       code: 'conversation_not_found',
       message: 'Conversation not found',
     });
+
+    await app.close();
+  });
+});
+
+describe('agent chat backend-local filesystem routes', () => {
+  let originalSameHostGate: boolean;
+
+  beforeEach(() => {
+    originalSameHostGate = env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM;
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM = false;
+    mocks.store.reset();
+    mocks.spawn.mockClear();
+  });
+
+  afterEach(() => {
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM = originalSameHostGate;
+  });
+
+  it('rejects legacy conversation folder reveal in hosted mode', async () => {
+    seedAgentConversation('conversation-1', {
+      workspaceMode: 'subfolder',
+      workspaceRelativePath: 'conversations/conversation-1',
+      workspaceSeedMode: 'symlink',
+    });
+    const app = await buildRouteApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/chat/conversations/conversation-1/reveal-folder',
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: 'backend_local_filesystem_unavailable',
+    });
+    expect(response.json().message).toMatch(/backend-local conversation path, not the runner workspace/i);
+    expect(mocks.spawn).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -1033,6 +1168,7 @@ describe('agent chat turn lifecycle regression matrix API view', () => {
         isSuperseded: true,
       },
     });
+    expect(body.entries[0].availableActions).toContain('edit_user_message');
     expect(body.entries[0].availableActions).not.toContain('retry');
 
     await app.close();

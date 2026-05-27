@@ -42,6 +42,7 @@ import { skillRoutes } from './routes/skills.js';
 import { agentChatRoutes } from './routes/agent-chat.js';
 import { agentRunRoutes } from './routes/agent-runs.js';
 import { agentRunnerRoutes } from './routes/agent-runners.js';
+import { runnerFilesystemRoutes } from './routes/runner-filesystem.js';
 import { settingsRoutes, initRateLimiterFromSettings } from './routes/settings.js';
 import { initAllCronJobs, shutdownAgentCronJobs } from './services/agent-cron.js';
 import { initAllBoardCronJobs } from './services/board-cron.js';
@@ -60,6 +61,15 @@ import { backfillLegacyAgentChatTurns } from './services/agent-chat-turns.js';
 import { initializeAgentBatchQueue } from './services/agent-batch-queue.js';
 import { seedBuiltinSkills } from './services/skills.js';
 import { onRemoteAgentRunnerAvailable, registerAgentRunnerServer } from './services/agent-runners.js';
+
+function summarizeBackfillResult<T extends { invalidRows?: unknown[] }>(result: T): T {
+  if (!Array.isArray(result.invalidRows)) return result;
+  return {
+    ...result,
+    invalidRows: result.invalidRows.slice(0, 10),
+    invalidRowsOmitted: Math.max(result.invalidRows.length - 10, 0),
+  };
+}
 
 function buildHttpsOptions(): SecureContextOptions | undefined {
   if (!env.TLS_CERT_PATH || !env.TLS_KEY_PATH) return undefined;
@@ -121,7 +131,10 @@ export async function buildApp() {
     chatTurnReferenceBackfill.invalid > 0;
   if (chatTurnBackfillChanged) {
     app.log.info(
-      { chatTurnBackfill, chatTurnReferenceBackfill },
+      {
+        chatTurnBackfill: summarizeBackfillResult(chatTurnBackfill),
+        chatTurnReferenceBackfill: summarizeBackfillResult(chatTurnReferenceBackfill),
+      },
       'backfilled agent chat turns',
     );
   }
@@ -172,6 +185,7 @@ export async function buildApp() {
   await app.register(agentChatRoutes);
   await app.register(agentRunRoutes);
   await app.register(agentRunnerRoutes);
+  await app.register(runnerFilesystemRoutes);
   await app.register(settingsRoutes);
   registerAgentRunnerServer(app);
   onRemoteAgentRunnerAvailable(() => scheduleQueuedAgentChatDrains());

@@ -44,7 +44,7 @@ describe('MarkdownContent local file links', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /Reveal in/ }));
 
     await waitFor(() => {
-      expect(api).toHaveBeenCalledWith('/storage/reveal-local', {
+      expect(api).toHaveBeenCalledWith('/runner-filesystem/reveal', {
         method: 'POST',
         body: JSON.stringify({ path: '/Users/vladislav/project/src/app.ts' }),
       });

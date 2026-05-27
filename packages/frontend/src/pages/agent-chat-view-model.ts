@@ -153,6 +153,15 @@ export interface AgentConversationChatTurnSibling {
   createdAt: string | null;
 }
 
+export interface AgentConversationChatViewDiagnostic {
+  code: string;
+  severity: 'warning' | 'error';
+  message: string;
+  turnId: string | null;
+  field: string | null;
+  referencedId: string | null;
+}
+
 export interface AgentConversationChatTurn {
   id: string;
   parentTurnId: string | null;

@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     store,
     getAgent: vi.fn(),
     executeCardTask: vi.fn(),
+    preflightAgentRunner: vi.fn(),
     killAgentRun: vi.fn(),
   };
 });
@@ -64,14 +65,45 @@ vi.mock('./agents.js', () => ({
   getAgent: mocks.getAgent,
   isAgentArchived: (agent: { archivedAt?: unknown } | null | undefined) => Boolean(agent?.archivedAt),
 }));
-vi.mock('./agent-chat.js', () => ({ executeCardTask: mocks.executeCardTask }));
+vi.mock('./agent-chat.js', () => {
+  class AgentChatError extends Error {
+    readonly code: string;
+    readonly statusCode: 400 | 404 | 409;
+    readonly hint?: string;
+
+    constructor(options: {
+      code: string;
+      statusCode: 400 | 404 | 409;
+      message: string;
+      hint?: string;
+    }) {
+      super(options.message);
+      this.name = 'AgentChatError';
+      this.code = options.code;
+      this.statusCode = options.statusCode;
+      this.hint = options.hint;
+    }
+
+    static conflict(code: string, message: string, hint?: string) {
+      return new AgentChatError({ code, statusCode: 409, message, hint });
+    }
+  }
+  return {
+    AgentChatError,
+    executeCardTask: mocks.executeCardTask,
+    preflightAgentRunner: mocks.preflightAgentRunner,
+  };
+});
 vi.mock('./agent-runs.js', () => ({ killAgentRun: mocks.killAgentRun }));
 
 import { store } from '../db/index.js';
+import { AgentChatError } from './agent-chat.js';
 import {
   AGENT_BATCH_RUN_ITEMS_COLLECTION,
   AGENT_BATCH_RUNS_COLLECTION,
   AGENT_RUNS_COLLECTION,
+  EXECUTION_ATTEMPTS_COLLECTION,
+  EXECUTION_JOBS_COLLECTION,
 } from '../db/repositories/agent-execution-repository.js';
 import {
   cancelAgentBatchRun,
@@ -89,6 +121,14 @@ describe('agent batch queue', () => {
     }
     mocks.getAgent.mockReturnValue({ id: 'agent-1', name: 'Agent', status: 'active' });
     mocks.executeCardTask.mockReset();
+    mocks.preflightAgentRunner.mockReset();
+    mocks.preflightAgentRunner.mockReturnValue({
+      agentId: 'agent-1',
+      userId: 'user-1',
+      workspaceId: 'workspace-1',
+      provider: 'codex',
+      eligible: true,
+    });
     mocks.killAgentRun.mockReset();
     mocks.killAgentRun.mockResolvedValue({ ok: true });
     mocks.store.getAll.mockClear();
@@ -127,6 +167,55 @@ describe('agent batch queue', () => {
 
     expect(mocks.executeCardTask).toHaveBeenCalledTimes(1);
     expect(mocks.executeCardTask.mock.calls[0]?.[3]).toBeUndefined();
+  });
+
+  it('preflights runner availability before creating durable batch rows', () => {
+    mocks.preflightAgentRunner.mockImplementationOnce(() => {
+      throw AgentChatError.conflict(
+        'agent_runner_unavailable',
+        'No remote agent runner is connected. Start or pair an OpenWork runner, then try again.',
+      );
+    });
+
+    expect(() =>
+      enqueueAgentBatchRun({
+        sourceType: 'board',
+        sourceId: 'board-no-runner',
+        agentId: 'agent-1',
+        cards: [{ id: 'card-1', name: 'Card', description: null, collectionId: 'col-1' }],
+      }),
+    ).toThrow(/No remote agent runner is connected/i);
+
+    expect(mocks.records[AGENT_BATCH_RUNS_COLLECTION] ?? []).toHaveLength(0);
+    expect(mocks.records[AGENT_BATCH_RUN_ITEMS_COLLECTION] ?? []).toHaveLength(0);
+    expect(mocks.executeCardTask).not.toHaveBeenCalled();
+  });
+
+  it('preserves the batch starter as the runner activation actor', async () => {
+    enqueueAgentBatchRun({
+      sourceType: 'board',
+      sourceId: 'board-1',
+      agentId: 'agent-1',
+      activationActorId: 'teammate-2',
+      cards: [{ id: 'card-1', name: 'Card', description: null, collectionId: 'col-1' }],
+    });
+
+    expect(mocks.preflightAgentRunner).toHaveBeenCalledWith('agent-1', {
+      activationActorId: 'teammate-2',
+    });
+    expect(mocks.records[AGENT_BATCH_RUNS_COLLECTION]?.[0]).toMatchObject({
+      activationActorId: 'teammate-2',
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(mocks.executeCardTask).toHaveBeenCalledWith(
+      'agent-1',
+      expect.objectContaining({ id: 'card-1' }),
+      expect.any(Object),
+      undefined,
+      'teammate-2',
+    );
   });
 
   it('dispatches cards in stable list order when maxParallel is 1', async () => {
@@ -321,5 +410,96 @@ describe('agent batch queue', () => {
     const item = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
     expect(item?.status).toBe('completed');
     expect(getAgentBatchRun(runId)?.status).toBe('completed');
+  });
+
+  it('does not retry a batch item when its logical execution job is still running without a legacy agentRunId', async () => {
+    mocks.executeCardTask.mockImplementation((_agentId, _card, callbacks) => {
+      callbacks.onRunCreated?.('agent-run-active-1');
+    });
+
+    const { runId } = enqueueAgentBatchRun({
+      sourceType: 'board',
+      sourceId: 'board-execution-job',
+      agentId: 'agent-1',
+      maxParallel: 1,
+      cards: [{ id: 'card-active', name: 'Active', description: null, collectionId: 'col-1' }],
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    const item = listAgentBatchRunItems(runId!).entries[0];
+    expect(item?.executionJobId).toBeTruthy();
+    store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, item!.id as string, {
+      agentRunId: null,
+      startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    });
+    await initializeAgentBatchQueue({ preserveActiveProcessing: true });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(mocks.executeCardTask).toHaveBeenCalledTimes(1);
+    expect(listAgentBatchRunItems(runId!).entries[0]?.status).toBe('processing');
+  });
+
+  it('keeps a fallback attempt running when the primary attempt failed', async () => {
+    mocks.executeCardTask.mockImplementation((_agentId, _card, callbacks) => {
+      store.insert(AGENT_RUNS_COLLECTION, {
+        id: 'agent-run-primary',
+        agentId: 'agent-1',
+        agentName: 'Agent',
+        triggerType: 'card_assignment',
+        status: 'error',
+        cardId: 'card-fallback',
+        executor: 'remote',
+        killedByUser: false,
+        errorMessage: 'Primary quota exceeded',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+      callbacks.onRunCreated?.('agent-run-primary');
+      store.insert(AGENT_RUNS_COLLECTION, {
+        id: 'agent-run-fallback',
+        agentId: 'agent-1',
+        agentName: 'Agent',
+        triggerType: 'card_assignment',
+        status: 'running',
+        cardId: 'card-fallback',
+        executor: 'remote',
+        killedByUser: false,
+        errorMessage: null,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+      });
+      callbacks.onRunCreated?.('agent-run-fallback');
+    });
+
+    const { runId } = enqueueAgentBatchRun({
+      sourceType: 'board',
+      sourceId: 'board-fallback',
+      agentId: 'agent-1',
+      maxParallel: 1,
+      cards: [
+        { id: 'card-fallback', name: 'Fallback', description: null, collectionId: 'col-1' },
+      ],
+    });
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(mocks.executeCardTask).toHaveBeenCalledTimes(1);
+    expect(listAgentBatchRunItems(runId!).entries[0]?.status).toBe('processing');
+    const attempts = mocks.records[EXECUTION_ATTEMPTS_COLLECTION] ?? [];
+    expect(attempts.map((attempt) => attempt.agentRunId)).toEqual([
+      'agent-run-primary',
+      'agent-run-fallback',
+    ]);
+    expect(mocks.records[EXECUTION_JOBS_COLLECTION]?.[0]?.status).toBe('running');
+
+    store.update(AGENT_RUNS_COLLECTION, 'agent-run-fallback', {
+      status: 'completed',
+      finishedAt: new Date().toISOString(),
+    });
+    await initializeAgentBatchQueue({ preserveActiveProcessing: false });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(listAgentBatchRunItems(runId!).entries[0]?.status).toBe('completed');
+    expect(getAgentBatchRun(runId!)?.status).toBe('completed');
   });
 });

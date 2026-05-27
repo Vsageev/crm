@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const mocks = vi.hoisted(() => {
   const records: Record<string, Array<Record<string, unknown>>> = {};
@@ -38,6 +41,7 @@ const mocks = vi.hoisted(() => {
       return removed;
     }),
     transaction: vi.fn(async <T>(operation: () => Promise<T> | T) => operation()),
+    lockAgentRunRowForUpdate: vi.fn(async () => {}),
   };
 
   return { records, store };
@@ -61,7 +65,13 @@ vi.mock('./agent-chat-turns.js', () => ({
   markAgentChatTurnStopped: vi.fn(),
 }));
 
-import { cleanupOldRunRecords } from './agent-runs.js';
+import {
+  appendAgentRunOutput,
+  cleanupOldRunRecords,
+  completeAgentRun,
+  getAgentRun,
+  reconcileUnrecoveredRemoteRuns,
+} from './agent-runs.js';
 
 describe('cleanupOldRunRecords', () => {
   beforeEach(() => {
@@ -133,6 +143,114 @@ describe('cleanupOldRunRecords', () => {
     const deleteOrder = mocks.store.delete.mock.invocationCallOrder[runDeleteIndex];
     for (const updateOrder of mocks.store.update.mock.invocationCallOrder) {
       expect(updateOrder).toBeLessThan(deleteOrder);
+    }
+  });
+
+  it('reconciles unrecovered queued remote runs after the restart grace window', async () => {
+    const oldDate = new Date(Date.now() - 10_000).toISOString();
+    mocks.store.insert('agent_runs', {
+      id: 'run-queued-remote',
+      status: 'queued',
+      executor: 'remote',
+      startedAt: oldDate,
+      finishedAt: null,
+      stdout: '',
+      stderr: '',
+    });
+
+    await expect(reconcileUnrecoveredRemoteRuns()).resolves.toBe(1);
+
+    expect(mocks.store.getById('agent_runs', 'run-queued-remote')).toMatchObject({
+      status: 'error',
+      errorMessage: 'Remote runner job was not recovered after backend restart',
+    });
+  });
+
+  it('persists remote output history in backend storage without reading runner workspace files', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openwork-run-history-'));
+    const backendRunDir = path.join(tempRoot, 'backend-data', 'agent-runs', 'run-history');
+    const runnerWorkspace = path.join(tempRoot, 'runner-workspace');
+    const runnerOnlyFile = path.join(runnerWorkspace, 'repo', 'AGENTS.md');
+    const stdoutPath = path.join(backendRunDir, 'stdout.log');
+    const stderrPath = path.join(backendRunDir, 'stderr.log');
+
+    fs.mkdirSync(path.dirname(runnerOnlyFile), { recursive: true });
+    fs.writeFileSync(runnerOnlyFile, 'runner-owned instructions');
+    fs.mkdirSync(backendRunDir, { recursive: true });
+    fs.writeFileSync(stdoutPath, '');
+    fs.writeFileSync(stderrPath, '');
+
+    mocks.store.insert('agent_runs', {
+      id: 'run-history',
+      agentId: 'agent-history',
+      agentName: 'history agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'running',
+      executor: 'remote',
+      pid: null,
+      stdoutPath,
+      stderrPath,
+      stdout: null,
+      stderr: null,
+      responseText: null,
+      errorMessage: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      runnerLifecycle: {
+        events: [
+          {
+            at: new Date().toISOString(),
+            event: 'backend_job_offer_sent',
+            message: `Runner workspace was ${runnerWorkspace}`,
+          },
+        ],
+      },
+    });
+
+    const originalReadFileSync = fs.readFileSync;
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    readSpy.mockImplementation((filePath, ...args) => {
+      const normalized = typeof filePath === 'string' ? filePath : filePath.toString();
+      if (normalized.startsWith(runnerWorkspace)) {
+        throw new Error(`backend attempted to read runner workspace file: ${normalized}`);
+      }
+      return Reflect.apply(originalReadFileSync, fs, [
+        filePath,
+        ...args,
+      ]) as ReturnType<typeof fs.readFileSync>;
+    });
+
+    try {
+      appendAgentRunOutput(
+        'run-history',
+        'stdout',
+        `${JSON.stringify({
+          type: 'item.completed',
+          item: {
+            id: 'openwork-final-message-run-history',
+            type: 'openwork_final_message',
+            text: 'Readable while runner is offline',
+          },
+        })}\n`,
+      );
+      fs.rmSync(runnerWorkspace, { recursive: true, force: true });
+
+      await completeAgentRun('run-history', null);
+      const run = getAgentRun('run-history');
+
+      expect(run).toMatchObject({
+        id: 'run-history',
+        status: 'completed',
+        responseText: 'Readable while runner is offline',
+      });
+      expect(String(run?.stdout ?? '')).toContain('openwork_final_message');
+      expect(
+        readSpy.mock.calls.some((call) => String(call[0]).startsWith(runnerWorkspace)),
+      ).toBe(false);
+    } finally {
+      readSpy.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 });

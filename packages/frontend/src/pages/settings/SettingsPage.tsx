@@ -69,7 +69,17 @@ export function SettingsPage() {
       {activeTab === 'notifications' && <NotificationsTab />}
       {activeTab === 'tags' && <TagsTab />}
       {activeTab === 'api-keys' && <ApiKeysTab />}
-      {activeTab === 'runners' && <RunnerDevicesTab />}
+      {activeTab === 'runners' && (
+        <RunnerDevicesTab
+          initialPairingScope={
+            searchParams.get('scope') === 'project'
+              ? 'project'
+              : searchParams.get('scope') === 'account'
+                ? 'account'
+                : 'account'
+          }
+        />
+      )}
       {activeTab === 'rate-limits' && <RateLimitsTab />}
       {activeTab === 'fallback-model' && <FallbackModelTab />}
       {activeTab === 'backups' && <BackupsTab />}

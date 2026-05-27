@@ -31,6 +31,11 @@ const envSchema = z.object({
   SECRET_ENCRYPTION_KEY: z.string().min(32).optional(),
 
   CORS_ORIGIN: z.string().default('https://localhost:5173'),
+  OPENWORK_PUBLIC_API_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+  WORKSPACE_API_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
 
   // HTTPS — paths to TLS cert/key (relative to project root or absolute)
   TLS_CERT_PATH: z.string().optional(),
@@ -73,6 +78,11 @@ const envSchema = z.object({
   REMOTE_AGENT_RUN_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(0),
   /** When a runner WebSocket drops, keep in-flight jobs pending this long for reconnect (0 = fail immediately). */
   REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS: z.coerce.number().int().nonnegative().default(120_000),
+  /** Explicit same-host development compatibility for legacy backend-local repository roots. */
+  OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
 
 });
 

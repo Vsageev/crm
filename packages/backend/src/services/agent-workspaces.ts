@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/env.js';
 import { store } from '../db/index.js';
@@ -39,24 +38,55 @@ export function deriveAgentWorkspacePath(repositoryRoot: string, agentName: stri
   );
 }
 
+export type RepositoryRootOrigin = 'runner_local' | 'backend_local_legacy' | 'unknown';
+
+export function normalizeRepositoryRootOrigin(input: unknown): RepositoryRootOrigin | null {
+  return input === 'runner_local' || input === 'backend_local_legacy' || input === 'unknown'
+    ? input
+    : null;
+}
+
+export function isRepositoryRootRunnerVerified(agent: Record<string, unknown> | null | undefined): boolean {
+  if (!agent?.repositoryRoot) return false;
+  return (
+    normalizeRepositoryRootOrigin(agent.repositoryRootOrigin) === 'runner_local' &&
+    typeof agent.repositoryRootRunnerId === 'string' &&
+    agent.repositoryRootRunnerId.trim().length > 0 &&
+    (typeof agent.repositoryRootVerifiedAt === 'string' ||
+      agent.repositoryRootVerifiedAt instanceof Date) &&
+    agent.repositoryRootRepairRequired !== true
+  );
+}
+
 export function resolveAgentWorkspacePathFromRecord(
   agent: Record<string, unknown> | null | undefined,
   fallbackAgentId?: string,
 ): string {
-  const configuredWorkspacePath =
-    typeof agent?.workspacePath === 'string' && agent.workspacePath.trim()
-      ? path.resolve(agent.workspacePath.trim())
-      : null;
-  if (configuredWorkspacePath) return configuredWorkspacePath;
+  const pathMetadata = getAgentWorkspacePathMetadataFromRecord(agent);
+  if (pathMetadata) return pathMetadata;
 
   const agentId =
     fallbackAgentId ??
     (typeof agent?.id === 'string' && agent.id.trim() ? agent.id.trim() : null);
-  if (!agentId) {
-    throw new Error('Agent workspace path cannot be resolved without an agent id');
+  throw new Error(
+    agentId
+      ? `Agent ${agentId} does not have a backend executable workspace path; runner workspace readiness is required`
+      : 'Agent does not have a backend executable workspace path; runner workspace readiness is required',
+  );
+}
+
+export function getAgentWorkspacePathMetadataFromRecord(
+  agent: Record<string, unknown> | null | undefined,
+): string | null {
+  const repositoryRoot =
+    typeof agent?.repositoryRoot === 'string' && agent.repositoryRoot.trim()
+      ? normalizeRepositoryRoot(agent.repositoryRoot)
+      : null;
+  if (repositoryRoot && typeof agent?.name === 'string' && agent.name.trim()) {
+    return deriveAgentWorkspacePath(repositoryRoot, agent.name);
   }
 
-  return getLegacyAgentWorkspacePath(agentId);
+  return null;
 }
 
 export function resolveAgentExecutionRootFromRecord(
@@ -92,65 +122,9 @@ export function resolveAgentExecutionRoot(agentId: string): string {
 const CONVERSATION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CONVERSATION_CONTEXT_DIRECTORIES: ReadonlyArray<string> = ['skills', 'docs', 'memory'];
-
-type ConversationContextEntry = {
-  linkName: string;
-  sourceName: string;
-  kind: 'symlink' | 'materialized-file';
-};
-
-function listConversationContextEntries(agentWorkspaceRoot: string): ConversationContextEntry[] {
-  const root = path.resolve(agentWorkspaceRoot);
-  const entries: ConversationContextEntry[] = [];
-
-  for (const dirName of CONVERSATION_CONTEXT_DIRECTORIES) {
-    if (fs.existsSync(path.join(root, dirName))) {
-      entries.push({ linkName: dirName, sourceName: dirName, kind: 'symlink' });
-    }
-  }
-
-  let names: string[];
-  try {
-    names = fs.readdirSync(root);
-  } catch {
-    return entries;
-  }
-
-  for (const name of names) {
-    if (!/\.md$/i.test(name)) continue;
-    const sourcePath = path.join(root, name);
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(sourcePath);
-    } catch {
-      continue;
-    }
-    if (!st.isFile()) continue;
-    entries.push({ linkName: name, sourceName: name, kind: 'materialized-file' });
-  }
-
-  return entries;
-}
-
 export function assertSafeConversationWorkspaceId(conversationId: string): void {
   if (!CONVERSATION_ID_RE.test(conversationId)) {
     throw new Error('Invalid conversation id for workspace path');
-  }
-}
-
-function symlinkTargetsMatch(actual: string, expected: string): boolean {
-  if (actual === expected) return true;
-  return path.normalize(actual) === path.normalize(expected);
-}
-
-/** Whether `linkPath` exists as its own directory entry (symlink, file, or dir), without following symlinks. */
-function pathExistsAsEntry(linkPath: string): boolean {
-  try {
-    fs.lstatSync(linkPath);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -159,7 +133,7 @@ function formatInstructionDirectory(dirPath: string): string {
   return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
 }
 
-function renderConversationInstructionMarkdown(
+export function renderConversationInstructionMarkdown(
   sourceContent: string,
   conversationDir: string,
 ): string {
@@ -185,76 +159,6 @@ function renderConversationInstructionMarkdown(
   );
 
   return rendered;
-}
-
-function ensureConversationMaterializedFile(
-  sourcePath: string,
-  destinationPath: string,
-  conversationDir: string,
-): void {
-  const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
-  const renderedContent = renderConversationInstructionMarkdown(sourceContent, conversationDir);
-
-  if (pathExistsAsEntry(destinationPath)) {
-    const stat = fs.lstatSync(destinationPath);
-    if (stat.isDirectory()) return;
-    if (stat.isSymbolicLink()) {
-      fs.unlinkSync(destinationPath);
-    } else if (stat.isFile()) {
-      const existingContent = fs.readFileSync(destinationPath, 'utf-8');
-      if (existingContent === renderedContent) return;
-    } else {
-      return;
-    }
-  }
-
-  fs.writeFileSync(destinationPath, renderedContent, 'utf-8');
-}
-
-/**
- * Ensures `conversations/<conversationId>/` exists under the execution root and adds relative
- * symlinks back to the agent workspace context when the corresponding source exists. Idempotent;
- * skips missing sources; does not replace non-symlink entries at link paths.
- */
-export function ensureConversationSubfolderWorkspace(
-  agentWorkspaceRoot: string,
-  executionRoot: string,
-  conversationId: string,
-): void {
-  assertSafeConversationWorkspaceId(conversationId);
-  const contextRoot = path.resolve(agentWorkspaceRoot);
-  const root = path.resolve(executionRoot);
-  const convDir = path.join(root, 'conversations', conversationId);
-  fs.mkdirSync(convDir, { recursive: true });
-
-  for (const { linkName, sourceName, kind } of listConversationContextEntries(contextRoot)) {
-    const sourcePath = path.join(contextRoot, sourceName);
-    const linkPath = path.join(convDir, linkName);
-    if (kind === 'materialized-file') {
-      ensureConversationMaterializedFile(sourcePath, linkPath, convDir);
-      continue;
-    }
-    const relativeTarget = path.relative(convDir, sourcePath) || '.';
-    if (pathExistsAsEntry(linkPath)) {
-      let st: fs.Stats;
-      try {
-        st = fs.lstatSync(linkPath);
-      } catch {
-        continue;
-      }
-      if (!st.isSymbolicLink()) continue;
-
-      try {
-        const current = fs.readlinkSync(linkPath);
-        if (symlinkTargetsMatch(current, relativeTarget)) continue;
-      } catch {
-        /* broken symlink; replace below */
-      }
-      fs.unlinkSync(linkPath);
-    }
-
-    fs.symlinkSync(relativeTarget, linkPath);
-  }
 }
 
 export type AgentConversationWorkspaceMode = 'shared' | 'subfolder';

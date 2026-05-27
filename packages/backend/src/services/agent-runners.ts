@@ -8,17 +8,25 @@ import {
   extractAgentOutputIncompleteText,
   parseRunnerServerMessage,
   type RunnerCapabilities as ProtocolRunnerCapabilities,
+  type RunnerFilesystemRequest,
+  type RunnerFilesystemResult,
   type RunnerJobIntent,
   type RunnerServerMessage,
   type ServerRunnerMessage,
 } from 'shared';
+import { store } from '../db/index.js';
 import {
+  auditRunnerActivationDenied,
   authenticateRunnerCredential,
+  evaluateRunnerActivation,
   noteRunnerConnected,
   noteRunnerDisconnected,
   noteRunnerSeen,
+  resolveRunnerConnectionBinding,
   RUNNER_STALE_AFTER_MS,
+  type RunnerActivationDenialCategory,
   type RunnerCapabilities,
+  type RunnerConnectionScope,
   type RunnerRecord,
 } from './runner-devices.js';
 import type { AgentRunLifecycleEvent } from './agent-runs.js';
@@ -26,6 +34,9 @@ import type { AgentRunLifecycleEvent } from './agent-runs.js';
 export interface RemoteAgentJob {
   userId?: string | null;
   workspaceId?: string | null;
+  /** Authenticated principal activating the runner; defaults to userId when omitted. */
+  activationActorId?: string | null;
+  runnerId?: string | null;
   intent: RunnerJobIntent;
   timeoutMs?: number;
 }
@@ -66,10 +77,20 @@ interface PendingJob {
   timeout: ReturnType<typeof setTimeout> | null;
 }
 
+interface PendingFilesystemRequest {
+  requestId: string;
+  timeout: ReturnType<typeof setTimeout> | null;
+  resolve: (result: RunnerFilesystemResult) => void;
+  reject: (error: Error) => void;
+}
+
 interface ConnectedRunner {
   id: string;
   userId: string;
   workspaceId: string;
+  connectionScope: RunnerConnectionScope;
+  ownerAccountId: string;
+  boundWorkspaceId: string;
   name: string;
   ws: WebSocket;
   capabilities: RunnerCapabilities | ProtocolRunnerCapabilities;
@@ -80,6 +101,7 @@ interface ConnectedRunner {
 
 const runners = new Map<string, ConnectedRunner>();
 const jobsById = new Map<string, PendingJob>();
+const filesystemRequestsById = new Map<string, PendingFilesystemRequest>();
 const jobRunnerById = new Map<string, string>();
 const jobIdByRunId = new Map<string, string>();
 const availableRunnerListeners = new Set<() => void>();
@@ -212,18 +234,127 @@ async function authenticateUpgrade(request: IncomingMessage): Promise<RunnerReco
   return authenticateRunnerCredential(credential);
 }
 
-function runnerMatchesUser(runner: ConnectedRunner, userId?: string | null): boolean {
-  return !userId || runner.userId === userId;
+function runnerMatchesWorkspace(runner: ConnectedRunner, workspaceId?: string | null): boolean {
+  if (!workspaceId) return true;
+  const boundWorkspaceId = runner.boundWorkspaceId || runner.workspaceId;
+  return boundWorkspaceId === workspaceId || runner.workspaceId === '*';
 }
 
-function runnerMatchesWorkspace(runner: ConnectedRunner, workspaceId?: string | null): boolean {
-  return !workspaceId || runner.workspaceId === workspaceId || runner.workspaceId === '*';
+function runnerActivationRecord(runner: ConnectedRunner): Record<string, unknown> {
+  const stored = store.getById('agentRunners', runner.id);
+  if (stored) return stored;
+  return {
+    id: runner.id,
+    userId: runner.ownerAccountId,
+    workspaceId: runner.boundWorkspaceId,
+    connectionScope: runner.connectionScope,
+    ownerAccountId: runner.ownerAccountId,
+    boundWorkspaceId: runner.boundWorkspaceId,
+    legacyConnectionScope: true,
+  };
+}
+
+function runnerMatchesRoutingScope(
+  runner: ConnectedRunner,
+  userId?: string | null,
+  workspaceId?: string | null,
+): boolean {
+  if (!runnerMatchesWorkspace(runner, workspaceId)) return false;
+  if (runner.connectionScope === 'project') return true;
+  return !userId || runner.ownerAccountId === userId;
+}
+
+function runnerMatchesActivationScope(
+  runner: ConnectedRunner,
+  activationActorId?: string | null,
+  workspaceId?: string | null,
+  hasAgentRunPermission = true,
+): boolean {
+  if (!workspaceId || !runnerMatchesWorkspace(runner, workspaceId)) return false;
+  const actor = activationActorId?.trim();
+  if (!actor) return false;
+  return evaluateRunnerActivation({
+    record: runnerActivationRecord(runner),
+    activationActorId: actor,
+    routingWorkspaceId: workspaceId,
+    hasAgentRunPermission,
+  }).allowed;
+}
+
+function resolveActivationActorId(
+  routingUserId?: string | null,
+  activationActorId?: string | null,
+): string | null {
+  const actor = (activationActorId ?? routingUserId)?.trim();
+  return actor || null;
 }
 
 function runnerSupportsProvider(runner: ConnectedRunner, provider?: RunnerJobIntent['provider']): boolean {
   if (!provider) return true;
   const supportedProviders = runner.capabilities?.supportedProviders;
-  return Array.isArray(supportedProviders) && supportedProviders.includes(provider);
+  const installedProviders = runner.capabilities?.installedProviders;
+  return (
+    (Array.isArray(supportedProviders) && supportedProviders.includes(provider)) ||
+    (Array.isArray(installedProviders) && installedProviders.includes(provider))
+  );
+}
+
+function runnerUsesCurrentProtocol(runner: ConnectedRunner): boolean {
+  return runner.capabilities?.protocolVersion === RUNNER_PROTOCOL_VERSION;
+}
+
+function runnerSupportsAttachmentStaging(runner: ConnectedRunner): boolean {
+  return runner.capabilities?.protocolVersion === RUNNER_PROTOCOL_VERSION;
+}
+
+function jobRequiresAttachmentStaging(intent: RunnerJobIntent): boolean {
+  return (intent.stagingManifest?.attachments.length ?? 0) > 0;
+}
+
+function jobIncludesWorkspaceSetupPayload(intent: RunnerJobIntent): boolean {
+  return (
+    typeof intent.workspace === 'object' &&
+    intent.workspace !== null &&
+    'materialization' in intent.workspace
+  );
+}
+
+function runnerSupportsFilesystem(runner: ConnectedRunner): boolean {
+  return runner.capabilities?.supportsFilesystem === true;
+}
+
+function runnerSupportsAgentInventory(runner: ConnectedRunner): boolean {
+  const inventory = runner.capabilities?.agentInventory;
+  return (
+    inventory !== undefined &&
+    inventory !== null &&
+    inventory.protocolVersion === 1 &&
+    typeof inventory.revision === 'string' &&
+    typeof inventory.advertisedAt === 'string' &&
+    typeof inventory.ttlMs === 'number' &&
+    Array.isArray(inventory.workspaceRoots) &&
+    Array.isArray(inventory.fileOperations) &&
+    Array.isArray(inventory.agents)
+  );
+}
+
+function runnerSupportsJobPolicy(
+  runner: ConnectedRunner,
+  provider?: RunnerJobIntent['provider'],
+  approvalMode: RunnerJobIntent['allowedOperations']['approvalMode'] = 'dangerous',
+): boolean {
+  if (!provider) return true;
+  const supportedTools = runner.capabilities?.supportedTools;
+  const allowedTools = runner.capabilities?.policy?.allowedTools;
+  const toolAllowed = Array.isArray(supportedTools)
+    ? supportedTools.includes(provider)
+    : Array.isArray(allowedTools) && allowedTools.includes(provider);
+  const approvalModes = runner.capabilities?.approvalModes;
+  const policyApprovalModes = runner.capabilities?.policy?.approvalModes;
+  const approvalAllowed = Array.isArray(approvalModes)
+    ? approvalModes.includes(approvalMode)
+    : Array.isArray(policyApprovalModes) && policyApprovalModes.includes(approvalMode);
+  return toolAllowed && approvalAllowed;
 }
 
 function runnerMatchesJob(
@@ -231,13 +362,18 @@ function runnerMatchesJob(
   userId?: string | null,
   workspaceId?: string | null,
   provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+  hasAgentRunPermission = true,
 ): boolean {
+  const actor = resolveActivationActorId(userId, activationActorId);
   return (
     runnerIsOpen(runner) &&
     getConnectedRunnerLiveStatus(runner) !== 'stale' &&
-    runnerMatchesUser(runner, userId) &&
-    runnerMatchesWorkspace(runner, workspaceId) &&
-    runnerSupportsProvider(runner, provider)
+    runnerUsesCurrentProtocol(runner) &&
+    runnerSupportsAgentInventory(runner) &&
+    runnerMatchesActivationScope(runner, actor, workspaceId, hasAgentRunPermission) &&
+    runnerSupportsProvider(runner, provider) &&
+    runnerSupportsJobPolicy(runner, provider)
   );
 }
 
@@ -245,10 +381,22 @@ function pickRunner(
   userId?: string | null,
   workspaceId?: string | null,
   provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+  hasAgentRunPermission = true,
 ): ConnectedRunner | null {
   if (env.AGENT_RUNNER_ID) {
     const preferred = runners.get(env.AGENT_RUNNER_ID);
-    if (preferred && runnerMatchesJob(preferred, userId, workspaceId, provider)) {
+    if (
+      preferred &&
+      runnerMatchesJob(
+        preferred,
+        userId,
+        workspaceId,
+        provider,
+        activationActorId,
+        hasAgentRunPermission,
+      )
+    ) {
       return preferred;
     }
     return null;
@@ -256,7 +404,16 @@ function pickRunner(
 
   // Prefer the least-loaded runner; break ties deterministically by most-recent heartbeat.
   return [...runners.values()]
-    .filter((runner) => runnerMatchesJob(runner, userId, workspaceId, provider))
+    .filter((runner) =>
+      runnerMatchesJob(
+        runner,
+        userId,
+        workspaceId,
+        provider,
+        activationActorId,
+        hasAgentRunPermission,
+      ),
+    )
     .sort((a, b) => {
       const activeDelta = a.activeJobIds.size - b.activeJobIds.size;
       if (activeDelta !== 0) return activeDelta;
@@ -264,11 +421,73 @@ function pickRunner(
     })[0] ?? null;
 }
 
+function pickSpecificRunner(
+  runnerId: string | null | undefined,
+  userId?: string | null,
+  workspaceId?: string | null,
+  provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+  hasAgentRunPermission = true,
+): ConnectedRunner | null {
+  if (!runnerId) {
+    return pickRunner(userId, workspaceId, provider, activationActorId, hasAgentRunPermission);
+  }
+  const runner = runners.get(runnerId);
+  return runner &&
+    runnerMatchesJob(
+      runner,
+      userId,
+      workspaceId,
+      provider,
+      activationActorId,
+      hasAgentRunPermission,
+    )
+    ? runner
+    : null;
+}
+
 function notifyAvailableRunner() {
   if (!hasAvailableRemoteAgentRunner()) return;
   for (const listener of availableRunnerListeners) {
     listener();
   }
+}
+
+function runnerMatchesFilesystemRequest(
+  runner: ConnectedRunner,
+  userId?: string | null,
+  workspaceId?: string | null,
+  activationActorId?: string | null,
+  hasAgentRunPermission = true,
+): boolean {
+  const actor = resolveActivationActorId(userId, activationActorId);
+  return (
+    runnerIsOpen(runner) &&
+    getConnectedRunnerLiveStatus(runner) !== 'stale' &&
+    runnerUsesCurrentProtocol(runner) &&
+    runnerSupportsAgentInventory(runner) &&
+    runnerMatchesActivationScope(runner, actor, workspaceId, hasAgentRunPermission) &&
+    runnerSupportsFilesystem(runner)
+  );
+}
+
+function pickFilesystemRunner(
+  userId?: string | null,
+  workspaceId?: string | null,
+  activationActorId?: string | null,
+  hasAgentRunPermission = true,
+): ConnectedRunner | null {
+  return [...runners.values()]
+    .filter((runner) =>
+      runnerMatchesFilesystemRequest(
+        runner,
+        userId,
+        workspaceId,
+        activationActorId,
+        hasAgentRunPermission,
+      ),
+    )
+    .sort((a, b) => Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt))[0] ?? null;
 }
 
 function isRunnerStale(runner: ConnectedRunner, now = Date.now()): boolean {
@@ -405,6 +624,25 @@ async function appendUnknownRunnerOutputEvent(
   }
 }
 
+async function appendUnknownRunnerFinalMessage(
+  message: Extract<RunnerServerMessage, { type: 'final_message' }>,
+) {
+  const event = {
+    type: 'item.completed',
+    item: {
+      id: `openwork-final-message-${message.runId}`,
+      type: 'openwork_final_message',
+      text: message.text,
+    },
+  };
+  try {
+    const { appendAgentRunOutput } = await import('./agent-runs.js');
+    appendAgentRunOutput(message.runId, 'stdout', `${JSON.stringify(event)}\n`);
+  } catch (err) {
+    console.error(`[runners] Failed to append final message for unknown runner job ${message.runId}:`, err);
+  }
+}
+
 export function getCompletedRunnerProtocolError(
   message: Extract<RunnerServerMessage, { type: 'completed' }>,
 ): RemoteAgentJobError | null {
@@ -423,10 +661,6 @@ function handleRunnerMessage(runner: ConnectedRunner, message: RunnerServerMessa
   noteConnectedRunnerSeen(runner);
 
   if (message.type === 'runner_hello') {
-    if (message.protocolVersion !== RUNNER_PROTOCOL_VERSION) {
-      runner.ws.close(1002, 'Runner protocol version mismatch');
-      return;
-    }
     runner.name = message.name || runner.name;
     runner.capabilities = message.capabilities ?? {};
     void noteRunnerConnected(runner.id, {
@@ -434,6 +668,23 @@ function handleRunnerMessage(runner: ConnectedRunner, message: RunnerServerMessa
       version: message.capabilities?.runnerVersion,
       capabilities: runner.capabilities,
     });
+    if (message.protocolVersion !== RUNNER_PROTOCOL_VERSION) {
+      notifyAvailableRunner();
+      return;
+    }
+    notifyAvailableRunner();
+    return;
+  }
+
+  if (message.type === 'runner_heartbeat') {
+    runner.name = message.name || runner.name;
+    runner.capabilities = message.capabilities ?? runner.capabilities;
+    void noteRunnerConnected(runner.id, {
+      displayName: runner.name,
+      version: runner.capabilities?.runnerVersion,
+      capabilities: runner.capabilities,
+    });
+    notifyAvailableRunner();
     return;
   }
 
@@ -491,7 +742,10 @@ function handleRunnerMessage(runner: ConnectedRunner, message: RunnerServerMessa
 
   if (message.type === 'final_message') {
     const pending = jobsById.get(message.jobId);
-    if (!pending) return;
+    if (!pending) {
+      void appendUnknownRunnerFinalMessage(message);
+      return;
+    }
     recordRunLifecycle(message.runId, {
       event: 'runner_final_message_received',
       runnerId: runner.id,
@@ -569,6 +823,19 @@ function handleRunnerMessage(runner: ConnectedRunner, message: RunnerServerMessa
 
   if (message.type === 'protocol_error') {
     if (message.jobId) failPendingJob(message.jobId, new Error(message.message));
+    return;
+  }
+
+  if (message.type === 'filesystem_response') {
+    const pending = filesystemRequestsById.get(message.requestId);
+    if (!pending) return;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    filesystemRequestsById.delete(message.requestId);
+    if (message.ok) {
+      pending.resolve(message.result);
+    } else {
+      pending.reject(new Error(`${message.code}: ${message.message}`));
+    }
   }
 }
 
@@ -610,13 +877,19 @@ export function registerAgentRunnerServer(app: FastifyInstance) {
         }
         clearRunnerReconnectGrace(runnerId);
 
+        const binding = resolveRunnerConnectionBinding(
+          runnerRecord as unknown as Record<string, unknown>,
+        );
         const runner: ConnectedRunner = {
           id: runnerId,
-          userId: runnerRecord.userId,
-          workspaceId: runnerRecord.workspaceId,
+          userId: binding.ownerAccountId,
+          workspaceId: binding.boundWorkspaceId,
+          connectionScope: binding.connectionScope,
+          ownerAccountId: binding.ownerAccountId,
+          boundWorkspaceId: binding.boundWorkspaceId,
           name: url.searchParams.get('name') || runnerRecord.displayName || runnerId,
           ws,
-          capabilities: runnerRecord.capabilities ?? {},
+          capabilities: {},
           connectedAt: now,
           lastSeenAt: now,
           activeJobIds: new Set(),
@@ -624,9 +897,7 @@ export function registerAgentRunnerServer(app: FastifyInstance) {
 
         runners.set(runnerId, runner);
         reattachInFlightJobsToRunner(runner);
-        void noteRunnerConnected(runnerId, { displayName: runner.name, capabilities: runner.capabilities });
         send(ws, { type: 'server_hello', protocolVersion: RUNNER_PROTOCOL_VERSION, runnerId });
-        notifyAvailableRunner();
 
         ws.on('message', (raw) => handleRunnerMessage(runner, parseJsonMessage(raw)));
         ws.on('pong', () => {
@@ -671,10 +942,72 @@ export function getLiveRunnerStatusMap(): Map<string, 'online' | 'busy' | 'stale
   return new Map([...runners.values()].map((runner) => [runner.id, getConnectedRunnerLiveStatus(runner)]));
 }
 
+export function getLiveRunnerCapabilitiesMap(): Map<string, RunnerCapabilities> {
+  return new Map(
+    [...runners.values()].map((runner) => [
+      runner.id,
+      runner.capabilities as RunnerCapabilities,
+    ]),
+  );
+}
+
+function parseRunnerDispatchScope(
+  first?: string | null,
+  second?: string | RunnerJobIntent['provider'] | null,
+  third?: RunnerJobIntent['provider'] | null,
+  fourth?: string | null,
+): {
+  routingUserId?: string | null;
+  workspaceId?: string | null;
+  provider?: RunnerJobIntent['provider'];
+  activationActorId?: string | null;
+} {
+  if (third !== undefined) {
+    return {
+      routingUserId: first,
+      workspaceId: second as string | null,
+      provider: third ?? undefined,
+      activationActorId: fourth ?? first,
+    };
+  }
+  return {
+    workspaceId: first,
+    provider: second as RunnerJobIntent['provider'] | undefined,
+    activationActorId: fourth,
+  };
+}
+
+function findRunnerActivationDenial(
+  routingUserId: string | null | undefined,
+  workspaceId: string | null | undefined,
+  activationActorId?: string | null,
+): { runnerId: string; category: RunnerActivationDenialCategory; message: string } | null {
+  const actor = resolveActivationActorId(routingUserId, activationActorId);
+  if (!actor || !workspaceId) return null;
+  for (const runner of runners.values()) {
+    if (!runnerIsOpen(runner) || getConnectedRunnerLiveStatus(runner) === 'stale') continue;
+    if (!runnerMatchesWorkspace(runner, workspaceId)) continue;
+    const result = evaluateRunnerActivation({
+      record: runnerActivationRecord(runner),
+      activationActorId: actor,
+      routingWorkspaceId: workspaceId,
+    });
+    if (!result.allowed) {
+      return {
+        runnerId: runner.id,
+        category: result.category,
+        message: result.message,
+      };
+    }
+  }
+  return null;
+}
+
 export function hasAvailableRemoteAgentRunner(
   userIdOrWorkspaceId?: string | null,
   workspaceIdOrProvider?: string | null,
   providerMaybe?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
 ): boolean;
 export function hasAvailableRemoteAgentRunner(
   workspaceId?: string | null,
@@ -683,32 +1016,188 @@ export function hasAvailableRemoteAgentRunner(
 export function hasAvailableRemoteAgentRunner(
   first?: string | null,
   second?: string | RunnerJobIntent['provider'] | null,
-  third?: RunnerJobIntent['provider'],
+  third?: RunnerJobIntent['provider'] | null,
+  fourth?: string | null,
 ): boolean {
-  const userId = third === undefined ? undefined : first;
-  const workspaceId = third === undefined ? first : second;
-  const provider = third === undefined ? (second as RunnerJobIntent['provider'] | undefined) : third;
-  return pickRunner(userId, workspaceId, provider) !== null;
+  const scope = parseRunnerDispatchScope(first, second, third, fourth);
+  return (
+    pickRunner(
+      scope.routingUserId,
+      scope.workspaceId,
+      scope.provider,
+      scope.activationActorId,
+    ) !== null
+  );
+}
+
+export function getAvailableRemoteAgentRunnerCapabilities(
+  userId?: string | null,
+  workspaceId?: string | null,
+  provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+): (RunnerCapabilities | ProtocolRunnerCapabilities) | null {
+  return (
+    pickRunner(userId, workspaceId, provider, activationActorId)?.capabilities ?? null
+  );
+}
+
+export function getAvailableRemoteAgentRunnerSelection(
+  userId?: string | null,
+  workspaceId?: string | null,
+  provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+): { runnerId: string; capabilities: RunnerCapabilities | ProtocolRunnerCapabilities } | null {
+  const runner = pickRunner(userId, workspaceId, provider, activationActorId);
+  return runner ? { runnerId: runner.id, capabilities: runner.capabilities } : null;
 }
 
 export function hasConnectedRemoteAgentRunner(
   userIdOrWorkspaceId?: string | null,
   workspaceIdMaybe?: string | null,
+  activationActorId?: string | null,
 ): boolean;
 export function hasConnectedRemoteAgentRunner(workspaceId?: string | null): boolean;
 export function hasConnectedRemoteAgentRunner(
   first?: string | null,
   second?: string | null,
+  third?: string | null,
 ): boolean {
-  const userId = second === undefined ? undefined : first;
-  const workspaceId = second === undefined ? first : second;
+  let routingUserId: string | null | undefined;
+  let workspaceId: string | null | undefined;
+
+  if (second === undefined) {
+    workspaceId = first;
+  } else {
+    routingUserId = first;
+    workspaceId = second;
+    void third;
+  }
+
   return [...runners.values()].some(
     (runner) =>
       runnerIsOpen(runner) &&
       getConnectedRunnerLiveStatus(runner) !== 'stale' &&
-      runnerMatchesUser(runner, userId) &&
-      runnerMatchesWorkspace(runner, workspaceId),
+      runnerMatchesRoutingScope(runner, routingUserId, workspaceId),
   );
+}
+
+export type RunnerFilesystemAvailability =
+  | { state: 'available'; runnerId: string }
+  | { state: 'runner_unavailable'; message: string }
+  | { state: 'runner_filesystem_unsupported'; message: string };
+
+export function getRunnerFilesystemAvailability(
+  userId?: string | null,
+  workspaceId?: string | null,
+  activationActorId?: string | null,
+): RunnerFilesystemAvailability {
+  const actor = resolveActivationActorId(userId, activationActorId);
+  const eligible = [...runners.values()].filter(
+    (runner) =>
+      runnerIsOpen(runner) &&
+      getConnectedRunnerLiveStatus(runner) !== 'stale' &&
+      runnerMatchesActivationScope(runner, actor, workspaceId),
+  );
+  if (eligible.length === 0) {
+    return {
+      state: 'runner_unavailable',
+      message: 'No paired runner is connected for this workspace.',
+    };
+  }
+  if (!eligible.some(runnerUsesCurrentProtocol)) {
+    return {
+      state: 'runner_filesystem_unsupported',
+      message: 'The connected runner uses an older protocol and must be upgraded before local filesystem actions are available.',
+    };
+  }
+  if (!eligible.some(runnerSupportsAgentInventory)) {
+    return {
+      state: 'runner_filesystem_unsupported',
+      message: 'The connected runner does not advertise runner-owned agent inventory. Upgrade and restart the runner before local filesystem actions are available.',
+    };
+  }
+  const runner = eligible.find(runnerSupportsFilesystem);
+  if (!runner) {
+    return {
+      state: 'runner_filesystem_unsupported',
+      message: 'The connected runner does not support local filesystem actions. Update and restart the runner.',
+    };
+  }
+  return { state: 'available', runnerId: runner.id };
+}
+
+export function getRunnerFilesystemSelection(
+  userId?: string | null,
+  workspaceId?: string | null,
+  activationActorId?: string | null,
+): { runnerId: string; capabilities: RunnerCapabilities | ProtocolRunnerCapabilities } | null {
+  const runner = pickFilesystemRunner(userId, workspaceId, activationActorId);
+  return runner ? { runnerId: runner.id, capabilities: runner.capabilities } : null;
+}
+
+export async function dispatchRunnerFilesystemRequest(params: {
+  userId?: string | null;
+  workspaceId?: string | null;
+  activationActorId?: string | null;
+  runnerId?: string | null;
+  request: RunnerFilesystemRequest;
+  timeoutMs?: number;
+}): Promise<{ runnerId: string; result: RunnerFilesystemResult }> {
+  const activationActorId = params.activationActorId ?? params.userId;
+  const availability = getRunnerFilesystemAvailability(
+    params.userId,
+    params.workspaceId,
+    activationActorId,
+  );
+  if (availability.state !== 'available') {
+    throw new Error(`${availability.state}: ${availability.message}`);
+  }
+  const runner = params.runnerId
+    ? runners.get(params.runnerId) ?? null
+    : pickFilesystemRunner(params.userId, params.workspaceId, activationActorId);
+  if (!runner) {
+    throw new Error('runner_unavailable: No paired runner is connected for this workspace.');
+  }
+  if (
+    params.runnerId &&
+    !runnerMatchesFilesystemRequest(
+      runner,
+      params.userId,
+      params.workspaceId,
+      activationActorId,
+    )
+  ) {
+    throw new Error('runner_unavailable: The selected runner is not available for this workspace.');
+  }
+  if (
+    Array.isArray(runner.capabilities.filesystemOperations) &&
+    !runner.capabilities.filesystemOperations.includes(params.request.action)
+  ) {
+    throw new Error(
+      `runner_filesystem_unsupported: The selected runner does not advertise filesystem operation ${params.request.action}. Update and restart the runner.`,
+    );
+  }
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timeoutMs = params.timeoutMs ?? 30_000;
+    const timeout = setTimeout(() => {
+      filesystemRequestsById.delete(requestId);
+      reject(new Error(`operation_failed: Runner filesystem request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timeout.unref?.();
+    filesystemRequestsById.set(requestId, {
+      requestId,
+      timeout,
+      resolve: (result) => resolve({ runnerId: runner.id, result }),
+      reject,
+    });
+    send(runner.ws, {
+      type: 'filesystem_request',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      requestId,
+      request: params.request,
+    });
+  });
 }
 
 export function disconnectRemoteAgentRunner(runnerId: string): boolean {
@@ -736,22 +1225,74 @@ function hasAnyLiveOpenRunner(): boolean {
   );
 }
 
+function hasUpgradeRequiredRunner(
+  userId?: string | null,
+  workspaceId?: string | null,
+  activationActorId?: string | null,
+): boolean {
+  const actor = resolveActivationActorId(userId, activationActorId);
+  return [...runners.values()].some(
+    (runner) =>
+      runnerIsOpen(runner) &&
+      getConnectedRunnerLiveStatus(runner) !== 'stale' &&
+      runnerMatchesActivationScope(runner, actor, workspaceId) &&
+      ((typeof runner.capabilities?.protocolVersion === 'string' &&
+        runner.capabilities.protocolVersion !== RUNNER_PROTOCOL_VERSION) ||
+        (runnerUsesCurrentProtocol(runner) && !runnerSupportsAgentInventory(runner))),
+  );
+}
+
+function hasProviderCapableCurrentRunner(
+  userId?: string | null,
+  workspaceId?: string | null,
+  provider?: RunnerJobIntent['provider'],
+  activationActorId?: string | null,
+): boolean {
+  const actor = resolveActivationActorId(userId, activationActorId);
+  return [...runners.values()].some(
+    (runner) =>
+      runnerIsOpen(runner) &&
+      getConnectedRunnerLiveStatus(runner) !== 'stale' &&
+      runnerUsesCurrentProtocol(runner) &&
+      runnerMatchesActivationScope(runner, actor, workspaceId) &&
+      runnerSupportsProvider(runner, provider),
+  );
+}
+
 export function getRemoteAgentRunnerUnavailableMessage(
   first?: string | null,
   second?: string | RunnerJobIntent['provider'] | null,
-  third?: RunnerJobIntent['provider'],
+  third?: RunnerJobIntent['provider'] | null,
+  fourth?: string | null,
 ): string {
-  const userId = third === undefined ? undefined : first;
-  const workspaceId = third === undefined ? first : second;
-  const provider = third === undefined ? (second as RunnerJobIntent['provider'] | undefined) : third;
+  const scope = parseRunnerDispatchScope(first, second, third ?? undefined, fourth);
+  const { routingUserId: userId, workspaceId, provider, activationActorId } = scope;
 
   if (!hasAnyLiveOpenRunner()) {
     return 'No remote agent runner is connected. Start or pair an OpenWork runner, then try again.';
   }
-  if (!hasConnectedRemoteAgentRunner(userId, workspaceId)) {
+
+  const activationDenial = findRunnerActivationDenial(userId, workspaceId, activationActorId);
+  if (activationDenial) {
+    void auditRunnerActivationDenied({
+      activationActorId: resolveActivationActorId(userId, activationActorId) ?? '',
+      runnerId: activationDenial.runnerId,
+      category: activationDenial.category,
+      routingWorkspaceId: workspaceId ?? '',
+    });
+    return activationDenial.message;
+  }
+
+  if (!hasConnectedRemoteAgentRunner(userId, workspaceId, activationActorId)) {
     return 'No eligible remote agent runner is connected for this workspace.';
   }
-  if (provider && !hasAvailableRemoteAgentRunner(userId, workspaceId, provider)) {
+  if (hasUpgradeRequiredRunner(userId, workspaceId, activationActorId)) {
+    return `The connected remote agent runner must be upgraded to advertise runner-owned agent inventory for protocol ${RUNNER_PROTOCOL_VERSION} before it can accept new work.`;
+  }
+  if (provider && hasProviderCapableCurrentRunner(userId, workspaceId, provider, activationActorId)) {
+    return `No eligible remote agent runner allows the required ${provider} tool with dangerous approval mode. Update the runner policy advertisement or choose another model.`;
+  }
+  if (provider && !hasAvailableRemoteAgentRunner(userId, workspaceId, provider, activationActorId)) {
     return `No eligible remote agent runner supports ${provider}. Install ${PROVIDER_COMMANDS[provider]} on the runner, restart it, or choose another model.`;
   }
   return 'No eligible remote agent runner is connected for this workspace.';
@@ -768,12 +1309,36 @@ export function dispatchRemoteAgentJob(
   job: RemoteAgentJob,
   callbacks: RemoteAgentJobCallbacks = {},
 ): Promise<RemoteAgentJobResult> {
-  const runner = pickRunner(job.userId, job.workspaceId, job.intent.provider);
+  const activationActorId = job.activationActorId ?? job.userId;
+  const runner = pickSpecificRunner(
+    job.runnerId,
+    job.userId,
+    job.workspaceId,
+    job.intent.provider,
+    activationActorId,
+  );
   if (!runner) {
     return Promise.reject(
       new Error(
-        getRemoteAgentRunnerUnavailableMessage(job.userId, job.workspaceId, job.intent.provider),
+        getRemoteAgentRunnerUnavailableMessage(
+          job.userId,
+          job.workspaceId,
+          job.intent.provider,
+          activationActorId,
+        ),
       ),
+    );
+  }
+  if (jobIncludesWorkspaceSetupPayload(job.intent)) {
+    return Promise.reject(
+      new Error(
+        'Workspace materialization is not part of ordinary runner job execution; use the named workspace setup/sync operation before dispatch.',
+      ),
+    );
+  }
+  if (jobRequiresAttachmentStaging(job.intent) && !runnerSupportsAttachmentStaging(runner)) {
+    return Promise.reject(
+      new Error('Attachment/context staging is unavailable for native runner jobs.'),
     );
   }
 
@@ -849,7 +1414,11 @@ export const __runnerTestUtils = {
   reattachInFlightJobsToRunner,
   runners,
   jobsById,
+  filesystemRequestsById,
   jobRunnerById,
   jobIdByRunId,
   failJobsForDisconnectedRunner,
+  scheduleRunnerDisconnectGrace,
+  clearRunnerReconnectGrace,
+  runnerReconnectGraceTimers,
 };

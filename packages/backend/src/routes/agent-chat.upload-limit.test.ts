@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('../db/index.js', () => ({ store: mocks.store }));
+vi.mock('../db/connection.js', () => ({ store: mocks.store }));
 
 function multipartPayload(
   parts: Array<{ name: string; value: string } | { name: string; filename: string; value: string }>,
@@ -128,6 +129,7 @@ beforeEach(() => {
     id: 'agent-1',
     name: 'Test Agent',
     model: 'codex',
+    groupId: 'group-1',
     status: 'active',
   });
   mocks.store.insert('conversations', {
@@ -137,6 +139,42 @@ beforeEach(() => {
 });
 
 describe('agent chat upload attachment limit', () => {
+  it('API smoke reports ambiguous runner workspace routing with repair guidance', async () => {
+    mocks.store.insert('workspaces', {
+      id: 'workspace-1',
+      userId: 'test-user',
+      agentGroupIds: ['group-1'],
+    });
+    mocks.store.insert('workspaces', {
+      id: 'workspace-2',
+      userId: 'test-user',
+      agentGroupIds: ['group-1'],
+    });
+    const app = await buildRouteApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/chat/message',
+      payload: {
+        prompt: 'hello',
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      statusCode: 409,
+      code: 'agent_runner_workspace_ambiguous',
+      message:
+        'This agent group is assigned to multiple runner workspaces (workspace-1, workspace-2). Assign the agent group to exactly one workspace before starting a runner-backed job.',
+      hint:
+        'Remove this agent group from all but one of these workspaces: workspace-1, workspace-2. Runner assignments were not changed.',
+    });
+
+    await app.close();
+  });
+
   it('returns a structured 400 instead of dropping extra queue edit upload files', async () => {
     const app = await buildRouteApp();
     const { boundary, body } = multipartPayload([

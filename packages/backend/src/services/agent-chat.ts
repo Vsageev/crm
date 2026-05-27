@@ -22,10 +22,16 @@ import {
 import { getApiKeyRecord } from '../db/repositories/api-keys-repository.js';
 import { env } from '../config/env.js';
 import { extractFinalResponseText } from '../lib/agent-output.js';
-import { allocatePort, releasePort } from '../lib/port-allocator.js';
-import type { RunnerAttachment, RunnerJobIntent, RunnerProvider } from 'shared';
+import type {
+  RunnerAttachment,
+  RunnerJobIntent,
+  RunnerProvider,
+  RunnerStagedAttachmentManifestItem,
+} from 'shared';
 import {
   dispatchRemoteAgentJob,
+  dispatchRunnerFilesystemRequest,
+  getAvailableRemoteAgentRunnerSelection,
   getRemoteAgentRunnerUnavailableMessage,
   hasAvailableRemoteAgentRunner,
   hasConnectedRemoteAgentRunner,
@@ -34,12 +40,14 @@ import {
 import { getAgent, isAgentArchived, listAgents, prepareAgentWorkspaceAccess } from './agents.js';
 import { runnerRoutingScopesForAgentGroup } from './runner-devices.js';
 import {
-  ensureConversationSubfolderWorkspace,
+  isRepositoryRootRunnerVerified,
+  normalizeRepositoryRoot,
+  normalizeRepositoryRootOrigin,
   resolveAgentExecutionRootFromRecord,
-  resolveAgentWorkspacePathFromRecord,
   resolveSubfolderProcessCwd,
 } from './agent-workspaces.js';
 import { listRuntimeAgentEnvVarBindings } from './agent-env-vars.js';
+import { assertRunnerWorkspaceApiUrlReachable } from './runner-public-api-url.js';
 import {
   createAgentRun,
   completeAgentRun,
@@ -108,14 +116,14 @@ const OPENWORK_CHILD_ENV_BLOCKLIST = new Set([
 
 interface AgentChatErrorOptions {
   code: string;
-  statusCode: 400 | 404 | 409;
+  statusCode: 400 | 403 | 404 | 409;
   message: string;
   hint?: string;
 }
 
 export class AgentChatError extends Error {
   readonly code: string;
-  readonly statusCode: 400 | 404 | 409;
+  readonly statusCode: 400 | 403 | 404 | 409;
   readonly hint?: string;
 
   constructor(options: AgentChatErrorOptions) {
@@ -136,6 +144,10 @@ export class AgentChatError extends Error {
 
   static conflict(code: string, message: string, hint?: string) {
     return new AgentChatError({ code, statusCode: 409, message, hint });
+  }
+
+  static forbidden(code: string, message: string, hint?: string) {
+    return new AgentChatError({ code, statusCode: 403, message, hint });
   }
 }
 
@@ -159,6 +171,8 @@ function isRateLimitError(stderr: string): boolean {
 }
 
 const PERMANENT_QUEUE_ERROR_PATTERNS = [
+  /CLI is not installed or not available to the native runner/i,
+  /Command ".+" is not installed or not available to the native runner/i,
   /CLI is not installed or not available on the server PATH/i,
   /Command ".+" is not installed or not available on the server PATH/i,
   /spawn .+ ENOENT/i,
@@ -253,6 +267,7 @@ export function getMaxConcurrentAgentLimit(): number {
 }
 const AGENT_CHAT_QUEUE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const MAX_CHAT_MESSAGE_IMAGES = 10;
+const MAX_RUNNER_STAGED_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 interface QueueDrainTimer {
   timer: ReturnType<typeof setTimeout>;
@@ -356,11 +371,23 @@ export function buildRunnerJobIntent(params: {
   if (!provider) {
     throw new Error(`Unsupported remote runner model/provider: ${params.agent.model}`);
   }
+  const rawAttachments =
+    params.attachments ?? [
+      ...(params.imagePaths ?? []).map((attachmentPath) =>
+        createRunnerAttachmentFromPath('image', attachmentPath),
+      ),
+      ...(params.filePaths ?? []).map((attachmentPath) =>
+        createRunnerAttachmentFromPath('file', attachmentPath),
+      ),
+    ];
+  const { attachments, stagedAttachments } = normalizeRunnerStagedAttachments(
+    rawAttachments,
+    params.runId,
+  );
 
   return {
     runId: params.runId,
     agentId: params.agentId,
-    agentKind: 'dev_agent',
     provider,
     modelPreference: {
       displayName: params.agent.model,
@@ -373,14 +400,22 @@ export function buildRunnerJobIntent(params: {
       path: params.workDir,
       workspaceId: params.workspaceId,
     },
-    attachments: params.attachments ?? [
-      ...(params.imagePaths ?? []).map((attachmentPath) =>
-        createRunnerAttachmentFromPath('image', attachmentPath),
-      ),
-      ...(params.filePaths ?? []).map((attachmentPath) =>
-        createRunnerAttachmentFromPath('file', attachmentPath),
-      ),
-    ],
+    attachments,
+    ...(stagedAttachments.length > 0
+      ? {
+          stagingManifest: {
+            version: 1,
+            root: runnerJobStagingRoot(params.runId),
+            policy: {
+              scope: 'runner_job_workspace',
+              materialization: 'download_before_launch',
+              cleanup: 'runner_managed',
+            },
+            totalSizeBytes: stagedAttachments.reduce((sum, item) => sum + item.sizeBytes, 0),
+            attachments: stagedAttachments,
+          },
+        }
+      : {}),
     allowedOperations: {
       tools: [provider],
       approvalMode: 'dangerous',
@@ -395,8 +430,11 @@ export function buildRunnerJobIntent(params: {
         .map(([name, value]) => ({
           name,
           value,
-          source: 'runtime',
-          secret: true,
+          source:
+            name === 'WORKSPACE_API_URL' || name === 'WORKSPACE_API_KEY'
+              ? 'workspace_api'
+              : 'runtime',
+          secret: name !== 'WORKSPACE_API_URL',
         })),
     },
   };
@@ -504,13 +542,10 @@ export function listAgentConversations(agentId: string, limit = 50, offset = 0) 
 
   const entries = sorted.slice(offset, offset + limit).map((conv) => {
     const conversationId = conv.id as string;
-    const busy = isAgentBusy(agentId, conversationId);
-    const rawQueuedCount = getQueuedAppendPromptCount(agentId, conversationId);
-    const hasFailed = conversationHasActiveExecutionFailure(agentId, conversationId);
-    // If agent is not busy, the first queued item will be picked up immediately
-    // by the drain timer, so don't count it as "queued behind".
-    const queuedCount = busy ? rawQueuedCount : Math.max(0, rawQueuedCount - 1);
-    const isBusy = busy || hasPendingExecutionItems(agentId, conversationId);
+    const { isBusy, queuedCount, hasFailed } = getConversationExecutionSummary(
+      agentId,
+      conversationId,
+    );
     return {
       ...conv,
       ...parseConversationWorkspaceFields(conv.metadata),
@@ -526,11 +561,10 @@ export function getAgentConversation(agentId: string, conversationId: string) {
   const conversation = validateConversationOwnership(conversationId, agentId);
   if (!conversation) return null;
 
-  const busy = isAgentBusy(agentId, conversationId);
-  const rawQueuedCount = getQueuedAppendPromptCount(agentId, conversationId);
-  const hasFailed = conversationHasActiveExecutionFailure(agentId, conversationId);
-  const queuedCount = busy ? rawQueuedCount : Math.max(0, rawQueuedCount - 1);
-  const isBusy = busy || hasPendingExecutionItems(agentId, conversationId);
+  const { isBusy, queuedCount, hasFailed } = getConversationExecutionSummary(
+    agentId,
+    conversationId,
+  );
 
   return {
     ...conversation,
@@ -707,16 +741,6 @@ export function createAgentConversation(agentId: string, subject?: string) {
     lastMessageAt: null,
     metadata: JSON.stringify(meta),
   });
-  if (useSubfolder) {
-    const agent = getAgent(agentId);
-    if (!agent) {
-      throw new Error('Agent not found');
-    }
-    const agentRecord = agent as unknown as Record<string, unknown>;
-    const contextRoot = resolveAgentWorkspacePathFromRecord(agentRecord, agentId);
-    const executionRoot = resolveAgentExecutionRootFromRecord(agentRecord, agentId);
-    ensureConversationSubfolderWorkspace(contextRoot, executionRoot, conversationId);
-  }
   return {
     ...created,
     ...parseConversationWorkspaceFields(created.metadata),
@@ -1556,13 +1580,6 @@ export function editMessageAndBranch(
       'Only user messages can be edited',
     );
   }
-  if (original.type !== 'text' && original.type !== 'image' && original.type !== 'file') {
-    throw AgentChatError.badRequest(
-      'message_edit_not_supported',
-      'Only text, image, and file messages can be edited',
-    );
-  }
-
   const derivedPreviousUserMessageId = getPreviousUserMessageIdForConversationMessage(
     conversationId,
     original,
@@ -1572,10 +1589,7 @@ export function editMessageAndBranch(
     derivedPreviousUserMessageId,
   );
   const parentId = resolveEditedMessageParentId(conversationId, original);
-  const originalAttachments =
-    original.type === 'image' || original.type === 'file'
-      ? cloneAttachmentRecords(parseAttachments(original.attachments))
-      : [];
+  const originalAttachments = cloneAttachmentRecords(parseAttachments(original.attachments));
   const hasKeepStoragePaths = Array.isArray(options.keepStoragePaths);
   const keepStoragePathSet = hasKeepStoragePaths ? new Set(options.keepStoragePaths) : null;
   const retainedOriginalAttachments =
@@ -1590,10 +1604,7 @@ export function editMessageAndBranch(
     Array.isArray(options.attachments) && options.attachments.length > 0
       ? cloneAttachmentRecords(options.attachments as Array<Record<string, unknown>>)
       : [];
-  const combinedAttachments =
-    original.type === 'image' || original.type === 'file'
-      ? [...retainedOriginalAttachments, ...appendedAttachments]
-      : appendedAttachments;
+  const combinedAttachments = [...retainedOriginalAttachments, ...appendedAttachments];
   if (combinedAttachments.length > MAX_CHAT_MESSAGE_IMAGES) {
     throw AgentChatError.badRequest(
       'message_attachment_limit_exceeded',
@@ -2058,6 +2069,11 @@ function cloneAttachmentRecords(
   return attachments.map((attachment) => ({ ...attachment }));
 }
 
+function parseTimestampMs(value: unknown): number {
+  const timestamp = new Date(String(value)).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function getMessageTypeForAttachments(
   attachments: Array<Record<string, unknown>>,
 ): AgentConversationMessageType | 'image' {
@@ -2069,10 +2085,82 @@ function storageDiskPath(storagePath: string): string {
   return path.resolve(STORAGE_DIR, '.' + storagePath);
 }
 
+function sha256File(filePath: string): string | undefined {
+  try {
+    const hash = crypto.createHash('sha256');
+    hash.update(fs.readFileSync(filePath));
+    return hash.digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+function safeStagingFilename(index: number, filename: string): string {
+  const safeName = filename.replace(/[/\\:*?"<>|]/g, '_').trim() || `attachment-${index + 1}`;
+  return `${index + 1}-${safeName}`;
+}
+
+function safeRunnerStagingSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_') || 'job';
+}
+
+function runnerJobStagingRoot(runId: string): string {
+  return path.posix.join('.openwork', 'staging', 'jobs', safeRunnerStagingSegment(runId));
+}
+
+function normalizeRunnerStagedAttachments(
+  attachments: RunnerAttachment[],
+  runId: string,
+): { attachments: RunnerAttachment[]; stagedAttachments: RunnerStagedAttachmentManifestItem[] } {
+  const root = runnerJobStagingRoot(runId);
+  const stagedAttachments: RunnerStagedAttachmentManifestItem[] = [];
+  const normalizedAttachments = attachments.map((attachment) => {
+    const staging = attachment.manifest?.staging;
+    if (!staging || typeof staging !== 'object' || Array.isArray(staging)) {
+      return { ...attachment, textExtraction: { ...attachment.textExtraction } };
+    }
+    const item = staging as RunnerStagedAttachmentManifestItem;
+    const normalizedItem: RunnerStagedAttachmentManifestItem = {
+      ...item,
+      storageId: item.storageId || item.storagePath,
+    };
+    const stagedPath = path.posix.join(root, normalizedItem.destination);
+    stagedAttachments.push(normalizedItem);
+    return {
+      ...attachment,
+      path: stagedPath,
+      textExtraction: {
+        ...attachment.textExtraction,
+        ...(attachment.textExtraction.status === 'available' ? { textPath: stagedPath } : {}),
+      },
+      manifest: {
+        ...attachment.manifest,
+        transfer: 'runner_staged_manifest',
+        storageId: normalizedItem.storageId,
+        storagePath: normalizedItem.storagePath,
+        staging: normalizedItem,
+      },
+    };
+  });
+  return { attachments: normalizedAttachments, stagedAttachments };
+}
+
+function signRunnerAttachmentDownloadPath(itemId: string, storagePath: string): string {
+  return crypto
+    .createHmac('sha256', env.JWT_SECRET)
+    .update(`${itemId}\0${storagePath}`)
+    .digest('base64url');
+}
+
 interface ConversationAttachmentDiskPaths {
   imagePaths: string[];
   filePaths: string[];
   attachments: RunnerAttachment[];
+  missingAttachments: Array<{
+    storagePath: string;
+    fileName?: string;
+    messageId?: string;
+  }>;
 }
 
 /** Returns disk paths for attachments across the full active path in chronological order. */
@@ -2089,6 +2177,7 @@ export function getConversationAttachmentDiskPaths(
   const imagePaths: string[] = [];
   const filePaths: string[] = [];
   const runnerAttachments: RunnerAttachment[] = [];
+  const missingAttachments: ConversationAttachmentDiskPaths['missingAttachments'] = [];
   const seenStoragePaths = new Set<string>();
   for (const message of activePath) {
     const attachments = parseAttachments(message.attachments);
@@ -2098,18 +2187,30 @@ export function getConversationAttachmentDiskPaths(
       }
       seenStoragePaths.add(att.storagePath);
       const diskPath = storageDiskPath(att.storagePath);
-      if (!fs.existsSync(diskPath)) continue;
+      if (!fs.existsSync(diskPath)) {
+        missingAttachments.push({
+          storagePath: att.storagePath,
+          ...(typeof att.fileName === 'string' ? { fileName: att.fileName } : {}),
+          ...(typeof message.id === 'string' ? { messageId: message.id } : {}),
+        });
+        continue;
+      }
       const type = att.type === 'image' ? 'image' : 'file';
-      const manifest: Record<string, unknown> = { storagePath: att.storagePath };
-      if (typeof att.localPath === 'string') manifest.localPath = att.localPath;
+      const filename = typeof att.fileName === 'string' ? att.fileName : path.basename(diskPath);
+      const sizeBytes = typeof att.fileSize === 'number' ? att.fileSize : getFileSizeBytes(diskPath);
+      const manifest: Record<string, unknown> = {
+        transfer: 'runner_staged_manifest',
+        storageId: att.storagePath,
+        storagePath: att.storagePath,
+      };
       if (att.metadata && typeof att.metadata === 'object' && !Array.isArray(att.metadata)) {
         manifest.metadata = att.metadata;
       }
       runnerAttachments.push(
         createRunnerAttachmentFromPath(type, diskPath, {
-          filename: typeof att.fileName === 'string' ? att.fileName : undefined,
+          filename,
           mimeType: typeof att.mimeType === 'string' ? att.mimeType : undefined,
-          sizeBytes: typeof att.fileSize === 'number' ? att.fileSize : undefined,
+          sizeBytes,
           manifest,
         }),
       );
@@ -2117,7 +2218,136 @@ export function getConversationAttachmentDiskPaths(
       else filePaths.push(diskPath);
     }
   }
-  return { imagePaths, filePaths, attachments: runnerAttachments };
+  const totalSizeBytes = runnerAttachments.reduce((sum, attachment) => sum + attachment.sizeBytes, 0);
+  if (totalSizeBytes > MAX_RUNNER_STAGED_ATTACHMENT_BYTES) {
+    throw new Error(
+      `Attachments total ${totalSizeBytes} bytes, exceeding the native runner staging limit of ${MAX_RUNNER_STAGED_ATTACHMENT_BYTES} bytes.`,
+    );
+  }
+  runnerAttachments.forEach((attachment, index) => {
+    const storagePath =
+      typeof attachment.manifest?.storagePath === 'string' ? attachment.manifest.storagePath : '';
+    if (!storagePath) return;
+    const diskPath = storageDiskPath(storagePath);
+    const destination = `attachments/${safeStagingFilename(index, attachment.filename)}`;
+    const itemId = `attachment-${index + 1}`;
+    const item: RunnerStagedAttachmentManifestItem = {
+      id: itemId,
+      kind: 'attachment',
+      attachmentIndex: index,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: sha256File(diskPath),
+      storageId: storagePath,
+      storagePath,
+      download: {
+        method: 'GET',
+        path: `/api/runner-attachments/download?itemId=${encodeURIComponent(itemId)}&path=${encodeURIComponent(storagePath)}&token=${encodeURIComponent(signRunnerAttachmentDownloadPath(itemId, storagePath))}`,
+      },
+      destination,
+    };
+    attachment.path = `.openwork/staging/${item.id}/${destination}`;
+    if (attachment.textExtraction.status === 'available') {
+      attachment.textExtraction.textPath = attachment.path;
+    }
+    attachment.manifest = {
+      ...attachment.manifest,
+      staging: item,
+    };
+  });
+  return { imagePaths, filePaths, attachments: runnerAttachments, missingAttachments };
+}
+
+export function getCardAttachmentDiskPaths(cardId: string): ConversationAttachmentDiskPaths {
+  const cardComments = store
+    .getAll('cardComments')
+    .filter((comment: Record<string, unknown>) => comment.cardId === cardId)
+    .sort(
+      (a: Record<string, unknown>, b: Record<string, unknown>) =>
+        parseTimestampMs(a.createdAt as string | undefined) -
+        parseTimestampMs(b.createdAt as string | undefined),
+    );
+
+  const imagePaths: string[] = [];
+  const filePaths: string[] = [];
+  const runnerAttachments: RunnerAttachment[] = [];
+  const missingAttachments: ConversationAttachmentDiskPaths['missingAttachments'] = [];
+  const seenStoragePaths = new Set<string>();
+  for (const comment of cardComments) {
+    const attachments = parseAttachments(comment.attachments);
+    for (const att of attachments) {
+      if (typeof att.storagePath !== 'string' || seenStoragePaths.has(att.storagePath)) {
+        continue;
+      }
+      seenStoragePaths.add(att.storagePath);
+      const diskPath = storageDiskPath(att.storagePath);
+      if (!fs.existsSync(diskPath)) {
+        throw new Error(
+          `Attachment ${att.storagePath} is missing from backend storage. Re-upload the file and try again.`,
+        );
+      }
+      const type = att.type === 'image' ? 'image' : 'file';
+      const filename = typeof att.fileName === 'string' ? att.fileName : path.basename(diskPath);
+      const sizeBytes = typeof att.fileSize === 'number' ? att.fileSize : getFileSizeBytes(diskPath);
+      const manifest: Record<string, unknown> = {
+        transfer: 'runner_staged_manifest',
+        storageId: att.storagePath,
+        storagePath: att.storagePath,
+      };
+      runnerAttachments.push(
+        createRunnerAttachmentFromPath(type, diskPath, {
+          filename,
+          mimeType: typeof att.mimeType === 'string' ? att.mimeType : undefined,
+          sizeBytes,
+          manifest,
+        }),
+      );
+      if (type === 'image') imagePaths.push(diskPath);
+      else filePaths.push(diskPath);
+    }
+  }
+
+  const totalSizeBytes = runnerAttachments.reduce((sum, attachment) => sum + attachment.sizeBytes, 0);
+  if (totalSizeBytes > MAX_RUNNER_STAGED_ATTACHMENT_BYTES) {
+    throw new Error(
+      `Attachments total ${totalSizeBytes} bytes, exceeding the native runner staging limit of ${MAX_RUNNER_STAGED_ATTACHMENT_BYTES} bytes.`,
+    );
+  }
+  runnerAttachments.forEach((attachment, index) => {
+    const storagePath =
+      typeof attachment.manifest?.storagePath === 'string' ? attachment.manifest.storagePath : '';
+    if (!storagePath) return;
+    const diskPath = storageDiskPath(storagePath);
+    const destination = `attachments/${safeStagingFilename(index, attachment.filename)}`;
+    const itemId = `attachment-${index + 1}`;
+    const item: RunnerStagedAttachmentManifestItem = {
+      id: itemId,
+      kind: 'attachment',
+      attachmentIndex: index,
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: sha256File(diskPath),
+      storageId: storagePath,
+      storagePath,
+      download: {
+        method: 'GET',
+        path: `/api/runner-attachments/download?itemId=${encodeURIComponent(itemId)}&path=${encodeURIComponent(storagePath)}&token=${encodeURIComponent(signRunnerAttachmentDownloadPath(itemId, storagePath))}`,
+      },
+      destination,
+    };
+    attachment.path = `.openwork/staging/${item.id}/${destination}`;
+    if (attachment.textExtraction.status === 'available') {
+      attachment.textExtraction.textPath = attachment.path;
+    }
+    attachment.manifest = {
+      ...attachment.manifest,
+      staging: item,
+    };
+  });
+
+  return { imagePaths, filePaths, attachments: runnerAttachments, missingAttachments };
 }
 
 function describeAttachmentLabel(attachments: Array<Record<string, unknown>>): string | null {
@@ -2166,7 +2396,10 @@ function buildPromptWithHistory(
   conversationId: string,
   currentPrompt?: string,
   leafMessageId?: string,
-  options: { turnId?: string | null } = {},
+  options: {
+    turnId?: string | null;
+    missingAttachments?: ConversationAttachmentDiskPaths['missingAttachments'];
+  } = {},
 ): string {
   const history = leafMessageId
     ? getMessagePathToLeaf(conversationId, leafMessageId)
@@ -2200,8 +2433,24 @@ function buildPromptWithHistory(
   const latestUserSection = latestUserMessage
     ? `Latest User Message\n${latestUserMessage}\n\n`
     : '';
+  const missingAttachments = options.missingAttachments ?? [];
+  const attachmentAvailabilitySection =
+    missingAttachments.length > 0
+      ? `Attachment Availability\n${missingAttachments
+          .map((attachment) => {
+            const label = attachment.fileName || attachment.storagePath;
+            return (
+              `- ${label} is no longer available in backend storage. ` +
+              'Ask the user to re-upload it if it is needed to answer.'
+            );
+          })
+          .join('\n')}\n\n`
+      : '';
 
-  return `${triggerContext}${latestUserSection}Continue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`;
+  return (
+    `${triggerContext}${attachmentAvailabilitySection}${latestUserSection}` +
+    `Continue the conversation below. Only respond to the latest User message.\n\n${lines.join('\n\n')}`
+  );
 }
 
 function formatLatestUserMessageForPrompt(history: Record<string, unknown>[]): string | null {
@@ -2358,6 +2607,7 @@ interface AgentProcessOptions {
   onRunCreated?: (runId: string) => void;
   onExit: (result: AgentProcessResult) => void;
   onSpawnError: (error: Error) => void;
+  activationActorId?: string | null;
 }
 
 function buildTriggerContext(
@@ -2395,20 +2645,13 @@ async function buildChildEnv(
   }
 
   if (agent.workspaceApiKey) {
-    const protocol = env.TLS_CERT_PATH ? 'https' : 'http';
-    const host = env.HOST === '0.0.0.0' ? 'localhost' : env.HOST;
-    childEnv.WORKSPACE_API_URL = `${protocol}://${host}:${env.PORT}`;
+    childEnv.WORKSPACE_API_URL = assertRunnerWorkspaceApiUrlReachable();
     childEnv.WORKSPACE_API_KEY = agent.workspaceApiKey;
   }
 
   for (const entry of await listRuntimeAgentEnvVarBindings(agentId)) {
     childEnv[entry.key] = entry.value;
   }
-
-  // Provide the projects output directory so agents never build inside the agent data dir
-  const projectsDir = path.resolve(env.PROJECTS_DIR);
-  fs.mkdirSync(projectsDir, { recursive: true });
-  childEnv.PROJECTS_DIR = projectsDir;
 
   return childEnv;
 }
@@ -2673,6 +2916,77 @@ function getQueueItemRunId(item: Record<string, unknown> | null | undefined): st
   return nonEmptyString(item?.runId) ?? nonEmptyString(item?.lastRunId);
 }
 
+function getQueueItemLinkedChatRun(
+  item: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const runId = getQueueItemRunId(item);
+  const run = runId ? store.getById('agent_runs', runId) : null;
+  if (!run || run.triggerType !== 'chat') return null;
+  if (
+    item &&
+    ((typeof item.agentId === 'string' && run.agentId !== item.agentId) ||
+      (typeof item.conversationId === 'string' && run.conversationId !== item.conversationId))
+  ) {
+    return null;
+  }
+  return run;
+}
+
+function getQueueItemLinkedActiveChatRun(
+  item: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const run = getQueueItemLinkedChatRun(item);
+  if (!run) return null;
+  return run.status === 'running' || run.status === 'queued' ? run : null;
+}
+
+function preserveQueueItemForActiveRun(
+  item: Record<string, unknown>,
+  run: Record<string, unknown>,
+): boolean {
+  const queueItemId = nonEmptyString(item.id);
+  const runId = nonEmptyString(run.id);
+  if (!queueItemId || !runId) return false;
+
+  const turnId = getQueueItemTurnId(item) ?? nonEmptyString(run.turnId);
+  const turn = turnId ? getAgentChatTurn(turnId) : null;
+  if (turn && isNonStartableChatTurnStatus(turn.status)) return false;
+
+  const needsQueueUpdate =
+    item.status !== 'processing' ||
+    item.runId !== runId ||
+    item.lastRunId !== runId ||
+    nonEmptyString(item.nextAttemptAt) !== null ||
+    nonEmptyString(item.errorMessage) !== null ||
+    nonEmptyString(item.completedAt) !== null ||
+    (Boolean(turnId) && item.turnId !== turnId);
+  if (needsQueueUpdate) {
+    const patch: Record<string, unknown> = {
+      status: 'processing',
+      runId,
+      lastRunId: runId,
+      completedAt: null,
+      nextAttemptAt: null,
+      errorMessage: null,
+    };
+    if (!nonEmptyString(item.startedAt)) {
+      patch.startedAt = nonEmptyString(run.startedAt) ?? new Date().toISOString();
+    }
+    if (turnId && item.turnId !== turnId) {
+      patch.turnId = turnId;
+    }
+    store.update(AGENT_CHAT_QUEUE_COLLECTION, queueItemId, patch);
+  }
+
+  if (turnId && (!turn || turn.status !== 'running' || turn.runId !== runId)) {
+    markAgentChatTurnRunning(turnId, {
+      runId,
+      userMessageId: nonEmptyString(item.queuedMessageId) ?? nonEmptyString(item.targetMessageId),
+    });
+  }
+  return true;
+}
+
 function getQueueItemTurnId(item: Record<string, unknown> | null | undefined): string | null {
   return nonEmptyString(item?.turnId);
 }
@@ -2777,30 +3091,46 @@ function isPendingQueueItem(item: Record<string, unknown>): boolean {
   return item.status === 'queued' || item.status === 'processing';
 }
 
-function reconcileTerminalProcessingExecutionItems(agentId: string, conversationId: string) {
-  const processingItems = listConversationQueueItems(agentId, conversationId).filter(
-    (item) => item.status === 'processing',
+function reconcileConversationExecutionItems(agentId: string, conversationId: string) {
+  const pendingItems = listConversationQueueItems(agentId, conversationId).filter(
+    (item) => item.status === 'queued' || item.status === 'processing',
   );
-  for (const item of processingItems) {
-    recoverInterruptedQueueItemFromRun(item);
-  }
-}
+  for (const item of pendingItems) {
+    if (item.status === 'processing') {
+      recoverInterruptedQueueItemFromRun(item);
+      continue;
+    }
 
-function hasPendingExecutionItems(agentId: string, conversationId: string): boolean {
-  reconcileTerminalProcessingExecutionItems(agentId, conversationId);
-  return listConversationQueueItems(agentId, conversationId).some((item) =>
-    isPendingQueueItem(item),
-  );
+    const activeRun = getQueueItemLinkedActiveChatRun(item);
+    if (activeRun) {
+      preserveQueueItemForActiveRun(item, activeRun);
+    }
+  }
 }
 
 function getQueuedAppendPromptCount(agentId: string, conversationId: string): number {
   return countQueuedAppendPromptsForConversation(agentId, conversationId);
 }
 
-function conversationHasActiveExecutionFailure(agentId: string, conversationId: string): boolean {
-  return listConversationQueueItems(agentId, conversationId).some(
-    (item) => item.status === 'failed',
-  );
+function getConversationExecutionSummary(agentId: string, conversationId: string): {
+  isBusy: boolean;
+  queuedCount: number;
+  hasFailed: boolean;
+} {
+  reconcileConversationExecutionItems(agentId, conversationId);
+
+  const queueItems = listConversationQueueItems(agentId, conversationId);
+  const hasRunningRun = isAgentBusy(agentId, conversationId);
+  const hasProcessingQueueItem = queueItems.some((item) => item.status === 'processing');
+  const rawQueuedCount = getQueuedAppendPromptCount(agentId, conversationId);
+  const queuedCount =
+    hasRunningRun || hasProcessingQueueItem ? rawQueuedCount : Math.max(0, rawQueuedCount - 1);
+
+  return {
+    isBusy: hasRunningRun || queueItems.some((item) => isPendingQueueItem(item)),
+    queuedCount,
+    hasFailed: queueItems.some((item) => item.status === 'failed'),
+  };
 }
 
 function clearQueueDrainTimerForKey(key: string) {
@@ -2850,8 +3180,9 @@ async function withQueueDrainTransaction<T>(operation: () => Promise<T>): Promis
 
 /**
  * Working directory for an agent CLI process: repo-backed agents execute from the repository
- * root, while the agent folder remains the source of AGENTS/skills context. Subfolder-mode chats
- * use `conversations/<id>/` under that execution root (materialized before spawn).
+ * root, while the agent folder remains the source of AGENTS/skills context. Hosted runner jobs
+ * treat subfolder-mode chat directories as runner-owned paths; ordinary chat send/edit computes
+ * the path only and prepares it through the runner before dispatch.
  */
 export function resolveAgentChatProcessWorkingDirectory(
   agentId: string,
@@ -2870,8 +3201,6 @@ export function resolveAgentChatProcessWorkingDirectory(
     conv,
   );
   if (workspaceMode !== 'subfolder') return executionRoot;
-  const agentWorkspaceRoot = resolveAgentWorkspacePathFromRecord(agentRecord, agentId);
-  ensureConversationSubfolderWorkspace(agentWorkspaceRoot, executionRoot, conversationId);
   return resolveSubfolderProcessCwd(
     executionRoot,
     conversationId,
@@ -2908,17 +3237,36 @@ function buildRemoteRunnerEnv(childEnv: Record<string, string | undefined>) {
 function resolveRemoteRunnerRoutingScope(agent: {
   groupId?: string | null;
 }): { userId: string; workspaceId: string } | null {
+  try {
+    return resolveRemoteRunnerRoutingScopeOrThrow(agent);
+  } catch (error) {
+    if (error instanceof AgentChatError && error.code === 'agent_runner_workspace_missing') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function resolveRemoteRunnerRoutingScopeOrThrow(agent: {
+  groupId?: string | null;
+}): { userId: string; workspaceId: string } {
   const scopes = runnerRoutingScopesForAgentGroup(agent.groupId);
-  return scopes[0] ?? null;
-}
-
-function resolveRemoteRunnerWorkspaceId(agent: { groupId?: string | null }): string | null {
-  return resolveRemoteRunnerRoutingScope(agent)?.workspaceId ?? null;
-}
-
-function resolveAgentRemoteRunnerWorkspaceId(agentId: string): string | null {
-  const agent = getAgent(agentId);
-  return agent ? resolveRemoteRunnerWorkspaceId(agent) : null;
+  if (scopes.length === 0) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_missing',
+      'This agent is not assigned to a workspace with a runner. Add the agent to a workspace, then try again.',
+      'Open the workspace settings, attach this agent group to one workspace, then start or pair a runner for that workspace.',
+    );
+  }
+  if (scopes.length > 1) {
+    const workspaceList = scopes.map((scope) => scope.workspaceId).join(', ');
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_ambiguous',
+      `This agent group is assigned to multiple runner workspaces (${workspaceList}). Assign the agent group to exactly one workspace before starting a runner-backed job.`,
+      `Remove this agent group from all but one of these workspaces: ${workspaceList}. Runner assignments were not changed.`,
+    );
+  }
+  return scopes[0];
 }
 
 function resolveAgentRemoteRunnerRoutingScope(
@@ -2928,24 +3276,52 @@ function resolveAgentRemoteRunnerRoutingScope(
   return agent ? resolveRemoteRunnerRoutingScope(agent) : null;
 }
 
+function resolveAgentRemoteRunnerWorkspaceId(agentId: string): string | null {
+  return resolveAgentRemoteRunnerRoutingScope(agentId)?.workspaceId ?? null;
+}
+
 function resolveAgentRemoteRunnerProvider(agentId: string): RunnerProvider | null {
   const agent = getAgent(agentId);
   return agent?.model ? inferRunnerProvider(agent.model) : null;
 }
 
-function getAgentRunnerWorkspaceIdOrThrow(agentId: string): string {
-  const workspaceId = resolveAgentRemoteRunnerWorkspaceId(agentId);
-  if (!workspaceId) {
-    throw AgentChatError.conflict(
-      'agent_runner_workspace_missing',
-      'This agent is not assigned to a workspace with a runner. Add the agent to a workspace, then try again.',
-    );
-  }
-  return workspaceId;
-}
+export type NativeRunnerPreflight = {
+  agentId: string;
+  userId: string;
+  workspaceId: string;
+  provider: RunnerProvider;
+  eligible: true;
+};
 
-function getAgentRunnerProviderOrThrow(agentId: string): RunnerProvider {
+export type NativeRunnerPreflightStatus =
+  | (NativeRunnerPreflight & {
+      state: 'ready';
+      code: 'runner_ready';
+      message: string;
+      hint?: string;
+    })
+  | {
+      agentId: string;
+      state:
+        | 'runner_unavailable'
+        | 'runner_repair_required'
+        | 'runner_capability_missing'
+        | 'workspace_repair_required'
+        | 'error';
+      code: string;
+      message: string;
+      hint?: string;
+    };
+
+export function preflightAgentRunner(
+  agentId: string,
+  options: { activationActorId?: string | null } = {},
+): NativeRunnerPreflight {
   const agent = getAgent(agentId);
+  if (!agent || isAgentArchived(agent)) {
+    throw AgentChatError.notFound('agent_not_found', 'Agent not found');
+  }
+
   const provider = agent?.model ? inferRunnerProvider(agent.model) : null;
   if (!provider) {
     throw AgentChatError.conflict(
@@ -2954,14 +3330,439 @@ function getAgentRunnerProviderOrThrow(agentId: string): RunnerProvider {
       'Update the agent model/provider before starting a runner-backed job.',
     );
   }
-  return provider;
+
+  const runnerScope = resolveRemoteRunnerRoutingScopeOrThrow(agent);
+  const activationActorId = options.activationActorId ?? runnerScope.userId;
+  if (
+    !hasConnectedRemoteAgentRunner(
+      runnerScope.userId,
+      runnerScope.workspaceId,
+      activationActorId,
+    ) ||
+    !hasAvailableRemoteAgentRunner(
+      runnerScope.userId,
+      runnerScope.workspaceId,
+      provider,
+      activationActorId,
+    )
+  ) {
+    const message = getRemoteAgentRunnerUnavailableMessage(
+      runnerScope.userId,
+      runnerScope.workspaceId,
+      provider,
+      activationActorId,
+    );
+    throw message.includes('Only the account that paired')
+      ? AgentChatError.forbidden('runner_activation_forbidden', message)
+      : AgentChatError.conflict('agent_runner_unavailable', message);
+  }
+
+  try {
+    assertRunnerWorkspaceApiUrlReachable();
+  } catch (error) {
+    throw AgentChatError.conflict(
+      'agent_runner_public_api_url_missing',
+      error instanceof Error ? error.message : 'WORKSPACE_API_URL must be runner-reachable.',
+      'Set OPENWORK_PUBLIC_API_URL to the backend origin reachable from the runner, or use a reachable HOST/PORT for local development.',
+    );
+  }
+
+  return {
+    agentId,
+    userId: runnerScope.userId,
+    workspaceId: runnerScope.workspaceId,
+    provider,
+    eligible: true,
+  };
+}
+
+type NativeRunnerPreflightErrorState = Exclude<NativeRunnerPreflightStatus['state'], 'ready'>;
+
+function classifyNativeRunnerPreflightError(code: string): NativeRunnerPreflightErrorState {
+  if (
+    code === 'agent_runner_provider_missing' ||
+    code === 'agent_runner_workspace_mode_unsupported'
+  ) {
+    return 'runner_capability_missing';
+  }
+  if (
+    code === 'agent_repository_root_repair_required' ||
+    code === 'agent_repository_root_runner_mismatch' ||
+    code === 'agent_runner_workspace_root_missing' ||
+    code === 'agent_runner_workspace_root_invalid' ||
+    code === 'agent_runner_workspace_backend_data_dir' ||
+    code === 'agent_runner_workspace_outside_root' ||
+    code === 'agent_runner_workspace_relative' ||
+    code === 'agent_runner_inventory_missing' ||
+    code === 'agent_runner_inventory_not_ready'
+  ) {
+    return 'workspace_repair_required';
+  }
+  if (
+    code === 'agent_runner_workspace_missing' ||
+    code === 'agent_runner_workspace_ambiguous' ||
+    code === 'agent_runner_public_api_url_missing'
+  ) {
+    return 'runner_repair_required';
+  }
+  if (code === 'agent_runner_unavailable') return 'runner_unavailable';
+  return 'error';
+}
+
+export async function getNativeRunnerPreflightStatus(
+  agentId: string,
+  conversationId?: string,
+  activationActorId?: string | null,
+): Promise<NativeRunnerPreflightStatus> {
+  try {
+    await ensureAgentRunnerAvailableForQueue(agentId, conversationId, activationActorId);
+    const preflight = preflightAgentRunner(agentId, { activationActorId });
+    return {
+      ...preflight,
+      state: 'ready',
+      code: 'runner_ready',
+      message: 'Runner online. Workspace is ready for queued work.',
+    };
+  } catch (error) {
+    if (error instanceof AgentChatError) {
+      return {
+        agentId,
+        state: classifyNativeRunnerPreflightError(error.code),
+        code: error.code,
+        message: error.message,
+        hint: error.hint,
+      };
+    }
+    return {
+      agentId,
+      state: 'error',
+      code: 'runner_preflight_failed',
+      message: error instanceof Error ? error.message : 'Runner preflight failed.',
+    };
+  }
+}
+
+function pathInsideRoot(candidate: string, root: string): boolean {
+  const resolvedCandidate = path.resolve(candidate);
+  const resolvedRoot = path.resolve(root);
+  const relative = path.relative(resolvedRoot, resolvedCandidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function agentUsesRepositoryRoot(agent: Record<string, unknown> | null): boolean {
+  return typeof agent?.repositoryRoot === 'string' && agent.repositoryRoot.trim().length > 0;
+}
+
+async function reconcileRepositoryRootForRunnerQueue(params: {
+  agentId: string;
+  userId: string;
+  workspaceId: string;
+  provider: RunnerProvider;
+}): Promise<void> {
+  const agent = loadAgentRecordForRunnerPreflight(params.agentId);
+  if (!agentUsesRepositoryRoot(agent) || isRepositoryRootRunnerVerified(agent)) return;
+
+  const repositoryRoot = normalizeRepositoryRoot(
+    typeof agent?.repositoryRoot === 'string' ? agent.repositoryRoot : null,
+  );
+  if (!repositoryRoot) return;
+
+  const origin = normalizeRepositoryRootOrigin(agent?.repositoryRootOrigin);
+  const runnerSelection = getAvailableRemoteAgentRunnerSelection(
+    params.userId,
+    params.workspaceId,
+    params.provider,
+  );
+
+  if (
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM === true &&
+    (origin === 'unknown' || origin === 'backend_local_legacy') &&
+    fs.existsSync(repositoryRoot) &&
+    fs.statSync(repositoryRoot).isDirectory()
+  ) {
+    store.update('agents', params.agentId, {
+      repositoryRoot,
+      repositoryRootOrigin: 'backend_local_legacy',
+      repositoryRootRunnerId: runnerSelection?.runnerId ?? null,
+      repositoryRootVerifiedAt: new Date().toISOString(),
+      repositoryRootRepairRequired: false,
+    });
+    return;
+  }
+
+  try {
+    const { runnerId, result } = await dispatchRunnerFilesystemRequest({
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      runnerId: runnerSelection?.runnerId ?? null,
+      request: { action: 'validate_repository_root', path: repositoryRoot },
+    });
+    if (result.action !== 'validate_repository_root') return;
+    store.update('agents', params.agentId, {
+      repositoryRoot: result.path,
+      repositoryRootOrigin: result.repositoryRootOrigin,
+      repositoryRootRunnerId: runnerId,
+      repositoryRootVerifiedAt: result.repositoryRootVerifiedAt,
+      repositoryRootRepairRequired: false,
+      workspacePath: null,
+    });
+  } catch {
+    // Preflight below throws the actionable queue error when reconciliation fails.
+  }
+}
+
+function buildNoRepositoryRunnerWorkspace(params: {
+  agentId: string;
+  agent: Record<string, unknown> | null;
+  workspaceRoot: string | null;
+  conversationId?: string;
+  conversationWorkspaceMode?: ConversationWorkspaceMode;
+  conversationWorkspaceRelativePath?: string;
+}): { baseWorkDir: string; workDir: string } | null {
+  if (agentUsesRepositoryRoot(params.agent)) return null;
+  if (!params.workspaceRoot) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_root_missing',
+      'No-repository agents require a runner that advertises OPENWORK_RUNNER_WORKSPACE_ROOT.',
+      'Restart the runner with OPENWORK_RUNNER_WORKSPACE_ROOT set, then prepare the runner-local workspace through the file/setup interface before execution.',
+    );
+  }
+  const baseWorkDir = path.join(
+    params.workspaceRoot,
+    '.openwork',
+    'no-repository-agents',
+    params.agentId,
+    'workspace',
+  );
+  const workDir =
+    params.conversationId && params.conversationWorkspaceMode === 'subfolder'
+      ? resolveSubfolderProcessCwd(
+          baseWorkDir,
+          params.conversationId,
+          params.conversationWorkspaceMode,
+          params.conversationWorkspaceRelativePath,
+        )
+      : baseWorkDir;
+  return { baseWorkDir, workDir };
+}
+
+function getRunnerAgentInventory(capabilities: Record<string, unknown> | null | undefined) {
+  const inventory = capabilities?.agentInventory;
+  if (!inventory || typeof inventory !== 'object') return null;
+  const record = inventory as Record<string, unknown>;
+  if (!Array.isArray(record.agents)) return null;
+  if (typeof record.advertisedAt !== 'string' || typeof record.ttlMs !== 'number') return null;
+  if (Date.parse(record.advertisedAt) + record.ttlMs <= Date.now()) return null;
+  return record;
+}
+
+function findRunnerInventoryAgentEntry(params: {
+  capabilities: Record<string, unknown> | null | undefined;
+  agentId: string;
+  baseWorkDir?: string | null;
+}) {
+  const inventory = getRunnerAgentInventory(params.capabilities);
+  if (!inventory) return null;
+  return (
+    (inventory.agents as Record<string, unknown>[]).find((entry) => {
+      if (entry.agentId !== params.agentId) return false;
+      if (params.baseWorkDir && typeof entry.workspaceRootPath === 'string') {
+        return path.resolve(entry.workspaceRootPath) === path.resolve(params.baseWorkDir);
+      }
+      return true;
+    }) ?? null
+  );
+}
+
+function assertNoRepositoryAgentInventoryReady(params: {
+  agentId: string;
+  baseWorkDir: string;
+  capabilities: Record<string, unknown> | null | undefined;
+}) {
+  const entry = findRunnerInventoryAgentEntry(params);
+  if (!entry) {
+    throw AgentChatError.conflict(
+      'agent_runner_inventory_missing',
+      'The selected runner does not advertise this no-repository agent workspace in its runner-owned inventory.',
+      'Prepare or repair the agent workspace through the runner file/setup interface before queueing jobs.',
+    );
+  }
+  if (entry.readiness !== 'ready') {
+    throw AgentChatError.conflict(
+      'agent_runner_inventory_not_ready',
+      `The selected runner advertises this agent workspace as ${String(entry.readiness ?? 'unknown')}.`,
+      'Repair the agent workspace through the runner file/setup interface before queueing jobs.',
+    );
+  }
+}
+
+function buildConversationWorkspace(params: {
+  agentId: string;
+  agent: Record<string, unknown> | null;
+  conversationId?: string;
+}): { workDir: string; workspaceMode: ConversationWorkspaceMode } {
+  const executionRoot = resolveAgentExecutionRootFromRecord(params.agent, params.agentId);
+  if (!params.conversationId) return { workDir: executionRoot, workspaceMode: 'shared' };
+  const conv = store.getById('conversations', params.conversationId);
+  const { workspaceMode, workspaceRelativePath } = ensureConversationWorkspaceMetadata(
+    params.agentId,
+    conv,
+  );
+  const workDir = resolveSubfolderProcessCwd(
+    executionRoot,
+    params.conversationId,
+    workspaceMode,
+    workspaceRelativePath,
+  );
+  return { workDir, workspaceMode };
+}
+
+function loadAgentRecordForRunnerPreflight(agentId: string): Record<string, unknown> | null {
+  const stored = store.getById('agents', agentId);
+  if (stored) return stored as Record<string, unknown>;
+  const agent = getAgent(agentId);
+  return agent ? (agent as unknown as Record<string, unknown>) : null;
+}
+
+function assertRemoteRunnerWorkspacePreflight(params: {
+  agentId: string;
+  conversationId?: string;
+  userId: string;
+  workspaceId: string;
+  provider: RunnerProvider;
+}): void {
+  const agent = loadAgentRecordForRunnerPreflight(params.agentId);
+  const rawConfiguredCwd =
+    typeof agent?.repositoryRoot === 'string' && agent.repositoryRoot.trim()
+      ? agent.repositoryRoot.trim()
+      : null;
+  if (rawConfiguredCwd && !path.isAbsolute(rawConfiguredCwd)) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_relative',
+      `Remote runner workspace cwd must be an absolute runner-local path: ${rawConfiguredCwd}`,
+      'Configure an absolute workspace path or repository root before queueing runner jobs.',
+    );
+  }
+
+  const runnerSelection = getAvailableRemoteAgentRunnerSelection(
+    params.userId,
+    params.workspaceId,
+    params.provider,
+  );
+  const capabilities = runnerSelection?.capabilities ?? null;
+  const workspaceRoot =
+    typeof capabilities?.workspaceRoot === 'string' && capabilities.workspaceRoot.trim()
+      ? capabilities.workspaceRoot.trim()
+      : null;
+  const conversationWorkspace =
+    params.conversationId && agent
+      ? ensureConversationWorkspaceMetadata(
+          params.agentId,
+          store.getById('conversations', params.conversationId),
+        )
+      : null;
+  const noRepositoryWorkspace = buildNoRepositoryRunnerWorkspace({
+    agentId: params.agentId,
+    agent,
+    workspaceRoot,
+    conversationId: params.conversationId,
+    conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
+    conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
+  });
+  const requiredWorkspaceMode = conversationWorkspace?.workspaceMode ?? 'shared';
+  if (
+    Array.isArray(capabilities?.workspaceModes) &&
+    !capabilities.workspaceModes.includes(requiredWorkspaceMode)
+  ) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_mode_unsupported',
+      `The selected runner does not advertise ${requiredWorkspaceMode} workspace mode support.`,
+      'Update and restart the runner, or choose a workspace mode supported by the connected runner.',
+    );
+  }
+  if (!noRepositoryWorkspace && agentUsesRepositoryRoot(agent)) {
+    const origin = normalizeRepositoryRootOrigin(agent?.repositoryRootOrigin);
+    if (!isRepositoryRootRunnerVerified(agent)) {
+      const localDevLegacyAllowed =
+        env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM === true &&
+        origin === 'backend_local_legacy' &&
+        agent?.repositoryRootRepairRequired !== true;
+      if (!localDevLegacyAllowed) {
+        throw AgentChatError.conflict(
+          'agent_repository_root_repair_required',
+          'This repository root must be verified on the selected runner before queueing jobs.',
+          'Use the repository root verify/repair action to validate the path with a paired runner.',
+        );
+      }
+    }
+    if (
+      isRepositoryRootRunnerVerified(agent) &&
+      typeof agent?.repositoryRootRunnerId === 'string' &&
+      runnerSelection?.runnerId &&
+      agent.repositoryRootRunnerId !== runnerSelection.runnerId
+    ) {
+      throw AgentChatError.conflict(
+        'agent_repository_root_runner_mismatch',
+        'This repository root was verified on a different runner than the one selected for this job.',
+        'Verify the repository root with the selected runner before queueing jobs.',
+      );
+    }
+  }
+  const workDir =
+    noRepositoryWorkspace?.workDir ??
+    buildConversationWorkspace({
+      agentId: params.agentId,
+      agent,
+      conversationId: params.conversationId,
+    }).workDir;
+  if (!path.isAbsolute(workDir)) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_relative',
+      `Remote runner workspace cwd must be an absolute runner-local path: ${workDir}`,
+      'Configure an absolute workspace path or repository root before queueing runner jobs.',
+    );
+  }
+
+  if (workspaceRoot && !path.isAbsolute(workspaceRoot)) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_root_invalid',
+      `The selected runner advertised a relative workspace root: ${workspaceRoot}`,
+      'Restart the runner with an absolute OPENWORK_RUNNER_WORKSPACE_ROOT.',
+    );
+  }
+
+  const dataDir = path.resolve(env.DATA_DIR);
+  if (
+    workspaceRoot &&
+    pathInsideRoot(workDir, dataDir) &&
+    !pathInsideRoot(workDir, workspaceRoot)
+  ) {
+    throw AgentChatError.conflict(
+      'agent_runner_workspace_backend_data_dir',
+      `Remote runner workspace cwd points at backend DATA_DIR and is not runner-local: ${workDir}`,
+      'Choose a runner-local repository/workspace path or run the backend and runner in an explicit same-machine development setup.',
+    );
+  }
+  if (noRepositoryWorkspace) {
+    if (!workspaceRoot) return;
+    if (!pathInsideRoot(workDir, workspaceRoot)) {
+      throw AgentChatError.conflict(
+        'agent_runner_workspace_outside_root',
+        `Workspace path ${workDir} is outside runner root ${workspaceRoot}`,
+        'Restart the paired runner with OPENWORK_RUNNER_WORKSPACE_ROOT set to a directory that contains this agent workspace, or recreate the agent after widening the runner workspace root.',
+      );
+    }
+    assertNoRepositoryAgentInventoryReady({
+      agentId: params.agentId,
+      baseWorkDir: noRepositoryWorkspace.baseWorkDir,
+      capabilities: capabilities as Record<string, unknown> | null,
+    });
+  }
 }
 
 async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
   // Wait for a global concurrency slot before dispatching
   await waitForConcurrencySlot();
-  let allocatedPort: number | null = null;
-
   try {
     if (options.triggerType === 'chat') {
       const turnId = options.turnId ?? null;
@@ -2981,33 +3782,82 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       }
     }
 
-    const routingScope = resolveRemoteRunnerRoutingScope(options.agent);
-    const remoteWorkspaceId = routingScope?.workspaceId ?? null;
-    const remoteRunnerUserId = routingScope?.userId ?? null;
-    const provider = inferRunnerProvider(options.agent.model);
-    if (!provider) {
-      throw new Error(`Unsupported remote runner model/provider: ${options.agent.model}`);
-    }
-    if (
-      !remoteWorkspaceId ||
-      !remoteRunnerUserId ||
-      !hasAvailableRemoteAgentRunner(remoteRunnerUserId, remoteWorkspaceId, provider)
-    ) {
+    const runnerPreflight = preflightAgentRunner(options.agentId, {
+      activationActorId: options.activationActorId ?? undefined,
+    });
+    const remoteWorkspaceId = runnerPreflight.workspaceId;
+    const remoteRunnerUserId = runnerPreflight.userId;
+
+    const activationActorId = options.activationActorId ?? remoteRunnerUserId;
+    const runnerSelection = getAvailableRemoteAgentRunnerSelection(
+      remoteRunnerUserId,
+      remoteWorkspaceId,
+      runnerPreflight.provider,
+      activationActorId,
+    );
+    if (!runnerSelection) {
       throw new Error(
-        getRemoteAgentRunnerUnavailableMessage(remoteRunnerUserId, remoteWorkspaceId, provider),
+        getRemoteAgentRunnerUnavailableMessage(
+          remoteRunnerUserId,
+          remoteWorkspaceId,
+          runnerPreflight.provider,
+          activationActorId,
+        ),
       );
     }
-
-    const workDir = resolveAgentChatProcessWorkingDirectory(
-      options.agentId,
-      options.triggerRef?.conversationId,
-    );
+    await reconcileRepositoryRootForRunnerQueue({
+      agentId: options.agentId,
+      userId: remoteRunnerUserId,
+      workspaceId: remoteWorkspaceId,
+      provider: runnerPreflight.provider,
+    });
+    assertRemoteRunnerWorkspacePreflight({
+      agentId: options.agentId,
+      conversationId: options.triggerRef?.conversationId,
+      userId: remoteRunnerUserId,
+      workspaceId: remoteWorkspaceId,
+      provider: runnerPreflight.provider,
+    });
+    const refreshedAgentRecord = getAgent(options.agentId) as Record<string, unknown> | null;
+    const runnerCapabilities = runnerSelection.capabilities;
+    const runnerWorkspaceRoot =
+      typeof runnerCapabilities?.workspaceRoot === 'string' && runnerCapabilities.workspaceRoot.trim()
+        ? runnerCapabilities.workspaceRoot.trim()
+        : null;
+    const noRepositoryWorkspace = buildNoRepositoryRunnerWorkspace({
+      agentId: options.agentId,
+      agent: refreshedAgentRecord,
+      workspaceRoot: runnerWorkspaceRoot,
+      conversationId: options.triggerRef?.conversationId,
+      ...(options.triggerRef?.conversationId
+        ? (() => {
+            const conversationId = options.triggerRef.conversationId;
+            const conversationWorkspace = ensureConversationWorkspaceMetadata(
+              options.agentId,
+              store.getById('conversations', conversationId),
+            );
+            return {
+              conversationWorkspaceMode: conversationWorkspace.workspaceMode,
+              conversationWorkspaceRelativePath: conversationWorkspace.workspaceRelativePath,
+            };
+          })()
+        : {}),
+    });
+    const repositoryConversationWorkspace =
+      noRepositoryWorkspace === null
+        ? buildConversationWorkspace({
+            agentId: options.agentId,
+            agent: refreshedAgentRecord,
+            conversationId: options.triggerRef?.conversationId,
+          })
+        : null;
+    const workDir = noRepositoryWorkspace?.workDir ?? repositoryConversationWorkspace?.workDir;
+    if (!workDir) {
+      throw new Error('Runner workspace path could not be resolved');
+    }
     const childEnv = await buildChildEnv(options.agentId, options.agent);
+    assertRunnerWorkspaceApiUrlReachable();
 
-    // Allocate a random port so the agent's project never conflicts with others
-    allocatedPort = await allocatePort();
-    const projectPort = allocatedPort;
-    childEnv.PROJECT_PORT = String(projectPort);
     childEnv.PWD = workDir;
 
     // Record the agent run first to get runId for log directory
@@ -3070,6 +3920,8 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       {
         userId: remoteRunnerUserId,
         workspaceId: remoteWorkspaceId,
+        runnerId: runnerSelection.runnerId,
+        activationActorId: options.activationActorId ?? remoteRunnerUserId,
         intent: runnerIntent,
       },
       {
@@ -3086,7 +3938,6 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
         stdoutStream.end();
         stderrStream.end();
         remoteRunKeys.delete(options.runKey);
-        releasePort(projectPort);
         releaseConcurrencySlot();
         markAgentLastActivity(options.agentId);
 
@@ -3111,7 +3962,6 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
         stdoutStream.end();
         stderrStream.end();
         remoteRunKeys.delete(options.runKey);
-        releasePort(projectPort);
         releaseConcurrencySlot();
         const resultLogs =
           err instanceof RemoteAgentJobError
@@ -3125,9 +3975,6 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
 
     return runId;
   } catch (err) {
-    if (allocatedPort !== null) {
-      releasePort(allocatedPort);
-    }
     releaseConcurrencySlot();
     throw err;
   }
@@ -3308,6 +4155,7 @@ function spawnChatProcess(
     responseParentId?: string | null;
     targetMessageId?: string | null;
     turnId?: string | null;
+    activationActorId?: string | null;
   },
 ) {
   const isFallback = options?.isFallback ?? false;
@@ -3347,6 +4195,7 @@ function spawnChatProcess(
         triggerRef: { conversationId },
         responseParentId,
         turnId,
+        activationActorId: options?.activationActorId ?? undefined,
         onRunCreated: (runId) => {
           spawnedRunId = runId;
           callbacks.onRunCreated?.(runId);
@@ -3473,6 +4322,8 @@ export const __agentChatTestUtils = {
   getPreviousUserMessageIdForPromptPath,
   canStartQueuedItemNow,
   drainConversationQueue,
+  buildNoRepositoryRunnerWorkspace,
+  buildConversationWorkspace,
 };
 
 /**
@@ -3546,7 +4397,7 @@ export function executePrompt(
       agentId,
       conversationId,
       fullPrompt,
-      { imagePaths: [], filePaths: [], attachments: [] },
+      { imagePaths: [], filePaths: [], attachments: [], missingAttachments: [] },
       wrapChatExecuteCallbacks({
         onRunCreated: options.onRunCreated,
         onFallbackStarted: options.onFallbackStarted,
@@ -3569,6 +4420,7 @@ function executeRespondToMessage(
     onRunCreated?: (runId: string) => void;
     onFallbackStarted?: (model: string) => void;
     turnId?: string | null;
+    activationActorId?: string | null;
   } = {},
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -3614,10 +4466,11 @@ function executeRespondToMessage(
       });
     const turnId = nonEmptyString(executionTurn?.id);
 
+    const attachmentPaths = getConversationAttachmentDiskPaths(conversationId, parentMessageId);
     const fullPrompt = buildPromptWithHistory(agentId, conversationId, undefined, parentMessageId, {
       turnId,
+      missingAttachments: attachmentPaths.missingAttachments,
     });
-    const attachmentPaths = getConversationAttachmentDiskPaths(conversationId, parentMessageId);
 
     spawnChatProcess(
       agentId,
@@ -3634,6 +4487,7 @@ function executeRespondToMessage(
         responseParentId: parentMessageId,
         targetMessageId: parentMessageId,
         turnId,
+        activationActorId: options.activationActorId ?? undefined,
       },
     );
   });
@@ -3922,7 +4776,9 @@ function recoverInterruptedQueueItemFromRun(queueItem: Record<string, unknown>):
   }
 
   const runStatus = run.status;
-  if (runStatus === 'running') return false;
+  if (runStatus === 'running' || runStatus === 'queued') {
+    return preserveQueueItemForActiveRun({ ...queueItem, turnId }, run);
+  }
   if (runStatus === 'completed' && turn.status === 'superseded') {
     const runStartedAtMs = parseIsoDateMs(run.startedAt);
     const runStartedAt = Number.isFinite(runStartedAtMs) ? runStartedAtMs : Date.now();
@@ -4059,10 +4915,15 @@ async function processQueueItem(
         fallbackModel: model,
       });
     };
+    const activationActorId =
+      typeof turn.createdById === 'string' && turn.createdById.trim()
+        ? turn.createdById
+        : null;
     const finalMessage = await executeRespondToMessage(agentId, conversationId, effectiveTargetId, {
       onRunCreated,
       onFallbackStarted,
       turnId,
+      activationActorId,
     });
     const latestItem = store.getById(AGENT_CHAT_QUEUE_COLLECTION, readyItemId);
     if (!latestItem) return;
@@ -4249,7 +5110,23 @@ async function drainConversationQueue(agentId: string, conversationId: string): 
             string,
             unknown
           >[];
-          if (!resolveAgentRemoteRunnerWorkspaceId(agentId)) {
+          let workspaceRoutingError: AgentChatError | null = null;
+          try {
+            if (!resolveAgentRemoteRunnerWorkspaceId(agentId)) {
+              workspaceRoutingError = AgentChatError.conflict(
+                'agent_runner_workspace_missing',
+                'This agent is not assigned to a workspace with a runner. Add the agent to a workspace, then try again.',
+                'Open the workspace settings, attach this agent group to one workspace, then start or pair a runner for that workspace.',
+              );
+            }
+          } catch (error) {
+            if (error instanceof AgentChatError) {
+              workspaceRoutingError = error;
+            } else {
+              throw error;
+            }
+          }
+          if (workspaceRoutingError) {
             const nowIso = new Date().toISOString();
             for (const item of queueItems) {
               if (item.status !== 'queued' || typeof item.id !== 'string') continue;
@@ -4258,14 +5135,12 @@ async function drainConversationQueue(agentId: string, conversationId: string): 
                 completedAt: nowIso,
                 nextAttemptAt: null,
                 runId: null,
-                errorMessage:
-                  'This agent is not assigned to a workspace with a runner. Add the agent to a workspace, then try again.',
+                errorMessage: workspaceRoutingError.message,
               });
               markAgentChatTurnFailed(
                 typeof item.turnId === 'string' ? (item.turnId as string) : null,
                 {
-                  errorMessage:
-                    'This agent is not assigned to a workspace with a runner. Add the agent to a workspace, then try again.',
+                  errorMessage: workspaceRoutingError.message,
                 },
               );
             }
@@ -4531,24 +5406,25 @@ export function scheduleQueuedAgentChatDrains() {
   }
 }
 
-function assertAgentRunnerAvailableForQueue(agentId: string): void {
-  const runnerWorkspaceId = getAgentRunnerWorkspaceIdOrThrow(agentId);
-  const runnerProvider = getAgentRunnerProviderOrThrow(agentId);
-  const runnerScope = resolveAgentRemoteRunnerRoutingScope(agentId);
-  if (
-    !runnerScope ||
-    !hasConnectedRemoteAgentRunner(runnerScope.userId, runnerWorkspaceId) ||
-    !hasAvailableRemoteAgentRunner(runnerScope.userId, runnerWorkspaceId, runnerProvider)
-  ) {
-    throw AgentChatError.conflict(
-      'agent_runner_unavailable',
-      getRemoteAgentRunnerUnavailableMessage(
-        runnerScope?.userId,
-        runnerWorkspaceId,
-        runnerProvider,
-      ),
-    );
-  }
+async function ensureAgentRunnerAvailableForQueue(
+  agentId: string,
+  conversationId?: string,
+  activationActorId?: string | null,
+): Promise<void> {
+  const runnerPreflight = preflightAgentRunner(agentId, { activationActorId });
+  await reconcileRepositoryRootForRunnerQueue({
+    agentId,
+    userId: runnerPreflight.userId,
+    workspaceId: runnerPreflight.workspaceId,
+    provider: runnerPreflight.provider,
+  });
+  assertRemoteRunnerWorkspacePreflight({
+    agentId,
+    conversationId,
+    userId: runnerPreflight.userId,
+    workspaceId: runnerPreflight.workspaceId,
+    provider: runnerPreflight.provider,
+  });
 }
 
 export interface EnqueueAgentPromptResult {
@@ -4557,7 +5433,7 @@ export interface EnqueueAgentPromptResult {
   queuedCount: number;
 }
 
-export function enqueueAgentPrompt(
+export async function enqueueAgentPrompt(
   agentId: string,
   conversationId: string,
   prompt: string,
@@ -4573,7 +5449,7 @@ export function enqueueAgentPrompt(
     attachments?: unknown[] | null;
     metadata?: Record<string, unknown>;
   } = {},
-): EnqueueAgentPromptResult {
+): Promise<EnqueueAgentPromptResult> {
   const trimmedPrompt = prompt.trim();
   const mode = options.mode ?? 'append_prompt';
   const appendPromptAttachments = cloneAttachmentRecords(parseAttachments(options.attachments));
@@ -4711,7 +5587,7 @@ export function enqueueAgentPrompt(
   activateTurnPath(conversationId, agentId, turnId);
 
   try {
-    assertAgentRunnerAvailableForQueue(agentId);
+    await ensureAgentRunnerAvailableForQueue(agentId, conversationId, options.createdById);
   } catch (err) {
     markAgentChatTurnFailed(turnId, {
       errorMessage: err instanceof Error ? err.message : 'Agent runner unavailable',
@@ -4769,7 +5645,7 @@ export interface EnqueueAgentResponseToMessageResult extends EnqueueAgentPromptR
   willQueueBehind: boolean;
 }
 
-export function enqueueAgentResponseToMessage(
+export async function enqueueAgentResponseToMessage(
   agentId: string,
   conversationId: string,
   options: {
@@ -4779,7 +5655,7 @@ export function enqueueAgentResponseToMessage(
     turnType?: AgentChatTurnType;
     metadata?: Record<string, unknown>;
   } = {},
-): EnqueueAgentResponseToMessageResult {
+): Promise<EnqueueAgentResponseToMessageResult> {
   const targetMessageId =
     options.targetMessageId ??
     (() => {
@@ -4800,7 +5676,7 @@ export function enqueueAgentResponseToMessage(
     conversationId,
     targetMessageId,
   );
-  const queued = enqueueAgentPrompt(agentId, conversationId, '', {
+  const queued = await enqueueAgentPrompt(agentId, conversationId, '', {
     mode: 'respond_to_message',
     targetMessageId,
     createdById: options.createdById ?? null,
@@ -4827,7 +5703,7 @@ export function getConversationQueueItems(agentId: string, conversationId: strin
 }
 
 export function getConversationExecutionItems(agentId: string, conversationId: string) {
-  reconcileTerminalProcessingExecutionItems(agentId, conversationId);
+  reconcileConversationExecutionItems(agentId, conversationId);
 
   const queueItems = listConversationQueueItems(agentId, conversationId);
   const queuePositionById = buildQueuedDisplayPositionById(
@@ -5299,6 +6175,7 @@ export function executeCardTask(
     onRunCreated?: (runId: string) => void;
   },
   customPrompt?: string,
+  activationActorId?: string | null,
 ) {
   const key = `${agentId}:card:${card.id}`;
   if (remoteRunKeys.has(key)) {
@@ -5338,14 +6215,28 @@ export function executeCardTask(
 
       const spawnCardRun = (effectiveAgent: typeof agent, isFallback: boolean) => {
         spawnedRunId = null;
+        let attachmentPaths: ConversationAttachmentDiskPaths;
+        try {
+          attachmentPaths = getCardAttachmentDiskPaths(card.id);
+        } catch (error) {
+          callbacks.onError((error as Error).message);
+          return;
+        }
+        const hasImages = attachmentPaths.imagePaths.length > 0;
+        const hasFiles = attachmentPaths.filePaths.length > 0;
         void runAgentProcess({
           agentId,
           agent: effectiveAgent,
 
           runKey: key,
           prompt,
+          attachments:
+            attachmentPaths.attachments.length > 0 ? attachmentPaths.attachments : undefined,
+          imagePaths: hasImages ? attachmentPaths.imagePaths : undefined,
+          filePaths: hasFiles ? attachmentPaths.filePaths : undefined,
           triggerType: 'card_assignment',
           triggerRef: { cardId: card.id },
+          activationActorId: activationActorId ?? undefined,
           onRunCreated: (runId) => {
             spawnedRunId = runId;
             callbacks.onRunCreated?.(runId);

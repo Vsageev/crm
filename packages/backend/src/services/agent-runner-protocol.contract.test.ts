@@ -3,7 +3,12 @@ import sensible from '@fastify/sensible';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { RUNNER_PROTOCOL_VERSION, parseRunnerServerMessage, type RunnerCapabilities } from 'shared';
+import {
+  RUNNER_PROTOCOL_VERSION,
+  parseRunnerServerMessage,
+  type RunnerCapabilities,
+  type RunnerJobIntent,
+} from 'shared';
 import {
   __runnerTestUtils,
   dispatchRemoteAgentJob,
@@ -11,6 +16,7 @@ import {
 import { agentRunRoutes } from '../routes/agent-runs.js';
 import { cardRoutes } from '../routes/cards.js';
 import { completeAgentRun, createAgentRun, getAgentRun } from './agent-runs.js';
+import { createAgentChatTurn, markAgentChatTurnRunning } from './agent-chat-turns.js';
 
 type RecordMap = Map<string, Map<string, Record<string, unknown>>>;
 
@@ -84,10 +90,18 @@ function addRunner(runnerId: string, ws = makeOpenSocket(), caps?: Partial<Runne
     os: 'test',
     arch: 'test',
     runnerVersion: 'test',
-    supportedAgentKinds: ['dev_agent'],
     supportedProviders: ['codex'],
     supportsCancellation: true,
     supportsArtifacts: true,
+    agentInventory: {
+      protocolVersion: 1,
+      revision: 'contract-inventory',
+      advertisedAt: now,
+      ttlMs: 120_000,
+      workspaceRoots: [{ id: 'default', path: '/runner/root', scope: 'workspace', writable: true }],
+      fileOperations: ['browse', 'list_agent_files'],
+      agents: [],
+    },
     policy: {
       workspaceRootRequired: false,
       allowedTools: ['codex'],
@@ -103,6 +117,9 @@ function addRunner(runnerId: string, ws = makeOpenSocket(), caps?: Partial<Runne
     id: runnerId,
     userId: 'user-contract',
     workspaceId: 'ws-contract',
+    connectionScope: 'account' as const,
+    ownerAccountId: 'user-contract',
+    boundWorkspaceId: 'ws-contract',
     name: 'contract-runner',
     ws,
     capabilities,
@@ -142,6 +159,123 @@ afterEach(() => {
 });
 
 describe('runner protocol → agent_runs + card comment contract', () => {
+  it('dispatches a prepared job to the same selected runner id', () => {
+    mocks.store.reset();
+    const preferredWs = makeOpenSocket();
+    const otherWs = makeOpenSocket();
+    addRunner('runner-prepared', preferredWs);
+    addRunner('runner-other', otherWs);
+
+    void dispatchRemoteAgentJob({
+      userId: 'user-contract',
+      workspaceId: 'ws-contract',
+      runnerId: 'runner-prepared',
+      timeoutMs: 0,
+      intent: {
+        runId: 'run-prepared-runner',
+        agentId: 'agent-prepared-runner',
+        provider: 'codex',
+        modelPreference: { displayName: 'Codex' },
+        prompt: 'hi',
+        workspace: { type: 'local_path', path: '/runner/root/.openwork/no-repository-agents/agent-prepared-runner/workspace', workspaceId: 'ws-contract' },
+        allowedOperations: {
+          tools: ['codex'],
+          approvalMode: 'dangerous',
+          env: true,
+          secrets: true,
+          network: true,
+          shell: true,
+        },
+      },
+    });
+
+    expect(preferredWs.send).toHaveBeenCalledTimes(1);
+    expect(otherWs.send).not.toHaveBeenCalled();
+    const raw = preferredWs.send.mock.calls[0]?.[0];
+    expect(typeof raw).toBe('string');
+    const offered = JSON.parse(raw as string);
+    expect(offered).toMatchObject({
+      type: 'job_offer',
+      job: { runId: 'run-prepared-runner' },
+    });
+  });
+
+  it('does not let an older failed run overwrite a turn already linked to a newer run', async () => {
+    mocks.store.reset();
+    createAgentChatTurn({
+      id: 'turn-stale-run',
+      agentId: 'agent-stale-run',
+      conversationId: 'conversation-stale-run',
+      userMessageId: 'message-stale-run',
+      assistantMessageId: 'assistant-newer-run',
+      status: 'completed',
+      runId: 'run-newer-success',
+      metadata: { mode: 'respond_to_message' },
+      completedAt: '2026-05-23T15:43:30.000Z',
+    });
+    createAgentRun({
+      id: 'run-older-failed',
+      agentId: 'agent-stale-run',
+      agentName: 'contract agent',
+      model: 'codex',
+      triggerType: 'chat',
+      conversationId: 'conversation-stale-run',
+      responseParentId: 'message-stale-run',
+      turnId: 'turn-stale-run',
+      executor: 'remote',
+      status: 'running',
+    } as Parameters<typeof createAgentRun>[0]);
+
+    await completeAgentRun('run-older-failed', 'invalid_job: Workspace path does not exist', {
+      stdout: '',
+      stderr: 'invalid_job: Workspace path does not exist',
+    });
+
+    expect(mocks.store.getById('agent_runs', 'run-older-failed')).toMatchObject({
+      status: 'error',
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-stale-run')).toMatchObject({
+      status: 'completed',
+      runId: 'run-newer-success',
+      assistantMessageId: 'assistant-newer-run',
+      metadata: { mode: 'respond_to_message' },
+    });
+  });
+
+  it('clears stale terminal turn errors when a retry starts a newer run', () => {
+    mocks.store.reset();
+    createAgentChatTurn({
+      id: 'turn-retry-after-error',
+      agentId: 'agent-retry',
+      conversationId: 'conversation-retry',
+      userMessageId: 'message-retry',
+      status: 'failed',
+      runId: 'run-older-failed',
+      metadata: {
+        mode: 'append_prompt',
+        queuedMessageId: 'message-retry',
+        errorMessage: 'invalid_job: Workspace path does not exist: /backend/.openwork/workspace',
+      },
+      completedAt: '2026-05-23T15:58:43.000Z',
+    });
+
+    markAgentChatTurnRunning('turn-retry-after-error', {
+      runId: 'run-newer-running',
+      userMessageId: 'message-retry',
+    });
+
+    expect(mocks.store.getById('agentChatTurns', 'turn-retry-after-error')).toMatchObject({
+      status: 'running',
+      runId: 'run-newer-running',
+      userMessageId: 'message-retry',
+      completedAt: null,
+      metadata: {
+        mode: 'append_prompt',
+        queuedMessageId: 'message-retry',
+      },
+    });
+  });
+
   it('buffers output_event + final_message before completed, merges for persistence, and exposes API-shaped evidence', async () => {
     mocks.store.reset();
     const ids = {
@@ -197,7 +331,6 @@ describe('runner protocol → agent_runs + card comment contract', () => {
       intent: {
         runId: ids.run,
         agentId: ids.agent,
-        agentKind: 'dev_agent',
         provider: 'codex',
         modelPreference: { displayName: 'Codex' },
         prompt: 'hi',
@@ -265,6 +398,8 @@ describe('runner protocol → agent_runs + card comment contract', () => {
       .find((c: Record<string, unknown>) => c.agentRunId === ids.run && c.cardId === ids.card);
     expect(comment).toMatchObject({ authorId: ids.agent, agentRunId: ids.run });
     expect(String(comment?.content ?? '')).toContain(finalAnswer);
+    expect(String(comment?.content ?? '')).toContain(`Run: ${ids.run}`);
+    expect(String(comment?.content ?? '')).toContain('Status: completed');
     expect(String(comment?.content ?? '')).toContain(`GET /api/agent-runs/${ids.run}`);
 
     const app = await buildContractApi();
@@ -334,7 +469,6 @@ describe('runner protocol → agent_runs + card comment contract', () => {
       intent: {
         runId: ids.run,
         agentId: ids.agent,
-        agentKind: 'dev_agent',
         provider: 'codex',
         modelPreference: { displayName: 'Codex' },
         prompt: 'hi',
@@ -379,6 +513,79 @@ describe('runner protocol → agent_runs + card comment contract', () => {
     expect(String(comment?.content ?? '')).toMatch(/Agent run completed without a final response/i);
   });
 
+  it('keeps a Codex chat run completed when transient error events precede terminal success', async () => {
+    mocks.store.reset();
+    const ids = {
+      agent: 'qa-contract-agent-transient-error',
+      conversation: 'qa-contract-conversation-transient-error',
+      turn: 'qa-contract-turn-transient-error',
+      run: 'qa-contract-run-transient-error',
+    };
+    mocks.store.insert('agents', {
+      id: ids.agent,
+      name: 'contract transient agent',
+      model: 'codex',
+      modelId: 'gpt-test',
+      status: 'active',
+    });
+    mocks.store.insert('conversations', {
+      id: ids.conversation,
+      agentId: ids.agent,
+      title: 'transient error completion',
+    });
+    createAgentChatTurn({
+      id: ids.turn,
+      agentId: ids.agent,
+      conversationId: ids.conversation,
+      status: 'running',
+      runId: ids.run,
+      turnType: 'follow_up',
+    });
+    createAgentRun({
+      id: ids.run,
+      agentId: ids.agent,
+      agentName: 'contract transient agent',
+      model: 'codex',
+      modelId: 'gpt-test',
+      triggerType: 'chat',
+      conversationId: ids.conversation,
+      executor: 'remote',
+      status: 'running',
+      turnId: ids.turn,
+    });
+
+    const stdout = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'error',
+        message: 'Reconnecting... 4/5 (unexpected status 403 Forbidden)',
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: `openwork-final-message-${ids.run}`,
+          type: 'openwork_final_message',
+          text: 'Recovered final answer',
+        },
+      }),
+    ].join('\n');
+
+    await completeAgentRun(ids.run, null, { stdout, stderr: 'provider transport warning' });
+
+    expect(getAgentRun(ids.run)).toMatchObject({
+      id: ids.run,
+      status: 'completed',
+      errorMessage: null,
+      responseText: 'Recovered final answer',
+    });
+    expect(mocks.store.getById('agentChatTurns', ids.turn)).toMatchObject({
+      id: ids.turn,
+      status: 'completed',
+      runId: ids.run,
+    });
+  });
+
   it('rejects dispatch before spawn when runner lacks provider support (no job_offer sent)', async () => {
     mocks.store.reset();
     const ws = makeOpenSocket();
@@ -389,9 +596,8 @@ describe('runner protocol → agent_runs + card comment contract', () => {
         workspaceId: 'ws-contract',
         intent: {
           runId: 'run-x',
-          agentId: 'a1',
-          agentKind: 'dev_agent',
-          provider: 'codex',
+        agentId: 'agent-1',
+        provider: 'codex',
           modelPreference: { displayName: 'Codex' },
           prompt: 'hi',
           workspace: { type: 'local_path', path: '/tmp', workspaceId: 'ws-contract' },
@@ -409,6 +615,139 @@ describe('runner protocol → agent_runs + card comment contract', () => {
     expect(ws.send).not.toHaveBeenCalled();
   });
 
+  it('rejects ordinary job dispatch that carries workspace materialization', async () => {
+    mocks.store.reset();
+    const ws = makeOpenSocket();
+    addRunner('runner-contract-materialization', ws);
+
+    await expect(
+      dispatchRemoteAgentJob({
+        userId: 'user-contract',
+        workspaceId: 'ws-contract',
+        intent: {
+          runId: 'run-materialization',
+        agentId: 'agent-1',
+        provider: 'codex',
+          modelPreference: { displayName: 'Codex' },
+          prompt: 'hi',
+          workspace: {
+            type: 'local_path',
+            path: '/tmp',
+            workspaceId: 'ws-contract',
+            materialization: {
+              strategy: 'runner_local_agent_workspace',
+              cleanup: 'managed_files',
+              agentContext: {
+                revision: 'rev-1',
+                files: [{ path: 'AGENTS.md', content: '# Instructions\n' }],
+              },
+            },
+          },
+          allowedOperations: {
+            tools: ['codex'],
+            approvalMode: 'dangerous',
+            env: true,
+            secrets: true,
+            network: true,
+            shell: true,
+          },
+        } as RunnerJobIntent,
+      }),
+    ).rejects.toThrow(
+      'Workspace materialization is not part of ordinary runner job execution',
+    );
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('preserves native runner concurrency: busy runner can accept another independent job', async () => {
+    mocks.store.reset();
+    const ws = makeOpenSocket();
+    const runner = addRunner('runner-concurrent', ws);
+
+    const first = dispatchRemoteAgentJob({
+      userId: 'user-contract',
+      workspaceId: 'ws-contract',
+      intent: {
+        runId: 'run-concurrent-a',
+        agentId: 'agent-1',
+        provider: 'codex',
+        modelPreference: { displayName: 'Codex' },
+        prompt: 'first',
+        workspace: { type: 'local_path', path: '/tmp', workspaceId: 'ws-contract' },
+        allowedOperations: {
+          tools: ['codex'],
+          approvalMode: 'dangerous',
+          env: true,
+          secrets: true,
+          network: true,
+          shell: true,
+        },
+      },
+    });
+    const firstJobId = readOfferedJobId(ws);
+    __runnerTestUtils.handleRunnerMessage(runner, {
+      type: 'job_accepted',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      jobId: firstJobId,
+      runId: 'run-concurrent-a',
+    });
+    expect(runner.activeJobIds.has(firstJobId)).toBe(true);
+
+    const second = dispatchRemoteAgentJob({
+      userId: 'user-contract',
+      workspaceId: 'ws-contract',
+      intent: {
+        runId: 'run-concurrent-b',
+        agentId: 'agent-1',
+        provider: 'codex',
+        modelPreference: { displayName: 'Codex' },
+        prompt: 'second',
+        workspace: { type: 'local_path', path: '/tmp', workspaceId: 'ws-contract' },
+        allowedOperations: {
+          tools: ['codex'],
+          approvalMode: 'dangerous',
+          env: true,
+          secrets: true,
+          network: true,
+          shell: true,
+        },
+      },
+    });
+
+    expect(ws.send).toHaveBeenCalledTimes(2);
+    const secondRaw = ws.send.mock.calls[1]?.[0];
+    expect(typeof secondRaw).toBe('string');
+    const secondOffer = JSON.parse(secondRaw as string);
+    expect(secondOffer).toMatchObject({
+      type: 'job_offer',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      job: { runId: 'run-concurrent-b' },
+    });
+    const secondJobId = secondOffer.jobId as string;
+
+    __runnerTestUtils.handleRunnerMessage(runner, {
+      type: 'completed',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      jobId: firstJobId,
+      runId: 'run-concurrent-a',
+      code: 0,
+      stdout: '',
+      stderr: '',
+    });
+    __runnerTestUtils.handleRunnerMessage(runner, {
+      type: 'completed',
+      protocolVersion: RUNNER_PROTOCOL_VERSION,
+      jobId: secondJobId,
+      runId: 'run-concurrent-b',
+      code: 0,
+      stdout: '',
+      stderr: '',
+    });
+
+    await expect(first).resolves.toMatchObject({ code: 0 });
+    await expect(second).resolves.toMatchObject({ code: 0 });
+  });
+
   it('malformed terminal JSON is ignored; job_rejected still surfaces as dispatch failure', async () => {
     mocks.store.reset();
     const ws = makeOpenSocket();
@@ -420,9 +759,8 @@ describe('runner protocol → agent_runs + card comment contract', () => {
         timeoutMs: 5_000,
         intent: {
           runId: 'run-malformed',
-          agentId: 'a1',
-          agentKind: 'dev_agent',
-          provider: 'codex',
+        agentId: 'agent-1',
+        provider: 'codex',
           modelPreference: { displayName: 'Codex' },
           prompt: 'hi',
           workspace: { type: 'local_path', path: '/tmp', workspaceId: 'ws-contract' },

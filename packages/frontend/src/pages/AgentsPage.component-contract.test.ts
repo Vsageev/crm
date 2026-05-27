@@ -94,18 +94,19 @@ describe('AgentsPage component contract', () => {
       sourceText: sidebar,
       expected: "data-active-conversation-id={activeConvId ?? ''}",
     });
+    const sidebarItemBinding = sourceSlice('const renderAgentSidebarItem =', 'return (');
     assertContains({
       componentName: 'AgentSidebarItem',
       stateInput: 'activeAgentId=agent-active activeConvId=conversation-active',
       contractName: 'active-conversation-prop',
-      sourceText: sidebar,
+      sourceText: sidebarItemBinding,
       expected: 'activeConversationId={',
     });
     assertContains({
       componentName: 'AgentSidebarItem',
       stateInput: 'activeAgentId=agent-active activeConvId=conversation-active',
       contractName: 'active-conversation-prop-owner',
-      sourceText: sidebar,
+      sourceText: sidebarItemBinding,
       expected: 'activeAgentId === agent.id ? activeConvId : null',
     });
 
@@ -384,6 +385,27 @@ describe('AgentsPage component contract', () => {
     });
   });
 
+  it('does not hide user message editing by message type', () => {
+    const editablePredicate = sourceSlice(
+      'export function isEditableChatMessage(message: ChatMessage): boolean {',
+      'function readAgentChatDraft(): string',
+    );
+    for (const unexpected of [
+      "type === 'text'",
+      "type === 'image'",
+      "type === 'file'",
+      'message.type ??',
+    ]) {
+      assertNotContains({
+        componentName: 'AgentsPage.isEditableChatMessage',
+        stateInput: 'outbound non-text message',
+        contractName: 'all-outbound-action-authorized-types-editable',
+        sourceText: editablePredicate,
+        unexpected,
+      });
+    }
+  });
+
   it('keeps run activity collapsed until the user expands it', () => {
     const runActivity = sourceSlice('function AgentRunActivity({', 'function formatBytes');
     const runEventRow = sourceSlice('function AgentRunEventRow({', 'function AgentRunEventTimeline');
@@ -473,4 +495,5 @@ describe('AgentsPage component contract', () => {
       });
     }
   });
+
 });

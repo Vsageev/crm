@@ -1747,6 +1747,10 @@ function extractStructuredErrorText(event: JsonRecord): string | null {
   return null;
 }
 
+function isCodexTerminalSuccessEvent(event: JsonRecord): boolean {
+  return event.type === 'turn.completed' || Boolean(extractFromCodexOpenWorkFinalMessageEvent(event));
+}
+
 function structuredEventsToBlocks(events: JsonRecord[]): OutputBlock[] {
   const blocks: OutputBlock[] = [];
   const streamBlocks = new Map<number, StreamBlockState>();
@@ -2033,6 +2037,17 @@ export function extractAgentOutputErrorText(stdout: string): string {
 
   const parsedEvents = parseStructuredEvents(stdout);
   if (!parsedEvents) return '';
+
+  const hasCodexEvents = parsedEvents.some(looksLikeCodexEvent);
+  if (hasCodexEvents) {
+    for (let i = parsedEvents.length - 1; i >= 0; i -= 1) {
+      const event = parsedEvents[i];
+      if (isCodexTerminalSuccessEvent(event)) return '';
+      const text = extractStructuredErrorText(event);
+      if (text) return text;
+    }
+    return '';
+  }
 
   for (let i = parsedEvents.length - 1; i >= 0; i -= 1) {
     const text = extractStructuredErrorText(parsedEvents[i]);

@@ -65,7 +65,6 @@ const MAPPINGS: CollectionMapping[] = [
     'model',
     'modelId',
     'runtime',
-    'agentKind',
     'provider',
     'thinkingLevel',
     'preset',
@@ -81,6 +80,20 @@ const MAPPINGS: CollectionMapping[] = [
     'groupId',
     'serviceUserId',
     'repositoryRoot',
+    'repositoryRootOrigin',
+    'repositoryRootRunnerId',
+    'repositoryRootVerifiedAt',
+    'repositoryRootRepairRequired',
+    'runnerInventoryRunnerId',
+    'runnerInventoryWorkspaceId',
+    'runnerInventoryVersion',
+    'runnerInventoryCapabilityRefs',
+    'runnerInventoryWorkspaceRootOrigin',
+    'runnerInventoryWorkspaceRootVerifiedAt',
+    'runnerInventoryVerifiedAt',
+    'legacyAgentFileState',
+    'legacyAgentFileRepairState',
+    'legacyAgentFileCheckedAt',
     'workspacePath',
     'separateFolderPerChat',
     'skillIds',
@@ -329,7 +342,6 @@ const MAPPINGS: CollectionMapping[] = [
     'model',
     'modelId',
     'runtime',
-    'agentKind',
     'provider',
     'triggerType',
     'triggerPrompt',
@@ -382,6 +394,11 @@ const MAPPINGS: CollectionMapping[] = [
     'id',
     'userId',
     'workspaceId',
+    'connectionScope',
+    'ownerAccountId',
+    'boundWorkspaceId',
+    'originalBoundWorkspaceId',
+    'legacyConnectionScope',
     'displayName',
     'credentialHash',
     'credentialPrefix',
@@ -398,6 +415,7 @@ const MAPPINGS: CollectionMapping[] = [
     'id',
     'userId',
     'workspaceId',
+    'connectionScope',
     'codeHash',
     'displayName',
     'expiresAt',
@@ -478,11 +496,57 @@ const MAPPINGS: CollectionMapping[] = [
     'startedAt',
     'completedAt',
     'agentRunId',
+    'executionJobId',
     'stageId',
     'dependsOnItemIds',
     'blockingMode',
     'createdAt',
     'updatedAt',
+    'legacyData',
+  ]),
+  mapping('executionJobs', 'execution_jobs', [
+    'id',
+    'ownerType',
+    'ownerId',
+    'agentId',
+    'targetType',
+    'targetId',
+    'status',
+    'policySnapshot',
+    'activeAttemptId',
+    'idempotencyKey',
+    'startedAt',
+    'finishedAt',
+    'errorMessage',
+    'createdAt',
+    'updatedAt',
+    'legacyData',
+  ]),
+  mapping('executionAttempts', 'execution_attempts', [
+    'id',
+    'jobId',
+    'attemptIndex',
+    'role',
+    'provider',
+    'model',
+    'modelId',
+    'agentRunId',
+    'status',
+    'errorClass',
+    'errorMessage',
+    'startedAt',
+    'finishedAt',
+    'createdAt',
+    'updatedAt',
+    'legacyData',
+  ]),
+  mapping('executionEvents', 'execution_events', [
+    'id',
+    'jobId',
+    'attemptId',
+    'type',
+    'payload',
+    'createdAt',
     'legacyData',
   ]),
   mapping('agentEnvVars', 'agent_env_vars', [
@@ -567,6 +631,9 @@ const MAPPINGS: CollectionMapping[] = [
 ];
 
 const MAPPING_BY_COLLECTION = new Map(MAPPINGS.map((entry) => [entry.collection, entry]));
+const STARTUP_LOAD_EXCLUDED_COLUMNS = new Map<string, Set<string>>([
+  ['agent_runs', new Set(['stdout', 'stderr'])],
+]);
 
 /** API collection names backed by mapped SQL tables (used for SQL-mode JSON export in backups). */
 export const STORE_MAPPED_COLLECTION_NAMES: readonly string[] = MAPPINGS.map((m) => m.collection);
@@ -802,7 +869,7 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
 
     for (const entry of MAPPINGS) {
       if (!this.availableTables.has(entry.table)) continue;
-      const rows = await client.unsafe(`select * from "${entry.table}"`);
+      const rows = await client.unsafe(this.startupSelectSql(entry));
       const records = new Map<string, StoreRecord>();
       for (const row of rows) {
         const record = this.recordFromRow(entry.collection, row);
@@ -817,6 +884,18 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
       "select table_name from information_schema.tables where table_schema = 'public'",
     );
     return new Set(rows.map((row) => String(row.table_name)));
+  }
+
+  private startupSelectSql(entry: CollectionMapping): string {
+    const excludedColumns = STARTUP_LOAD_EXCLUDED_COLUMNS.get(entry.table);
+    if (!excludedColumns) {
+      return `select * from "${entry.table}"`;
+    }
+
+    const columns = entry.columns
+      .map(toSnake)
+      .filter((column) => !excludedColumns.has(column));
+    return `select ${columns.map(quoteIdent).join(', ')} from "${entry.table}"`;
   }
 
   private persistRecord(

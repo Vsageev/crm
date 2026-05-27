@@ -341,7 +341,7 @@ function getAvailableActions(options: {
   siblingCount: number;
 }): ChatViewAction[] {
   const actions = new Set<ChatViewAction>();
-  if (asString(options.turn.userMessageId) && options.status !== 'superseded') {
+  if (asString(options.turn.userMessageId)) {
     actions.add('edit_user_message');
   }
   if (options.queue?.status === 'queued') {

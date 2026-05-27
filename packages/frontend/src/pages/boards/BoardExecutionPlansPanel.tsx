@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowLeft, CheckCircle2, GitBranch, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, GitBranch, GripHorizontal, Pencil, Play, Plus, Trash2, X } from 'lucide-react';
 import { formatDate } from 'shared';
 import { ActionTooltip, Button, ReasonedActionButton, Tooltip } from '../../ui';
 import { Input } from '../../ui/Input';
@@ -15,6 +15,13 @@ import { toast } from '../../stores/toast';
 import { BatchLayerPlanner, type BatchPlanCard } from '../../components/BatchLayerPlanner';
 import type { ExecutionPlansExperiments } from '../../devtools/execution-plans-experiments';
 import type { PlanEditorBridge, PlanEditorAddMode } from './execution-plan-editor-bridge';
+import {
+  clampExecutionPlansRailPosition,
+  EXECUTION_PLANS_RAIL_VIEWPORT_PADDING,
+  EXECUTION_PLANS_RAIL_WIDTH,
+  readStoredExecutionPlansRailPosition,
+  writeStoredExecutionPlansRailPosition,
+} from '../../lib/execution-plans-rail-preferences';
 import styles from './BoardExecutionPlansPanel.module.css';
 
 interface BoardExecutionPlansPanelProps {
@@ -98,6 +105,9 @@ export function BoardExecutionPlansPanel({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [layers, setLayers] = useState<BatchLayer[]>(emptyLayers);
+  const [railPosition, setRailPosition] = useState(() => readStoredExecutionPlansRailPosition());
+  const [railDragging, setRailDragging] = useState(false);
+  const [railEnterAnimation, setRailEnterAnimation] = useState(true);
 
   const cardCount = useMemo(() => countCardsInLayers(layers), [layers]);
   const editingPlan = plans.find((plan) => plan.id === editingId) ?? null;
@@ -147,6 +157,65 @@ export function BoardExecutionPlansPanel({
   useEffect(() => {
     void fetchPlans();
   }, [fetchPlans]);
+
+  const panelHeight = typeof window !== 'undefined'
+    ? window.innerHeight - EXECUTION_PLANS_RAIL_VIEWPORT_PADDING * 2
+    : 768;
+
+  useEffect(() => {
+    function handleViewportResize() {
+      setRailPosition((current) => clampExecutionPlansRailPosition(
+        current.x,
+        current.y,
+        EXECUTION_PLANS_RAIL_WIDTH,
+        window.innerHeight - EXECUTION_PLANS_RAIL_VIEWPORT_PADDING * 2,
+      ));
+    }
+    window.addEventListener('resize', handleViewportResize);
+    return () => window.removeEventListener('resize', handleViewportResize);
+  }, []);
+
+  const handleRailDragMouseDown = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (event.button > 0) return;
+    event.preventDefault();
+    const start = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startPosition: railPosition,
+    };
+    setRailEnterAnimation(false);
+    setRailDragging(true);
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - start.startX;
+      const deltaY = moveEvent.clientY - start.startY;
+      setRailPosition(clampExecutionPlansRailPosition(
+        start.startPosition.x + deltaX,
+        start.startPosition.y + deltaY,
+        EXECUTION_PLANS_RAIL_WIDTH,
+        window.innerHeight - EXECUTION_PLANS_RAIL_VIEWPORT_PADDING * 2,
+      ));
+    };
+
+    const finishDrag = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', finishDrag);
+      setRailDragging(false);
+      setRailPosition((current) => {
+        const next = clampExecutionPlansRailPosition(
+          current.x,
+          current.y,
+          EXECUTION_PLANS_RAIL_WIDTH,
+          window.innerHeight - EXECUTION_PLANS_RAIL_VIEWPORT_PADDING * 2,
+        );
+        writeStoredExecutionPlansRailPosition(next);
+        return next;
+      });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', finishDrag);
+  }, [railPosition]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -350,8 +419,32 @@ export function BoardExecutionPlansPanel({
 
   return (
     <div className={styles.railShell}>
-      <div className={panelClass}>
+      <div
+        className={[
+          panelClass,
+          railEnterAnimation ? styles.railPanelEnter : '',
+          railDragging ? styles.railPanelDragging : '',
+        ].filter(Boolean).join(' ')}
+        onAnimationEnd={() => setRailEnterAnimation(false)}
+        style={{
+          left: railPosition.x,
+          top: railPosition.y,
+          width: EXECUTION_PLANS_RAIL_WIDTH,
+          height: panelHeight,
+        }}
+      >
         <div className={styles.header}>
+          <button
+            type="button"
+            className={[
+              styles.dragHandle,
+              railDragging ? styles.dragHandleActive : '',
+            ].filter(Boolean).join(' ')}
+            aria-label="Move execution plans panel"
+            onMouseDown={handleRailDragMouseDown}
+          >
+            <GripHorizontal size={14} aria-hidden />
+          </button>
           <div className={styles.headerLeft}>
             {mode !== 'list' && (
               <button className={styles.backBtn} onClick={backToList} aria-label="Back to plans">

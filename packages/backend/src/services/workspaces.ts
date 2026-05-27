@@ -218,8 +218,12 @@ export async function ensureAgentGroupForWorkspace(
   if (!workspace) throw new Error('Workspace not found');
 
   if (groupId) {
+    const group = store.getById('agentGroups', groupId);
+    if (!group) {
+      throw new Error('Agent group not found');
+    }
     if (!workspace.agentGroupIds.includes(groupId)) {
-      await updateWorkspaceAgentGroupIds(workspace, [...workspace.agentGroupIds, groupId]);
+      throw new Error('Agent group is not assigned to this workspace');
     }
     return groupId;
   }

@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { env } from '../config/env.js';
+import { ensureBackendLocalConversationSubfolderWorkspace } from './agent-workspace-local-materialization.js';
 import {
-  ensureConversationSubfolderWorkspace,
   resolveSubfolderProcessCwd,
 } from './agent-workspaces.js';
 
@@ -38,22 +39,35 @@ describe('resolveSubfolderProcessCwd', () => {
   });
 });
 
-describe('ensureConversationSubfolderWorkspace', () => {
+describe('ensureBackendLocalConversationSubfolderWorkspace', () => {
   let tmp: string;
   let repoRoot: string;
   let agentRoot: string;
   let convDir: string;
+  let originalSameHostGate: boolean;
 
   beforeEach(() => {
+    originalSameHostGate = env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM;
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-conv-ws-'));
     repoRoot = path.join(tmp, 'repo');
     agentRoot = path.join(repoRoot, '.openwork', 'agents', 'test-agent');
     fs.mkdirSync(agentRoot, { recursive: true });
     convDir = path.join(repoRoot, 'conversations', SAMPLE_ID);
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM = true;
   });
 
   afterEach(() => {
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM = originalSameHostGate;
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('refuses backend-local materialization in hosted mode', () => {
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM = false;
+
+    expect(() =>
+      ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID),
+    ).toThrow(/disabled in hosted mode/i);
+    expect(fs.existsSync(convDir)).toBe(false);
   });
 
   it('creates conversation directory, materializes instruction markdown, and symlinks shared directories', () => {
@@ -71,7 +85,7 @@ describe('ensureConversationSubfolderWorkspace', () => {
     fs.mkdirSync(path.join(agentRoot, 'docs'));
     fs.mkdirSync(path.join(agentRoot, 'memory'));
 
-    ensureConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
+    ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
 
     expect(fs.existsSync(convDir)).toBe(true);
     const agentsContent = fs.readFileSync(path.join(convDir, 'AGENTS.md'), 'utf-8');
@@ -105,7 +119,7 @@ describe('ensureConversationSubfolderWorkspace', () => {
     fs.writeFileSync(path.join(agentRoot, 'CLAUDE.MD'), 'x', 'utf-8');
     fs.mkdirSync(path.join(agentRoot, 'skills'));
 
-    ensureConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
+    ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
 
     expect(fs.existsSync(path.join(convDir, 'CLAUDE.MD'))).toBe(true);
     expect(fs.existsSync(path.join(convDir, 'skills'))).toBe(true);
@@ -121,8 +135,8 @@ describe('ensureConversationSubfolderWorkspace', () => {
     );
     fs.mkdirSync(path.join(agentRoot, 'skills'));
 
-    ensureConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
-    ensureConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
+    ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
+    ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
 
     expect(fs.readFileSync(path.join(convDir, 'CLAUDE.MD'), 'utf-8')).toContain(
       `Default workspace behavior: - Work in \`${path.resolve(convDir)}/\` by default for commands and file operations.`,
@@ -138,7 +152,7 @@ describe('ensureConversationSubfolderWorkspace', () => {
     fs.mkdirSync(convDir, { recursive: true });
     fs.symlinkSync('wrong', path.join(convDir, 'CLAUDE.MD'));
 
-    ensureConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
+    ensureBackendLocalConversationSubfolderWorkspace(agentRoot, repoRoot, SAMPLE_ID);
 
     expect(fs.lstatSync(path.join(convDir, 'CLAUDE.MD')).isFile()).toBe(true);
     expect(fs.readFileSync(path.join(convDir, 'CLAUDE.MD'), 'utf-8')).toContain(

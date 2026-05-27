@@ -4,6 +4,13 @@ const STORAGE_KEY = 'openwork:feature-flags:v1';
 const CHANGE_EVENT = 'openwork:feature-flags-change';
 
 const DEVTOOLS_DESIGN_VARIANTS = ['floating', 'dock'] as const;
+const MESSAGE_SEARCH_SENDER_STYLES = [
+  'inline-text',
+  'inbox-prefix',
+  'badge',
+  'accent-bar',
+  'role-dot',
+] as const;
 
 export type FeatureFlagOption = {
   value: string;
@@ -17,6 +24,14 @@ export type FeatureFlagDefinition =
       description: string;
       type: 'select';
       defaultValue: DevtoolsDesignVariant;
+      options: FeatureFlagOption[];
+    }
+  | {
+      key: 'agentChat.messageSearchSenderStyle';
+      label: string;
+      description: string;
+      type: 'select';
+      defaultValue: MessageSearchSenderStyle;
       options: FeatureFlagOption[];
     }
   | {
@@ -36,9 +51,11 @@ export type FeatureFlagDefinition =
     };
 
 export type DevtoolsDesignVariant = (typeof DEVTOOLS_DESIGN_VARIANTS)[number];
+export type MessageSearchSenderStyle = (typeof MESSAGE_SEARCH_SENDER_STYLES)[number];
 
 export type FeatureFlagValues = {
   'devtools.designVariant': DevtoolsDesignVariant;
+  'agentChat.messageSearchSenderStyle': MessageSearchSenderStyle;
   'executionPlans.boardDragIn': boolean;
   'executionPlans.selectionToolbar': boolean;
   'executionPlans.columnToLayer': boolean;
@@ -51,6 +68,7 @@ export type FeatureFlagValues = {
 
 export const defaultFeatureFlags: FeatureFlagValues = {
   'devtools.designVariant': 'floating',
+  'agentChat.messageSearchSenderStyle': 'inline-text',
   'executionPlans.boardDragIn': false,
   'executionPlans.selectionToolbar': false,
   'executionPlans.columnToLayer': false,
@@ -71,6 +89,20 @@ export const featureFlagDefinitions: FeatureFlagDefinition[] = [
     options: [
       { value: 'floating', label: 'Floating' },
       { value: 'dock', label: 'Docked' },
+    ],
+  },
+  {
+    key: 'agentChat.messageSearchSenderStyle',
+    label: 'Message search sender style',
+    description: 'How agent chat sidebar search results indicate user vs agent messages.',
+    type: 'select',
+    defaultValue: 'inline-text',
+    options: [
+      { value: 'inline-text', label: 'Inline text' },
+      { value: 'inbox-prefix', label: 'Inbox prefix' },
+      { value: 'badge', label: 'Badge pill' },
+      { value: 'accent-bar', label: 'Accent bar' },
+      { value: 'role-dot', label: 'Role dot' },
     ],
   },
   {
@@ -166,6 +198,11 @@ function readStoredFlags(): Partial<FeatureFlagValues> {
     const designVariant = parsed['devtools.designVariant'];
     if (isOneOf(designVariant, DEVTOOLS_DESIGN_VARIANTS)) {
       flags['devtools.designVariant'] = designVariant;
+    }
+
+    const messageSearchSenderStyle = parsed['agentChat.messageSearchSenderStyle'];
+    if (isOneOf(messageSearchSenderStyle, MESSAGE_SEARCH_SENDER_STYLES)) {
+      flags['agentChat.messageSearchSenderStyle'] = messageSearchSenderStyle;
     }
 
     const booleanKeys = [

@@ -96,18 +96,27 @@ function makeOpenSocket() {
 
 function addRunner(runnerId: string, ws = makeOpenSocket(), caps?: Partial<RunnerCapabilities>) {
   const now = new Date().toISOString();
+  const supportedProviders = caps?.supportedProviders ?? ['codex'];
   const capabilities: RunnerCapabilities = {
     protocolVersion: RUNNER_PROTOCOL_VERSION,
     os: 'test',
     arch: 'test',
     runnerVersion: 'test',
-    supportedAgentKinds: ['dev_agent'],
-    supportedProviders: ['codex'],
+    supportedProviders,
     supportsCancellation: true,
     supportsArtifacts: true,
+    agentInventory: {
+      protocolVersion: 1,
+      revision: 'matrix-inventory',
+      advertisedAt: now,
+      ttlMs: 120_000,
+      workspaceRoots: [{ id: 'default', path: '/runner/root', scope: 'workspace', writable: true }],
+      fileOperations: ['browse', 'list_agent_files'],
+      agents: [],
+    },
     policy: {
       workspaceRootRequired: false,
-      allowedTools: ['codex'],
+      allowedTools: supportedProviders,
       approvalModes: ['dangerous'],
       envAccess: true,
       secretAccess: true,
@@ -120,6 +129,9 @@ function addRunner(runnerId: string, ws = makeOpenSocket(), caps?: Partial<Runne
     id: runnerId,
     userId: 'user-matrix',
     workspaceId: 'ws-matrix',
+    connectionScope: 'account' as const,
+    ownerAccountId: 'user-matrix',
+    boundWorkspaceId: 'ws-matrix',
     name: 'matrix-runner',
     ws,
     capabilities,
@@ -229,7 +241,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
         intent: {
           runId: ids.run,
           agentId: ids.agent,
-          agentKind: 'dev_agent',
           provider,
           modelPreference: { displayName: provider, modelId: `${provider}-model-id` },
           prompt: `matrix prompt ${provider}`,
@@ -313,7 +324,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
 
       logMatrixRow({
         provider,
-        agentKind: 'dev_agent',
         disposition: 'tested',
         reason: 'runner job_offer → final_message → completed → completeAgentRun → automatic card comment + HTTP GET contract',
         evidence: {
@@ -328,7 +338,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
   it('matrix: codex baseline is out of scope for this file (documented skip)', () => {
     logMatrixRow({
       provider: 'codex',
-      agentKind: 'dev_agent',
       disposition: 'skipped',
       reason:
         'Codex remote path is covered by agent-runner-protocol.contract.test.ts and runner-split-smoke.test.ts; this matrix focuses on non-Codex RunnerProvider values only.',
@@ -350,8 +359,7 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
         workspaceId: 'ws-matrix',
         intent: {
           runId: 'qa-matrix-run-no-runner',
-          agentId: 'qa-matrix-agent-no-runner',
-          agentKind: 'dev_agent',
+          agentId: 'agent-1',
           provider: 'opencode',
           modelPreference: { displayName: 'opencode' },
           prompt: 'x',
@@ -369,7 +377,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
     ).rejects.toThrow(/No remote agent runner is connected/i);
     logMatrixRow({
       provider: 'opencode',
-      agentKind: 'dev_agent',
       disposition: 'tested_negative_no_runner',
       reason:
         'With zero connected runners, dispatchRemoteAgentJob must reject with an explicit connectivity message instead of falling back to a hidden local executor.',
@@ -387,8 +394,7 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
         workspaceId: 'ws-matrix',
         intent: {
           runId: 'qa-matrix-run-mismatch',
-          agentId: 'qa-matrix-agent-mismatch',
-          agentKind: 'dev_agent',
+          agentId: 'agent-1',
           provider: 'qwen',
           modelPreference: { displayName: 'qwen' },
           prompt: 'x',
@@ -407,7 +413,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
     expect(ws.send).not.toHaveBeenCalled();
     logMatrixRow({
       provider: 'qwen',
-      agentKind: 'dev_agent',
       disposition: 'unsupported_runner_configuration',
       reason:
         'Connected runner advertised supportedProviders without qwen; dispatch must fail with install/configure guidance instead of silently picking an incompatible runner.',
@@ -460,7 +465,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
       intent: {
         runId: ids.run,
         agentId: ids.agent,
-        agentKind: 'dev_agent',
         provider: 'claude',
         modelPreference: { displayName: 'Claude' },
         prompt: 'hi',
@@ -498,7 +502,6 @@ describe('non-Codex runner regression matrix (protocol → run → card comment 
     expect(String(comment?.content ?? '')).toMatch(/Agent run completed without a final response/i);
     logMatrixRow({
       provider: 'claude',
-      agentKind: 'dev_agent',
       disposition: 'tested_negative_missing_final_output',
       reason:
         'Non-Codex/Codex-equivalent completion hygiene: empty protocol completion must not mark run clean without extractable final answer; card receives automatic error comment.',

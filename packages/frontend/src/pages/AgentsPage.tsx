@@ -1,6 +1,7 @@
 import {
   type ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
+  type CSSProperties,
   type Dispatch,
   type DragEvent as ReactDragEvent,
   Fragment,
@@ -107,6 +108,13 @@ import {
   type SavedAvatarPreset,
   type SavedColorPreset,
 } from '../components/AgentAvatar';
+import { ProjectRunnersPanel } from '../components/ProjectRunnersPanel';
+import {
+  buildRunnerListQuery,
+  type RunnerConnection,
+} from '../lib/runner-connections';
+import { MessageSearchSnippet } from '../lib/message-search-snippet';
+import { useAuth } from '../stores/useAuth';
 import { useWorkspace } from '../stores/WorkspaceContext';
 import styles from './AgentsPage.module.css';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -123,6 +131,7 @@ import {
   toQueueCount,
   RUN_EVENT_DETAIL_PREVIEW_MAX,
   type AgentChatRunEventSummary,
+  type AgentConversationRunSummary,
   type AgentConversationChatView,
 } from './agent-chat-view-model';
 
@@ -156,12 +165,7 @@ interface AgentDefaultsResponse {
   defaultAgentKeyId: string | null;
 }
 
-interface RunnerDevice {
-  id: string;
-  workspaceId: string;
-  status: 'online' | 'offline' | 'busy' | 'stale' | 'revoked';
-  revoked: boolean;
-}
+type RunnerDevice = RunnerConnection;
 
 interface ChatComposerSettingsResponse {
   autoAttachOversizedPasteAsTextFile: boolean;
@@ -193,7 +197,17 @@ interface Agent {
   preset: string;
   presetParameters: Record<string, string>;
   repositoryRoot: string | null;
-  workspacePath: string;
+  repositoryRootOrigin?: 'runner_local' | 'backend_local_legacy' | 'unknown' | null;
+  repositoryRootRunnerId?: string | null;
+  repositoryRootVerifiedAt?: string | null;
+  repositoryRootRepairRequired?: boolean;
+  workspacePath: string | null;
+  executableOwnership?: {
+    state: 'runner' | 'legacy_import_required' | 'unavailable';
+    runnerId: string | null;
+    workspaceId: string | null;
+    reason: string;
+  };
   status: 'active' | 'inactive' | 'error';
   apiKeyId: string;
   apiKeyName: string;
@@ -292,7 +306,7 @@ interface MessageSearchResult {
   snippet: string;
   matchStart: number;
   matchLength: number;
-  direction: string;
+  direction: 'inbound' | 'outbound';
   createdAt: string;
 }
 
@@ -502,8 +516,7 @@ export function isEditableChatMessage(message: ChatMessage): boolean {
   ) {
     return false;
   }
-  const type = message.type ?? 'text';
-  return type === 'text' || type === 'image' || type === 'file';
+  return true;
 }
 
 function readAgentChatDraft(): string {
@@ -835,11 +848,9 @@ export const ReplyComposer = memo(function ReplyComposer({
       ? 'Wait for attachments to finish uploading'
       : editingSubmitting
         ? 'Wait for the edit to finish saving'
-        : !isEditing && streaming
-          ? 'Wait for the active run to finish before adding attachments'
-          : attachmentLimitReached
-            ? `Remove an attachment first. Maximum is ${MAX_STAGED_ATTACHMENTS}`
-            : null;
+        : attachmentLimitReached
+          ? `Remove an attachment first. Maximum is ${MAX_STAGED_ATTACHMENTS}`
+          : null;
   const sendDisabledReason = composerDisabled
     ? disabledReason
     : uploading
@@ -1067,7 +1078,6 @@ export const ReplyComposer = memo(function ReplyComposer({
     if (!prompt && !hasAttachments) return;
 
     if (hasAttachments) {
-      if (streaming) return;
       setUploading(true);
       try {
         await onSendAttachments(
@@ -1408,7 +1418,6 @@ export const ReplyComposer = memo(function ReplyComposer({
                   composerDisabled ||
                   uploading ||
                   editingSubmitting ||
-                  (!isEditing && streaming) ||
                   attachmentLimitReached
                 }
                 aria-label="Attach images"
@@ -1429,7 +1438,6 @@ export const ReplyComposer = memo(function ReplyComposer({
                   composerDisabled ||
                   uploading ||
                   editingSubmitting ||
-                  (!isEditing && streaming) ||
                   attachmentLimitReached
                 }
                 aria-label="Attach files"
@@ -1844,16 +1852,69 @@ function getRevealInFileManagerLabel(): string {
   return 'Reveal in file manager';
 }
 
+function isRepositoryRootVerifiedOnRunner(agent: Agent): boolean {
+  return (
+    Boolean(agent.repositoryRoot) &&
+    agent.repositoryRootOrigin === 'runner_local' &&
+    Boolean(agent.repositoryRootRunnerId) &&
+    Boolean(agent.repositoryRootVerifiedAt) &&
+    agent.repositoryRootRepairRequired !== true
+  );
+}
+
+function getRepositoryRootRepairReason(agent: Agent): string | null {
+  if (!agent.repositoryRoot) return null;
+  if (isRepositoryRootVerifiedOnRunner(agent)) return null;
+  return 'Verify this repository folder on a paired runner before revealing or using it for jobs.';
+}
+
+function getAgentFolderRevealDisabledReason(
+  agent: Agent,
+  runnerFilesystemDisabledReason?: string | null,
+): string | null {
+  if (runnerFilesystemDisabledReason) return runnerFilesystemDisabledReason;
+  if (agent.repositoryRoot && !isRepositoryRootVerifiedOnRunner(agent)) {
+    return 'Verify the repository folder on a paired runner before revealing the agent folder.';
+  }
+  return null;
+}
+
+function getAgentFolderDisplayPath(agent: Agent): string {
+  if (agent.repositoryRoot) {
+    return isRepositoryRootVerifiedOnRunner(agent)
+      ? 'Runner agent folder'
+      : 'Repository verification required';
+  }
+  if (agent.executableOwnership?.state === 'runner') return 'Runner no-repository workspace';
+  if (agent.executableOwnership?.state === 'legacy_import_required') {
+    return 'Runner workspace import required';
+  }
+  return 'Runner workspace not prepared';
+}
+
+function getRepositoryRootRevealDisabledReason(
+  agent: Agent,
+  runnerFilesystemDisabledReason?: string | null,
+): string | null {
+  return runnerFilesystemDisabledReason ?? getRepositoryRootRepairReason(agent);
+}
+
 function AgentSettingsPathRow({
   path,
   onReveal,
   revealLabel = getRevealInFileManagerLabel(),
+  disabledReason,
 }: {
   path: string;
   onReveal: () => void | Promise<void>;
   revealLabel?: string;
+  disabledReason?: string | null;
 }) {
   const handleReveal = () => {
+    if (disabledReason) {
+      toast.error(disabledReason);
+      return;
+    }
     void onReveal();
   };
 
@@ -1864,6 +1925,7 @@ function AgentSettingsPathRow({
           type="button"
           className={styles.settingsPathFieldPath}
           onClick={handleReveal}
+          aria-disabled={Boolean(disabledReason)}
           aria-label={`${revealLabel}: ${path}`}
         >
           <span className={styles.settingsPathText}>{path}</span>
@@ -1875,6 +1937,7 @@ function AgentSettingsPathRow({
           type="button"
           className={styles.settingsPathFieldAction}
           onClick={handleReveal}
+          aria-disabled={Boolean(disabledReason)}
           aria-label={revealLabel}
         >
           <FolderOpen size={14} />
@@ -1902,10 +1965,10 @@ function supportsThinkingLevel(model: string): boolean {
 function getModelVariantHint(model: string): string {
   const normalized = model.toLowerCase();
   if (normalized === 'cursor') {
-    return 'Curated from the installed Cursor CLI model list on this server';
+    return 'Curated from the installed Cursor CLI model list for the native runner';
   }
   if (normalized === 'opencode') {
-    return 'Uses provider/model IDs. Run opencode models on the server for the full list';
+    return 'Uses provider/model IDs. Run opencode models on the native runner for the full list';
   }
   return 'Override the default model used by the CLI';
 }
@@ -1921,7 +1984,7 @@ function getCliInfoForModel(
 
 function getCliUnavailableMessage(cliInfo: CliInfo): string {
   return (
-    `${cliInfo.name} CLI is not installed or not available on this server ` +
+    `${cliInfo.name} CLI is not installed or not available to the native runner ` +
     `(expected command: ${cliInfo.command}). Install it from ${cliInfo.downloadUrl}.`
   );
 }
@@ -2317,22 +2380,6 @@ function areConversationBootstrapRequestsEqual(
   return a?.agentId === b?.agentId && a?.conversationId === b?.conversationId;
 }
 
-function renderMessageSearchSnippet(result: MessageSearchResult) {
-  const start = Math.max(0, result.matchStart);
-  const end = Math.min(result.snippet.length, start + Math.max(0, result.matchLength));
-  const before = result.snippet.slice(0, start);
-  const match = result.snippet.slice(start, end);
-  const after = result.snippet.slice(end);
-
-  return (
-    <>
-      {before}
-      {match ? <mark className={styles.messageSearchMark}>{match}</mark> : null}
-      {after}
-    </>
-  );
-}
-
 const RUN_HANDOFF_MS = 6000;
 const SCROLL_BOTTOM_THRESHOLD_PX = 80;
 
@@ -2441,17 +2488,24 @@ function flattenCanonicalChatViewMessages(view: AgentConversationChatView): Chat
 
 /* ── Agent Files sub-component ── */
 
-function agentFileEndpoints(agentId: string) {
+function withWorkspaceQuery(url: string, workspaceId?: string | null) {
+  if (!workspaceId) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}workspaceId=${encodeURIComponent(workspaceId)}`;
+}
+
+function agentFileEndpoints(agentId: string, workspaceId?: string | null, noRepository = false) {
   const enc = encodeURIComponent;
   return {
-    list: (dirPath: string) => `/agents/${agentId}/files?path=${enc(dirPath)}`,
-    createFolder: `/agents/${agentId}/files/folders`,
-    upload: `/agents/${agentId}/files/upload`,
-    download: (filePath: string) => `/agents/${agentId}/files/download?path=${enc(filePath)}`,
-    readTextContent: (filePath: string) => `/agents/${agentId}/files/content?path=${enc(filePath)}`,
-    writeTextContent: `/agents/${agentId}/files/content`,
-    delete: (entryPath: string) => `/agents/${agentId}/files?path=${enc(entryPath)}`,
-    reveal: `/agents/${agentId}/files/reveal`,
+    list: (dirPath: string) => withWorkspaceQuery(`/agents/${agentId}/files?path=${enc(dirPath)}`, workspaceId),
+    createFolder: withWorkspaceQuery(`/agents/${agentId}/files/folders`, workspaceId),
+    upload: withWorkspaceQuery(`/agents/${agentId}/files/upload`, workspaceId),
+    download: (filePath: string) => withWorkspaceQuery(`/agents/${agentId}/files/download?path=${enc(filePath)}`, workspaceId),
+    readTextContent: (filePath: string) => withWorkspaceQuery(`/agents/${agentId}/files/content?path=${enc(filePath)}`, workspaceId),
+    writeTextContent: withWorkspaceQuery(`/agents/${agentId}/files/content`, workspaceId),
+    delete: (entryPath: string) => withWorkspaceQuery(`/agents/${agentId}/files?path=${enc(entryPath)}`, workspaceId),
+    reveal: noRepository
+      ? withWorkspaceQuery(`/runner-filesystem/reveal-agent-file?agentId=${enc(agentId)}`, workspaceId)
+      : undefined,
     rename: `/agents/${agentId}/files/rename`,
   };
 }
@@ -2470,9 +2524,43 @@ function skillFileEndpoints(skillId: string) {
   };
 }
 
-function AgentFiles({ agentId }: { agentId: string }) {
+interface AgentFilesStatus {
+  mode: 'no_repository' | 'repository';
+  executableOwnership: {
+    state: 'runner' | 'legacy_import_required' | 'unavailable';
+    runnerId: string | null;
+    workspaceId: string | null;
+    reason: string;
+  };
+  runner?: {
+    state: 'available' | 'unavailable';
+    runnerId?: string;
+    workspaceId?: string;
+    workspacePath?: string;
+    message?: string;
+  };
+  legacy: {
+    exists: boolean;
+    fileCount: number;
+    importableFileCount: number;
+    skippedCount: number;
+    totalBytes: number;
+  };
+}
+
+function AgentFiles({
+  agentId,
+  workspaceId,
+  noRepository,
+}: {
+  agentId: string;
+  workspaceId?: string | null;
+  noRepository: boolean;
+}) {
   const [showFsBrowser, setShowFsBrowser] = useState(false);
   const [refKey, setRefKey] = useState(0);
+  const [status, setStatus] = useState<AgentFilesStatus | null>(null);
+  const [importingLegacy, setImportingLegacy] = useState(false);
 
   const [skillsPickerOpen, setSkillsPickerOpen] = useState(false);
   const [allSkills, setAllSkills] = useState<{ id: string; name: string; description: string }[]>(
@@ -2482,7 +2570,29 @@ function AgentFiles({ agentId }: { agentId: string }) {
   const [skillsLoadedForAgentId, setSkillsLoadedForAgentId] = useState<string | null>(null);
   const skillsLoaded = skillsLoadedForAgentId === agentId;
 
-  const endpoints = useMemo(() => agentFileEndpoints(agentId), [agentId]);
+  const endpoints = useMemo(
+    () => agentFileEndpoints(agentId, workspaceId, noRepository),
+    [agentId, noRepository, workspaceId],
+  );
+
+  const loadFileStatus = useCallback(async () => {
+    if (!noRepository) {
+      setStatus(null);
+      return;
+    }
+    try {
+      const data = await api<AgentFilesStatus>(
+        withWorkspaceQuery(`/agents/${agentId}/files/status`, workspaceId),
+      );
+      setStatus(data);
+    } catch {
+      setStatus(null);
+    }
+  }, [agentId, noRepository, workspaceId]);
+
+  useEffect(() => {
+    void loadFileStatus();
+  }, [loadFileStatus, refKey]);
 
   const loadSkills = useCallback(async () => {
     const [allData, agentData] = await Promise.all([
@@ -2561,9 +2671,59 @@ function AgentFiles({ agentId }: { agentId: string }) {
     }
   }
 
+  async function handleImportLegacyFiles() {
+    setImportingLegacy(true);
+    try {
+      const data = await api<{
+        result: { importedCount: number; skippedCount: number; totalBytes: number };
+      }>(withWorkspaceQuery(`/agents/${agentId}/files/import-legacy`, workspaceId), {
+        method: 'POST',
+      });
+      toast.success(`${data.result.importedCount} legacy files imported`);
+      setRefKey((k) => k + 1);
+      await loadFileStatus();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to import legacy files');
+    } finally {
+      setImportingLegacy(false);
+    }
+  }
+
   return (
     <div className={styles.filesPanel}>
       {/* Enabled skills */}
+      {noRepository && status?.legacy.exists && status.legacy.importableFileCount > 0 && (
+        <div className={styles.runnerBanner}>
+          <div className={styles.runnerBannerIcon}>
+            <HardDrive size={16} />
+          </div>
+          <div className={styles.runnerBannerBody}>
+            <div className={styles.runnerBannerTitle}>Legacy backend files available</div>
+            <div className={styles.runnerBannerText}>
+              {status.legacy.importableFileCount} file{status.legacy.importableFileCount === 1 ? '' : 's'} can be imported into the runner workspace. Runner-owned files are used for execution.
+            </div>
+          </div>
+          <div className={styles.runnerBannerActions}>
+            <ReasonedActionButton
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => void handleImportLegacyFiles()}
+              disabled={importingLegacy || status?.runner?.state === 'unavailable'}
+              disabledReason={
+                importingLegacy
+                  ? 'Importing legacy files...'
+                  : status?.runner?.state === 'unavailable'
+                    ? status.runner.message || 'A paired runner is required.'
+                    : undefined
+              }
+            >
+              <Download size={14} />
+              {importingLegacy ? 'Importing...' : 'Import'}
+            </ReasonedActionButton>
+          </div>
+        </div>
+      )}
       {skillsLoaded && (
         <div className={styles.filesSkillsBar}>
           <div className={styles.filesSkillsLabel}>
@@ -2598,10 +2758,12 @@ function AgentFiles({ agentId }: { agentId: string }) {
           rootLabel="Files"
           rootIcon={HardDrive}
           extraToolbarButtons={
-            <Button size="sm" variant="ghost" onClick={() => setShowFsBrowser(true)}>
-              <Link2 size={14} />
-              Reference
-            </Button>
+            noRepository ? null : (
+              <Button size="sm" variant="ghost" onClick={() => setShowFsBrowser(true)}>
+                <Link2 size={14} />
+                Reference
+              </Button>
+            )
           }
         />
       </div>
@@ -2704,7 +2866,8 @@ function localSkillSlug(skillId: string): string {
 
 export function AgentsPage() {
   useDocumentTitle('Agents');
-  const { activeWorkspaceId, workspaces } = useWorkspace();
+  const { activeWorkspaceId, activeWorkspace, workspaces } = useWorkspace();
+  const { user } = useAuth();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2766,8 +2929,13 @@ export function AgentsPage() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [showChatLoading, setShowChatLoading] = useState(false);
-  const [runnerDevices, setRunnerDevices] = useState<RunnerDevice[]>([]);
+  const [projectRunners, setProjectRunners] = useState<RunnerDevice[]>([]);
+  const [accountRunners, setAccountRunners] = useState<RunnerDevice[]>([]);
   const [runnerLoading, setRunnerLoading] = useState(true);
+  const runnerDevices = useMemo(
+    () => [...projectRunners, ...accountRunners],
+    [accountRunners, projectRunners],
+  );
   const [activeRunDetail, setActiveRunDetail] = useState<ActiveAgentRunDetail | null>(null);
   const [chatRunDetailsById, setChatRunDetailsById] = useState<
     Record<string, ActiveAgentRunDetail>
@@ -3342,13 +3510,35 @@ export function AgentsPage() {
       ).length,
     [runnerDevicesForActiveAgent],
   );
-  const busyRunnerCount = useMemo(
-    () =>
-      runnerDevicesForActiveAgent.filter((runner) => !runner.revoked && runner.status === 'busy')
-        .length,
-    [runnerDevicesForActiveAgent],
-  );
-  const hasConnectedRunner = activeRunnerCount > 0 || busyRunnerCount > 0;
+  const runnerFilesystemState = useMemo(() => {
+    const scopedRunnerDevices = activeWorkspaceId
+      ? runnerDevices.filter((runner) => runner.workspaceId === activeWorkspaceId)
+      : runnerDevices;
+    const availableDevices = scopedRunnerDevices.filter((runner) => !runner.revoked);
+    const connected = availableDevices.filter(
+      (runner) => !runner.revoked && (runner.status === 'online' || runner.status === 'busy'),
+    );
+    if (connected.length === 0) {
+      if (availableDevices.some((runner) => runner.status === 'stale')) return 'runner_stale';
+      if (availableDevices.some((runner) => runner.status === 'offline')) return 'runner_offline';
+      return 'runner_unavailable';
+    }
+    return connected.some((runner) => runner.capabilities?.supportsFilesystem === true)
+      ? 'available'
+      : 'runner_filesystem_unsupported';
+  }, [activeWorkspaceId, runnerDevices]);
+  const runnerFilesystemDisabledReason =
+    runnerFilesystemState === 'available'
+      ? null
+      : runnerFilesystemState === 'runner_filesystem_unsupported'
+        ? 'The connected runner does not support local filesystem actions. Update and restart the runner.'
+        : runnerFilesystemState === 'runner_stale'
+          ? 'The paired runner is stale. Restart it before using local repository filesystem actions.'
+          : runnerFilesystemState === 'runner_offline'
+            ? 'The paired runner is offline. Start it before using local repository filesystem actions.'
+            : 'Connect a paired runner before using local repository filesystem actions.';
+  const [preparingRunnerWorkspaceAgentId, setPreparingRunnerWorkspaceAgentId] = useState<string | null>(null);
+  const [verifyingRepositoryRootAgentId, setVerifyingRepositoryRootAgentId] = useState<string | null>(null);
   const runnerDisabledReason = useMemo(() => {
     if (streaming) return null;
     if (activeAgent && activeAgentWorkspaceIds.length === 0) {
@@ -3356,18 +3546,28 @@ export function AgentsPage() {
     }
     if (activeRunnerCount > 0) return null;
     if (runnerLoading && runnerDevices.length === 0) return 'Checking runner connection...';
+    const hasProjectRunners = projectRunners.some((runner) => !runner.revoked);
+    const hasAccountRunners = accountRunners.some((runner) => !runner.revoked);
+    if (hasProjectRunners || hasAccountRunners) {
+      return 'Paired runners are offline or stale. Start a project runner or your account runner before sending messages.';
+    }
     return activeWorkspaceId
-      ? 'Connect an OpenWork runner for this workspace before sending agent messages.'
+      ? 'Connect a project runner (shared) or an account runner (personal) for this workspace before sending agent messages.'
       : 'Connect an OpenWork runner for this agent workspace before sending agent messages.';
   }, [
     activeAgent,
     activeAgentWorkspaceIds.length,
+    accountRunners,
     activeRunnerCount,
     activeWorkspaceId,
+    projectRunners,
     runnerDevices.length,
     runnerLoading,
     streaming,
   ]);
+  const runnerConnectDisabledReason = !activeWorkspaceId
+    ? 'Open a workspace before connecting a runner.'
+    : null;
   const isNearMessagesBottom = useCallback((element: HTMLDivElement) => {
     return (
       element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX
@@ -3429,23 +3629,43 @@ export function AgentsPage() {
 
   const fetchCliStatus = useCallback(async () => {
     try {
-      const data = await api<{ clis: CliInfo[] }>('/agents/cli-status');
+      const qs = activeWorkspaceId ? `?workspaceId=${activeWorkspaceId}` : '';
+      const data = await api<{ clis: CliInfo[] }>(`/agents/cli-status${qs}`);
       setCliStatus(data.clis);
       return data.clis;
     } catch {
       return [];
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   const fetchRunnerDevices = useCallback(async () => {
+    if (!activeWorkspaceId) {
+      setProjectRunners([]);
+      setAccountRunners([]);
+      setRunnerLoading(false);
+      return [];
+    }
     setRunnerLoading(true);
     try {
-      const query = activeWorkspaceId ? `?workspaceId=${activeWorkspaceId}` : '';
-      const data = await api<{ entries: RunnerDevice[] }>(`/agent-runners${query}`);
-      setRunnerDevices(data.entries);
-      return data.entries;
+      const projectQuery = buildRunnerListQuery({
+        workspaceId: activeWorkspaceId,
+        connectionScope: 'project',
+      });
+      const accountQuery = buildRunnerListQuery({
+        workspaceId: activeWorkspaceId,
+        connectionScope: 'account',
+      });
+      const [projectData, accountData] = await Promise.all([
+        api<{ entries: RunnerDevice[] }>(`/agent-runners${projectQuery}`),
+        api<{ entries: RunnerDevice[] }>(`/agent-runners${accountQuery}`),
+      ]);
+      setProjectRunners(projectData.entries);
+      setAccountRunners(accountData.entries);
+      return [...projectData.entries, ...accountData.entries];
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Failed to load runners');
+      setProjectRunners([]);
+      setAccountRunners([]);
       return [];
     } finally {
       setRunnerLoading(false);
@@ -4149,6 +4369,19 @@ export function AgentsPage() {
     };
   }, [messages, queueItems, scrollToBottom, streaming]);
 
+  const scrollToMessage = useCallback((messageId: string) => {
+    setHighlightedMessageId(messageId);
+    const container = messagesRef.current;
+    if (!container) return;
+    const escapedMessageId =
+      typeof window.CSS?.escape === 'function' ? window.CSS.escape(messageId) : messageId;
+    const target = container.querySelector<HTMLElement>(`[data-message-id="${escapedMessageId}"]`);
+    if (!target) return;
+    forceScrollToBottomRef.current = false;
+    shouldStickToBottomRef.current = false;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, []);
+
   useEffect(() => {
     if (!activeAgentId || !activeConvId) return;
     void markConversationRead(activeAgentId, activeConvId);
@@ -4452,36 +4685,136 @@ export function AgentsPage() {
   }, []);
 
   const revealConversationFolder = useCallback(async (agentId: string, conversationId: string) => {
+    const agent = agents.find((candidate) => candidate.id === agentId);
+    if (!agent) return;
     try {
-      await api(`/agents/${agentId}/chat/conversations/${conversationId}/reveal-folder`, {
+      const prepared = await api<{ path: string }>('/runner-filesystem/prepare-conversation-workspace', {
         method: 'POST',
+        body: JSON.stringify({
+          agentId,
+          conversationId,
+          workspaceId: activeWorkspaceId || undefined,
+        }),
+      });
+      await api('/runner-filesystem/reveal', {
+        method: 'POST',
+        body: JSON.stringify({
+          path: prepared.path,
+          workspaceId: activeWorkspaceId || undefined,
+        }),
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Failed to open conversation folder');
     }
-  }, []);
+  }, [activeWorkspaceId, agents]);
 
   const revealLocalPathInFileManager = useCallback(async (diskPath: string) => {
     try {
-      await api('/storage/reveal-local', {
+      await api('/runner-filesystem/reveal', {
         method: 'POST',
-        body: JSON.stringify({ path: diskPath }),
+        body: JSON.stringify({ path: diskPath, workspaceId: activeWorkspaceId || undefined }),
       });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Failed to open folder');
+      toast.error(err instanceof Error ? err.message : 'Failed to open folder');
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
-  const revealAgentWorkspaceInFileManager = useCallback(async (agentId: string) => {
+  const revealAgentWorkspaceInFileManager = useCallback(async (agent: Agent) => {
+    if (agent.repositoryRoot && !isRepositoryRootVerifiedOnRunner(agent)) {
+      toast.error(getRepositoryRootRepairReason(agent) ?? 'Verify the repository folder on a paired runner first.');
+      return;
+    }
     try {
-      await api(`/agents/${agentId}/files/reveal`, {
+      if (!agent.repositoryRoot) {
+        const prepared = await api<{ path: string }>('/runner-filesystem/prepare-agent-workspace', {
+          method: 'POST',
+          body: JSON.stringify({
+            agentId: agent.id,
+            workspaceId: activeWorkspaceId || undefined,
+          }),
+        });
+        await api('/runner-filesystem/reveal', {
+          method: 'POST',
+          body: JSON.stringify({ path: prepared.path, workspaceId: activeWorkspaceId || undefined }),
+        });
+        return;
+      }
+      const status = await api<AgentFilesStatus>(
+        withWorkspaceQuery(`/agents/${agent.id}/files/status`, activeWorkspaceId),
+      );
+      const workspacePath = status.runner?.workspacePath;
+      if (!workspacePath) {
+        throw new Error(status.runner?.message || 'Runner agent folder is not available');
+      }
+      await api('/runner-filesystem/reveal', {
         method: 'POST',
-        body: JSON.stringify({ path: '/' }),
+        body: JSON.stringify({
+          path: workspacePath,
+          workspaceId: activeWorkspaceId || undefined,
+        }),
       });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Failed to open folder');
     }
-  }, []);
+  }, [activeWorkspaceId]);
+
+  const prepareRunnerAgentWorkspace = useCallback(async (agent: Agent) => {
+    if (agent.repositoryRoot) return;
+    if (runnerFilesystemDisabledReason) {
+      toast.error(runnerFilesystemDisabledReason);
+      return;
+    }
+    try {
+      setPreparingRunnerWorkspaceAgentId(agent.id);
+      const result = await api<{ path: string; conversationPaths?: string[] }>('/runner-filesystem/prepare-agent-workspace', {
+        method: 'POST',
+        body: JSON.stringify({
+          agentId: agent.id,
+          workspaceId: activeWorkspaceId || undefined,
+        }),
+      });
+      const conversationCount = result.conversationPaths?.length ?? 0;
+      toast.success(
+        conversationCount > 0
+          ? `Runner workspace ready: ${result.path} (${conversationCount} chat folder${conversationCount === 1 ? '' : 's'})`
+          : `Runner workspace ready: ${result.path}`,
+      );
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to prepare runner workspace');
+    } finally {
+      setPreparingRunnerWorkspaceAgentId((current) => (current === agent.id ? null : current));
+    }
+  }, [activeWorkspaceId, runnerFilesystemDisabledReason]);
+
+  const verifyRepositoryRootOnRunner = useCallback(async (agent: Agent) => {
+    if (!agent.repositoryRoot) return;
+    if (runnerFilesystemDisabledReason) {
+      toast.error(runnerFilesystemDisabledReason);
+      return;
+    }
+    try {
+      setVerifyingRepositoryRootAgentId(agent.id);
+      const result = await api<{ path: string; runnerId: string }>(
+        '/runner-filesystem/validate-repository-root',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            path: agent.repositoryRoot,
+            agentId: agent.id,
+            workspaceId: activeWorkspaceId || undefined,
+          }),
+        },
+      );
+      const entries = await fetchAgents();
+      const updated = entries.find((candidate) => candidate.id === agent.id);
+      if (updated) setSettingsAgent(updated);
+      toast.success(`Repository folder verified on runner: ${result.path}`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to verify repository folder');
+    } finally {
+      setVerifyingRepositoryRootAgentId((current) => (current === agent.id ? null : current));
+    }
+  }, [activeWorkspaceId, fetchAgents, runnerFilesystemDisabledReason]);
 
   const closeRenameConversation = useCallback(() => {
     if (renameConversationSaving) return;
@@ -4597,13 +4930,13 @@ export function AgentsPage() {
   }
 
   /* ── Send message ── */
-  async function stopActiveRun() {
+  async function stopActiveRun(runId?: string) {
     if (!activeAgentId || !activeConvId || stoppingRun) return;
-    if (!activeConversationRun) {
+    const stoppedRunId = runId ?? activeConversationRun?.id ?? null;
+    if (!stoppedRunId) {
       toast.error('No active run found on this branch');
       return;
     }
-    const stoppedRunId = activeConversationRun.id;
     setStoppingRun(true);
     try {
       await api(`/agent-runs/${stoppedRunId}`, { method: 'DELETE' });
@@ -4652,6 +4985,7 @@ export function AgentsPage() {
 
       const wasFirst = isFirstMessageRef.current;
       isFirstMessageRef.current = false;
+      const alreadyBusy = streaming;
 
       try {
         const fd = new FormData();
@@ -4684,8 +5018,10 @@ export function AgentsPage() {
             : [...prev, queueResponse.queueItem],
         );
 
-        beginRunHandoff(sentAgentId, sentConvId);
-        setConversationPending(sentAgentId, sentConvId, true);
+        if (!alreadyBusy) {
+          beginRunHandoff(sentAgentId, sentConvId);
+          setConversationPending(sentAgentId, sentConvId, true);
+        }
         try {
           const immediateQueuedCount = toQueueCount(queueResponse.queuedCount);
           setConvsByAgent((prev) => {
@@ -4712,7 +5048,9 @@ export function AgentsPage() {
           void fetchRunnerDevices();
           throw err;
         } finally {
-          setConversationPending(sentAgentId, sentConvId, false);
+          if (!alreadyBusy) {
+            setConversationPending(sentAgentId, sentConvId, false);
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to upload attachments';
@@ -4741,6 +5079,7 @@ export function AgentsPage() {
       setActiveConversationQueueItems,
       setOptimisticResponseParent,
       setConversationPending,
+      streaming,
     ],
   );
 
@@ -5221,10 +5560,11 @@ export function AgentsPage() {
     setPickingPresetDirectoryKey(key);
     try {
       const currentValue = form.presetParameters[key]?.trim();
-      const result = await api<{ path: string | null }>('/storage/pick-folder', {
+      const result = await api<{ path: string | null }>('/runner-filesystem/pick-folder', {
         method: 'POST',
         body: JSON.stringify({
           startPath: currentValue || undefined,
+          workspaceId: activeWorkspaceId || undefined,
         }),
       });
       if (result.path) {
@@ -5546,7 +5886,7 @@ export function AgentsPage() {
           apiKeyId: keyId,
           workspaceId: activeWorkspaceId || undefined,
           skipPermissions: form.skipPermissions,
-          groupId: form.groupId || null,
+          groupId: form.groupId || groups[0]?.id || null,
           avatarIcon: form.avatar.icon,
           avatarBgColor: form.avatar.bgColor,
           avatarLogoColor: form.avatar.logoColor,
@@ -5815,6 +6155,37 @@ export function AgentsPage() {
     }
     return byGroup;
   }, [filteredAgents]);
+  const showWorkspaceAgentSections = !activeWorkspaceId && workspaces.length > 1;
+  const workspaceAgentSections = useMemo(() => {
+    if (!showWorkspaceAgentSections) return [];
+
+    const assignedAgentIds = new Set<string>();
+    const sections = workspaces
+      .map((workspace) => {
+        const groupIds = new Set(workspace.agentGroupIds);
+        const workspaceGroups = groups.filter((group) => groupIds.has(group.id));
+        const workspaceAgents = filteredAgents.filter(
+          (agent) => agent.groupId !== null && groupIds.has(agent.groupId),
+        );
+        workspaceAgents.forEach((agent) => assignedAgentIds.add(agent.id));
+        return { id: workspace.id, name: workspace.name, groups: workspaceGroups, agents: workspaceAgents };
+      })
+      .filter((section) =>
+        search.trim() ? section.agents.length > 0 : section.groups.length > 0 || section.agents.length > 0,
+      );
+
+    const unassignedAgents = filteredAgents.filter((agent) => !assignedAgentIds.has(agent.id));
+    if (unassignedAgents.length > 0) {
+      sections.push({
+        id: '__unassigned__',
+        name: 'Unassigned',
+        groups: [],
+        agents: unassignedAgents,
+      });
+    }
+
+    return sections;
+  }, [filteredAgents, groups, search, showWorkspaceAgentSections, workspaces]);
   const handleOpenAgentContextMenu = useCallback((agentId: string, x: number, y: number) => {
     setContextMenu({ agentId, x, y });
   }, []);
@@ -6066,6 +6437,30 @@ export function AgentsPage() {
      Render
      ══════════════════════════════════════════════════════════ */
 
+  const renderAgentSidebarItem = (agent: Agent) => (
+    <AgentSidebarItem
+      key={agent.id}
+      agent={agent}
+      conversations={convsByAgent[agent.id] || []}
+      collapsed={isAgentCollapsed(agent.id)}
+      isActive={activeAgentId === agent.id}
+      activeConversationId={activeAgentId === agent.id ? activeConvId : null}
+      openChatPanelStreaming={activeAgentId === agent.id ? streaming : false}
+      groupsEnabled={groups.length > 0}
+      pendingConversationKeys={pendingConversationKeys}
+      runHandoffKeys={runHandoffKeys}
+      onToggleCollapse={toggleAgentCollapse}
+      onOpenContextMenu={handleOpenAgentContextMenu}
+      onOpenSettings={handleOpenAgentSettings}
+      onCleanConversations={cleanConversations}
+      onCreateConversation={createConversation}
+      onSelectConversation={selectConversation}
+      onRevealConversationFolder={revealConversationFolder}
+      onRenameConversation={openRenameConversation}
+      onDeleteConversation={deleteConversation}
+    />
+  );
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.container} data-testid="agents-layout-container">
@@ -6298,127 +6693,118 @@ export function AgentsPage() {
                   </div>
                 ) : (
                   <>
-                    {/* Render grouped agents */}
-                    {groups.map((group) => {
-                      const groupAgents = groupedAgents[group.id] || [];
-                      if (groupAgents.length === 0 && search.trim()) return null;
-                      const isCollapsed = collapsedGroups.has(group.id);
-                      return (
-                        <div key={group.id} className={styles.sidebarGroup}>
-                          <div
-                            className={styles.sidebarGroupHeader}
-                            onClick={() => toggleGroupCollapse(group.id)}
-                          >
-                            <ChevronRight
-                              size={14}
-                              className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
-                            />
-                            <span className={styles.sidebarGroupName}>{group.name}</span>
-                            <span className={styles.sidebarGroupCount}>{groupAgents.length}</span>
-                            <button
-                              className={styles.sidebarGroupAddBtn}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openCreate(group.id);
-                              }}
-                              title="Add agent to group"
-                            >
-                              <Plus size={13} />
-                            </button>
-                          </div>
-                          {!isCollapsed &&
-                            groupAgents.map((agent) => (
-                              <AgentSidebarItem
-                                key={agent.id}
-                                agent={agent}
-                                conversations={convsByAgent[agent.id] || []}
-                                collapsed={isAgentCollapsed(agent.id)}
-                                isActive={activeAgentId === agent.id}
-                                activeConversationId={
-                                  activeAgentId === agent.id ? activeConvId : null
-                                }
-                                openChatPanelStreaming={
-                                  activeAgentId === agent.id ? streaming : false
-                                }
-                                groupsEnabled={groups.length > 0}
-                                pendingConversationKeys={pendingConversationKeys}
-                                runHandoffKeys={runHandoffKeys}
-                                onToggleCollapse={toggleAgentCollapse}
-                                onOpenContextMenu={handleOpenAgentContextMenu}
-                                onOpenSettings={handleOpenAgentSettings}
-                                onCleanConversations={cleanConversations}
-                                onCreateConversation={createConversation}
-                                onSelectConversation={selectConversation}
-                                onRevealConversationFolder={revealConversationFolder}
-                                onRenameConversation={openRenameConversation}
-                                onDeleteConversation={deleteConversation}
-                              />
-                            ))}
-                        </div>
-                      );
-                    })}
-                    {/* Ungrouped agents */}
-                    {(() => {
-                      const ungrouped = groupedAgents['__ungrouped__'] || [];
-                      if (ungrouped.length === 0) return null;
-                      const showHeader = groups.length > 0;
-                      const isCollapsed = collapsedGroups.has('__ungrouped__');
-                      return (
-                        <div className={styles.sidebarGroup}>
-                          {showHeader && (
-                            <div
-                              className={styles.sidebarGroupHeader}
-                              onClick={() => toggleGroupCollapse('__ungrouped__')}
-                            >
-                              <ChevronRight
-                                size={14}
-                                className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
-                              />
-                              <span className={styles.sidebarGroupName}>Ungrouped</span>
-                              <span className={styles.sidebarGroupCount}>{ungrouped.length}</span>
-                              <button
-                                className={styles.sidebarGroupAddBtn}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openCreate();
-                                }}
-                                title="Add agent"
-                              >
-                                <Plus size={13} />
-                              </button>
+                    {showWorkspaceAgentSections ? (
+                      <div className={styles.workspaceAgentSections}>
+                        {workspaceAgentSections.map((section) => (
+                          <section key={section.id} className={styles.workspaceAgentSection}>
+                            <div className={styles.workspaceAgentHeader}>
+                              <span className={styles.workspaceAgentName}>{section.name}</span>
+                              <span className={styles.workspaceAgentCount}>
+                                {section.agents.length}
+                              </span>
                             </div>
-                          )}
-                          {(!showHeader || !isCollapsed) &&
-                            ungrouped.map((agent) => (
-                              <AgentSidebarItem
-                                key={agent.id}
-                                agent={agent}
-                                conversations={convsByAgent[agent.id] || []}
-                                collapsed={isAgentCollapsed(agent.id)}
-                                isActive={activeAgentId === agent.id}
-                                activeConversationId={
-                                  activeAgentId === agent.id ? activeConvId : null
-                                }
-                                openChatPanelStreaming={
-                                  activeAgentId === agent.id ? streaming : false
-                                }
-                                groupsEnabled={groups.length > 0}
-                                pendingConversationKeys={pendingConversationKeys}
-                                runHandoffKeys={runHandoffKeys}
-                                onToggleCollapse={toggleAgentCollapse}
-                                onOpenContextMenu={handleOpenAgentContextMenu}
-                                onOpenSettings={handleOpenAgentSettings}
-                                onCleanConversations={cleanConversations}
-                                onCreateConversation={createConversation}
-                                onSelectConversation={selectConversation}
-                                onRevealConversationFolder={revealConversationFolder}
-                                onRenameConversation={openRenameConversation}
-                                onDeleteConversation={deleteConversation}
-                              />
-                            ))}
-                        </div>
-                      );
-                    })()}
+                            {section.groups.map((group) => {
+                              const groupAgents = groupedAgents[group.id] || [];
+                              if (groupAgents.length === 0 && search.trim()) return null;
+                              const isCollapsed = collapsedGroups.has(group.id);
+                              return (
+                                <div key={group.id} className={styles.sidebarGroup}>
+                                  <div
+                                    className={styles.sidebarGroupHeader}
+                                    onClick={() => toggleGroupCollapse(group.id)}
+                                  >
+                                    <ChevronRight
+                                      size={14}
+                                      className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
+                                    />
+                                    <span className={styles.sidebarGroupName}>{group.name}</span>
+                                    <span className={styles.sidebarGroupCount}>{groupAgents.length}</span>
+                                    <button
+                                      className={styles.sidebarGroupAddBtn}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openCreate(group.id);
+                                      }}
+                                    >
+                                      <Plus size={13} />
+                                    </button>
+                                  </div>
+                                  {!isCollapsed && groupAgents.map(renderAgentSidebarItem)}
+                                </div>
+                              );
+                            })}
+                            {section.groups.length === 0 && section.agents.map(renderAgentSidebarItem)}
+                          </section>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        {groups.map((group) => {
+                          const groupAgents = groupedAgents[group.id] || [];
+                          if (groupAgents.length === 0 && search.trim()) return null;
+                          const isCollapsed = collapsedGroups.has(group.id);
+                          return (
+                            <div key={group.id} className={styles.sidebarGroup}>
+                              <div
+                                className={styles.sidebarGroupHeader}
+                                onClick={() => toggleGroupCollapse(group.id)}
+                              >
+                                <ChevronRight
+                                  size={14}
+                                  className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
+                                />
+                                <span className={styles.sidebarGroupName}>{group.name}</span>
+                                <span className={styles.sidebarGroupCount}>{groupAgents.length}</span>
+                                <button
+                                  className={styles.sidebarGroupAddBtn}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openCreate(group.id);
+                                  }}
+                                >
+                                  <Plus size={13} />
+                                </button>
+                              </div>
+                              {!isCollapsed && groupAgents.map(renderAgentSidebarItem)}
+                            </div>
+                          );
+                        })}
+                        {(() => {
+                          const ungrouped = groupedAgents['__ungrouped__'] || [];
+                          if (ungrouped.length === 0) return null;
+                          const showHeader = groups.length > 0;
+                          const isCollapsed = collapsedGroups.has('__ungrouped__');
+                          return (
+                            <div className={styles.sidebarGroup}>
+                              {showHeader && (
+                                <div
+                                  className={styles.sidebarGroupHeader}
+                                  onClick={() => toggleGroupCollapse('__ungrouped__')}
+                                >
+                                  <ChevronRight
+                                    size={14}
+                                    className={`${styles.sidebarGroupChevron} ${!isCollapsed ? styles.sidebarGroupChevronOpen : ''}`}
+                                  />
+                                  <span className={styles.sidebarGroupName}>Ungrouped</span>
+                                  <span className={styles.sidebarGroupCount}>{ungrouped.length}</span>
+                                  <button
+                                    className={styles.sidebarGroupAddBtn}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openCreate();
+                                    }}
+                                  >
+                                    <Plus size={13} />
+                                  </button>
+                                </div>
+                              )}
+                              {(!showHeader || !isCollapsed) &&
+                                ungrouped.map(renderAgentSidebarItem)}
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
                   </>
                 )}
 
@@ -6464,7 +6850,7 @@ export function AgentsPage() {
                               </span>
                             </div>
                             <div className={styles.messageSearchSnippet}>
-                              {renderMessageSearchSnippet(result)}
+                              <MessageSearchSnippet data={result} />
                             </div>
                           </div>
                         </button>
@@ -6556,38 +6942,24 @@ export function AgentsPage() {
               </div>
 
               {chatTab === 'files' ? (
-                <AgentFiles agentId={activeAgent.id} />
+                <AgentFiles
+                  agentId={activeAgent.id}
+                  workspaceId={activeWorkspaceId}
+                  noRepository={!activeAgent.repositoryRoot}
+                />
               ) : (
                 <>
-                  {runnerDisabledReason && (
-                    <div className={styles.runnerBanner} role="status">
-                      <div className={styles.runnerBannerIcon}>
-                        {runnerLoading ? (
-                          <Loader size={16} className={styles.spinIcon} />
-                        ) : (
-                          <AlertTriangle size={16} />
-                        )}
-                      </div>
-                      <div className={styles.runnerBannerBody}>
-                        <div className={styles.runnerBannerTitle}>
-                          {hasConnectedRunner ? 'Runner unavailable' : 'Runner required'}
-                        </div>
-                        <div className={styles.runnerBannerText}>{runnerDisabledReason}</div>
-                      </div>
-                      <div className={styles.runnerBannerActions}>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => void fetchRunnerDevices()}
-                        >
-                          Refresh
-                        </Button>
-                        <Button size="sm" onClick={() => navigate('/settings?tab=runners')}>
-                          <Monitor size={14} />
-                          Connect
-                        </Button>
-                      </div>
-                    </div>
+                  {activeWorkspaceId && (
+                    <ProjectRunnersPanel
+                      projectRunners={projectRunners}
+                      accountRunners={accountRunners}
+                      loading={runnerLoading}
+                      workspaceName={activeWorkspace?.name ?? null}
+                      currentUserId={user?.id ?? null}
+                      connectDisabledReason={runnerConnectDisabledReason}
+                      runnerDisabledReason={runnerDisabledReason}
+                      onRefresh={() => void fetchRunnerDevices()}
+                    />
                   )}
 
                   {/* Error banner */}
@@ -7093,7 +7465,7 @@ export function AgentsPage() {
                               >
                                 <button
                                   className={styles.stopRunBtn}
-                                  onClick={stopActiveRun}
+                                  onClick={() => stopActiveRun()}
                                   disabled={!activeConversationRun || stoppingRun}
                                 >
                                   <Square size={12} />
@@ -7362,19 +7734,6 @@ export function AgentsPage() {
           onClick={(e) => e.stopPropagation()}
         >
           <div className={styles.contextMenuLabel}>Move to group</div>
-          <button
-            className={`${styles.contextMenuItem} ${
-              !agents.find((a) => a.id === contextMenu.agentId)?.groupId
-                ? styles.contextMenuItemActive
-                : ''
-            }`}
-            onClick={() => {
-              handleChangeAgentGroup(contextMenu.agentId, null);
-              setContextMenu(null);
-            }}
-          >
-            No group
-          </button>
           {groups.map((g) => (
             <button
               key={g.id}
@@ -7473,10 +7832,9 @@ export function AgentsPage() {
                 {groups.length > 0 && (
                   <Select
                     label="Group"
-                    value={form.groupId}
+                    value={form.groupId || groups[0]?.id || ''}
                     onChange={(e) => setForm((f) => ({ ...f, groupId: e.target.value }))}
                   >
-                    <option value="">No group</option>
                     {groups.map((g) => (
                       <option key={g.id} value={g.id}>
                         {g.name}
@@ -7549,18 +7907,26 @@ export function AgentsPage() {
                                   </span>
                                 </div>
                                 <div className={styles.directoryPickerActions}>
-                                  <Button
+                                  <ReasonedActionButton
                                     type="button"
                                     size="sm"
                                     variant="secondary"
                                     onClick={() => void handlePickPresetDirectory(parameter.key)}
-                                    disabled={pickingPresetDirectoryKey !== null}
+                                    disabled={
+                                      pickingPresetDirectoryKey !== null ||
+                                      Boolean(runnerFilesystemDisabledReason)
+                                    }
+                                    disabledReason={
+                                      pickingPresetDirectoryKey !== null
+                                        ? 'Choosing a folder...'
+                                        : runnerFilesystemDisabledReason
+                                    }
                                   >
                                     <FolderOpen size={14} />
                                     {pickingPresetDirectoryKey === parameter.key
                                       ? 'Choosing...'
                                       : 'Browse'}
-                                  </Button>
+                                  </ReasonedActionButton>
                                   {!!form.presetParameters[parameter.key]?.trim() && (
                                     <Button
                                       type="button"
@@ -7577,6 +7943,11 @@ export function AgentsPage() {
                               {formErrors[`presetParameters.${parameter.key}`] && (
                                 <div className={styles.directoryPickerError}>
                                   {formErrors[`presetParameters.${parameter.key}`]}
+                                </div>
+                              )}
+                              {runnerFilesystemDisabledReason && (
+                                <div className={styles.directoryPickerError}>
+                                  {runnerFilesystemDisabledReason}
                                 </div>
                               )}
                             </>
@@ -7692,8 +8063,9 @@ export function AgentsPage() {
                         {selectedModel?.name} CLI not installed
                       </div>
                       <div className={styles.cliBannerText}>
-                        The <code>{selectedCli.command}</code> command was not found on this server.
-                        Agents using {selectedModel?.name} require the CLI to be installed.
+                        The <code>{selectedCli.command}</code> command was not found by the native
+                        runner. Agents using {selectedModel?.name} require the CLI to be installed
+                        on the runner machine.
                       </div>
                       <a
                         href={selectedCli.downloadUrl}
@@ -8064,12 +8436,11 @@ export function AgentsPage() {
                     <div className={styles.settingsGridValue}>
                       <select
                         className={styles.settingsGroupSelect}
-                        value={settingsAgent.groupId || ''}
+                        value={settingsAgent.groupId || groups[0]?.id || ''}
                         onChange={(e) =>
                           handleChangeAgentGroup(settingsAgent.id, e.target.value || null)
                         }
                       >
-                        <option value="">No group</option>
                         {groups.map((g) => (
                           <option key={g.id} value={g.id}>
                             {g.name}
@@ -8090,7 +8461,39 @@ export function AgentsPage() {
                         <AgentSettingsPathRow
                           path={settingsAgent.repositoryRoot}
                           onReveal={() => revealLocalPathInFileManager(settingsAgent.repositoryRoot!)}
+                          disabledReason={getRepositoryRootRevealDisabledReason(
+                            settingsAgent,
+                            runnerFilesystemDisabledReason,
+                          )}
                         />
+                        <ReasonedActionButton
+                          type="button"
+                          size="sm"
+                          variant={isRepositoryRootVerifiedOnRunner(settingsAgent) ? 'secondary' : 'primary'}
+                          onClick={() => void verifyRepositoryRootOnRunner(settingsAgent)}
+                          disabled={
+                            verifyingRepositoryRootAgentId === settingsAgent.id ||
+                            Boolean(runnerFilesystemDisabledReason)
+                          }
+                          disabledReason={
+                            verifyingRepositoryRootAgentId === settingsAgent.id
+                              ? 'Verifying repository folder...'
+                              : runnerFilesystemDisabledReason
+                          }
+                        >
+                          {verifyingRepositoryRootAgentId === settingsAgent.id ? (
+                            <Loader size={14} className={styles.spinIcon} />
+                          ) : isRepositoryRootVerifiedOnRunner(settingsAgent) ? (
+                            <Check size={14} />
+                          ) : (
+                            <Wrench size={14} />
+                          )}
+                          {verifyingRepositoryRootAgentId === settingsAgent.id
+                            ? 'Verifying...'
+                            : isRepositoryRootVerifiedOnRunner(settingsAgent)
+                              ? 'Re-verify on runner'
+                              : 'Verify on runner'}
+                        </ReasonedActionButton>
                       </div>
                     </div>
                   )}
@@ -8103,9 +8506,35 @@ export function AgentsPage() {
                     </div>
                     <div className={styles.settingsGridValue}>
                       <AgentSettingsPathRow
-                        path={settingsAgent.workspacePath}
-                        onReveal={() => revealAgentWorkspaceInFileManager(settingsAgent.id)}
+                        path={getAgentFolderDisplayPath(settingsAgent)}
+                        onReveal={() => revealAgentWorkspaceInFileManager(settingsAgent)}
+                        disabledReason={getAgentFolderRevealDisabledReason(
+                          settingsAgent,
+                          runnerFilesystemDisabledReason,
+                        )}
                       />
+                      {!settingsAgent.repositoryRoot && (
+                        <ReasonedActionButton
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void prepareRunnerAgentWorkspace(settingsAgent)}
+                          disabled={
+                            preparingRunnerWorkspaceAgentId === settingsAgent.id ||
+                            Boolean(runnerFilesystemDisabledReason)
+                          }
+                          disabledReason={
+                            preparingRunnerWorkspaceAgentId === settingsAgent.id
+                              ? 'Preparing runner workspace...'
+                              : runnerFilesystemDisabledReason
+                          }
+                        >
+                          <Wrench size={14} />
+                          {preparingRunnerWorkspaceAgentId === settingsAgent.id
+                            ? 'Preparing...'
+                            : 'Setup / repair'}
+                        </ReasonedActionButton>
+                      )}
                     </div>
                   </div>
                 </div>

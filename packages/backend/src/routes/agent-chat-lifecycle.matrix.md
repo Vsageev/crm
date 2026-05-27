@@ -10,3 +10,10 @@ Extend this matrix when chat turn, queue, branch, or transcript rendering behavi
 | Queue multiple prompts while a run is active                                                               | `agent-chat-view.contract.test.ts` -> `renders multiple queued prompts behind an active run in turn order`                                                                                                                                                         | `agent-chat-lifecycle.browser.test.ts` -> `renders multiple prompts queued behind an active run as queued rows`          |
 | Upload with caption and attachments, then follow-up                                                        | `agent-chat-view.contract.test.ts` -> `renders upload caption attachments followed by a normal follow-up`                                                                                                                                                          | `agent-chat-lifecycle.browser.test.ts` -> `renders upload caption attachments and then the follow-up turn`               |
 | Failed/cancelled queue item retry and removal                                                              | `agent-chat-view.contract.test.ts` -> `renders failed and cancelled queue items with retry/removal controls`; mutation sync remains covered by `agent-chat.turn-write-path.test.ts` -> `keeps retry, remove, and reorder queue operations in sync with turn state` | `agent-chat-lifecycle.browser.test.ts` -> `renders failed and cancelled items with retry/removal controls`               |
+
+Focused commands before rollout:
+
+```bash
+pnpm --filter frontend typecheck
+pnpm exec vitest run packages/frontend/src/devtools/DevtoolsMenu.test.tsx packages/frontend/src/pages/AgentsPage.component-contract.test.ts packages/frontend/src/pages/AgentsPage.layout-contract.test.ts packages/frontend/src/pages/agent-chat-lifecycle.browser.test.ts packages/backend/src/routes/agent-chat-view.contract.test.ts
+```

@@ -57,7 +57,7 @@ export interface FileBrowserEndpoints {
   /** DELETE — receives entry path, returns full URL with query */
   delete: (entryPath: string) => string;
   /** POST — body: { path } */
-  reveal: string;
+  reveal?: string;
   /** PATCH — body: { path, newName }. Omit to disable rename. */
   rename?: string;
   /** GET text content for previews that need authenticated loading: returns { content }. */
@@ -670,6 +670,7 @@ export function FileBrowser({
   }
 
   async function handleReveal(entryPath: string) {
+    if (!endpoints.reveal) return;
     try {
       await api(endpoints.reveal, {
         method: 'POST',
@@ -1281,9 +1282,11 @@ export function FileBrowser({
                                 <Download size={15} /> Download
                               </button>
                             )}
-                            <button className={styles.rowMenuItem} onClick={() => { handleReveal(entry.path); closeRowMenu(); }}>
-                              <FolderOpen size={15} /> Reveal
-                            </button>
+                            {endpoints.reveal && (
+                              <button className={styles.rowMenuItem} onClick={() => { handleReveal(entry.path); closeRowMenu(); }}>
+                                <FolderOpen size={15} /> Reveal
+                              </button>
+                            )}
                             {showRename && (
                               <button className={styles.rowMenuItem} onClick={() => { startRename(entry); closeRowMenu(); }}>
                                 <Pencil size={15} /> Rename
@@ -1319,15 +1322,17 @@ export function FileBrowser({
                             </button>
                           </Tooltip>
                         )}
-                        <Tooltip label="Show in Finder">
-                          <button
-                            className={styles.iconBtn}
-                            onClick={() => handleReveal(entry.path)}
-                            aria-label="Show in Finder"
-                          >
-                            <FolderOpen size={16} />
-                          </button>
-                        </Tooltip>
+                        {endpoints.reveal && (
+                          <Tooltip label="Show in Finder">
+                            <button
+                              className={styles.iconBtn}
+                              onClick={() => handleReveal(entry.path)}
+                              aria-label="Show in Finder"
+                            >
+                              <FolderOpen size={16} />
+                            </button>
+                          </Tooltip>
+                        )}
                         {showRename && (
                           <Tooltip label="Rename">
                             <button

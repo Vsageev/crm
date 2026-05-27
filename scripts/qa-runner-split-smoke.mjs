@@ -9,7 +9,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const checks = [
   {
     name: 'backend API/service smoke',
-    files: ['packages/backend/src/qa/runner-split-smoke.test.ts'],
+    files: [
+      'packages/backend/src/qa/runner-split-smoke.test.ts',
+      'packages/backend/src/services/agent-chat.turn-write-path.test.ts',
+      'packages/backend/src/services/agent-chat.enqueue.test.ts',
+      'packages/backend/src/services/agent-runners.test.ts',
+      'packages/backend/src/routes/runner-filesystem.test.ts',
+    ],
   },
   {
     name: 'sidebar/chat state contract',
@@ -28,6 +34,16 @@ const checks = [
   {
     name: 'non-Codex runner startup planning',
     files: ['packages/runner/src/executor.smoke.test.ts'],
+  },
+];
+const sourceChecks = [
+  {
+    name: 'source-level runner split contract guards',
+    command: ['node', ['scripts/guard-runner-split-contracts.mjs']],
+  },
+  {
+    name: 'runner local filesystem endpoint scan',
+    command: ['pnpm', ['runner-fs:scan']],
   },
 ];
 
@@ -81,6 +97,32 @@ for (const check of checks) {
   results.push({
     name: check.name,
     files: check.files,
+    status: result.status === 0 ? 'PASS' : 'FAIL',
+    exitCode: result.status ?? 1,
+  });
+  console.log('');
+}
+
+for (const check of sourceChecks) {
+  console.log(`--- ${check.name} ---`);
+  const [command, args] = check.command;
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    env: Object.fromEntries(
+      Object.entries({
+        ...process.env,
+        NODE_ENV: 'test',
+      }).filter(([key]) => key !== 'NO_COLOR' && key !== 'FORCE_COLOR'),
+    ),
+    encoding: 'utf8',
+  });
+
+  if (result.stdout.trim()) console.log(result.stdout.trim());
+  if (result.stderr.trim()) console.error(result.stderr.trim());
+
+  results.push({
+    name: check.name,
+    files: [check.command.join(' ')],
     status: result.status === 0 ? 'PASS' : 'FAIL',
     exitCode: result.status ?? 1,
   });

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -14,6 +15,8 @@ import type {
   RunnerJobIntent,
   RunnerProvider,
   RunnerRejectionCode,
+  RunnerWorkspaceMaterialization,
+  RunnerWorkspaceSetupIntent,
 } from 'shared';
 
 interface CliCommand {
@@ -332,13 +335,252 @@ function pathInsideRoot(targetPath: string, root: string): boolean {
   return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`);
 }
 
+const MATERIALIZATION_MANIFEST = path.join('.openwork', 'managed-agent-context.json');
+
+function safeMaterializedRelativePath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  return (
+    normalized.length > 0 &&
+    !normalized.startsWith('/') &&
+    !normalized.split('/').includes('..') &&
+    normalized.split('/').every(Boolean)
+  );
+}
+
+function materializedPath(root: string, relativePath: string): string {
+  if (!safeMaterializedRelativePath(relativePath)) {
+    throw new Error(`Invalid materialized workspace file path: ${relativePath}`);
+  }
+  const resolved = path.resolve(root, relativePath);
+  if (!pathInsideRoot(resolved, root)) {
+    throw new Error(`Materialized workspace file escapes workspace root: ${relativePath}`);
+  }
+  return resolved;
+}
+
+function safeMaterializedRelativeDirectory(relativePath: string): boolean {
+  return safeMaterializedRelativePath(relativePath);
+}
+
+function ensureRunnerConversationLinks(
+  workspaceRoot: string,
+  conversationWorkspace: NonNullable<RunnerWorkspaceMaterialization['conversationWorkspace']>,
+): void {
+  const repoRoot = path.resolve(workspaceRoot, '..', '..');
+  const agentContextRoot = materializedPath(repoRoot, conversationWorkspace.agentContextRoot);
+  for (const entry of conversationWorkspace.linkEntries) {
+    if (!safeMaterializedRelativeDirectory(entry)) {
+      throw new Error(`Invalid conversation workspace link path: ${entry}`);
+    }
+    const sourcePath = materializedPath(agentContextRoot, entry);
+    if (!fs.existsSync(sourcePath)) continue;
+    const linkPath = materializedPath(workspaceRoot, entry);
+    if (fs.existsSync(linkPath)) {
+      const existing = fs.lstatSync(linkPath);
+      if (!existing.isSymbolicLink()) continue;
+      const relativeTarget = path.relative(path.dirname(linkPath), sourcePath) || '.';
+      if (path.normalize(fs.readlinkSync(linkPath)) === path.normalize(relativeTarget)) continue;
+      fs.unlinkSync(linkPath);
+    }
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    const relativeTarget = path.relative(path.dirname(linkPath), sourcePath) || '.';
+    fs.symlinkSync(relativeTarget, linkPath);
+  }
+}
+
+function formatInstructionDirectory(dirPath: string): string {
+  const resolved = path.resolve(dirPath);
+  return resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
+}
+
+function renderConversationInstructionMarkdown(
+  sourceContent: string,
+  conversationDir: string,
+): string {
+  const cwd = formatInstructionDirectory(conversationDir);
+  let rendered = sourceContent;
+
+  rendered = rendered.replace(
+    /^- The project repository root is `[^`]+`\.\n- Use other paths only if the task requires it; ask first when avoidable\.\s*$/m,
+    [
+      `- The working directory for this conversation is \`${cwd}\`. Work in this folder by default for commands and file operations.`,
+      '- Use other paths only if the task requires it; ask first when avoidable.',
+    ].join('\n'),
+  );
+
+  rendered = rendered.replace(
+    /^- The project repository root is `[^`]+`\.\s*$/m,
+    `- The working directory for this conversation is \`${cwd}\`. Work in this folder by default for commands and file operations.`,
+  );
+
+  rendered = rendered.replace(
+    /^Default workspace behavior:\s*- Work in `[^`]+` by default for commands and file operations\.\s*$/m,
+    `Default workspace behavior: - Work in \`${cwd}\` by default for commands and file operations.`,
+  );
+
+  return rendered;
+}
+
+function ensureRunnerConversationMarkdown(
+  workspaceRoot: string,
+  conversationWorkspace: NonNullable<RunnerWorkspaceMaterialization['conversationWorkspace']>,
+): void {
+  const repoRoot = path.resolve(workspaceRoot, '..', '..');
+  const agentContextRoot = materializedPath(repoRoot, conversationWorkspace.agentContextRoot);
+  for (const entry of conversationWorkspace.markdownEntries ?? []) {
+    if (!safeMaterializedRelativeDirectory(entry)) {
+      throw new Error(`Invalid conversation workspace markdown path: ${entry}`);
+    }
+    const sourcePath = materializedPath(agentContextRoot, entry);
+    if (!fs.existsSync(sourcePath)) continue;
+    const destinationPath = materializedPath(workspaceRoot, entry);
+    const rendered = renderConversationInstructionMarkdown(
+      fs.readFileSync(sourcePath, 'utf-8'),
+      workspaceRoot,
+    );
+    if (fs.existsSync(destinationPath)) {
+      const existing = fs.lstatSync(destinationPath);
+      if (existing.isDirectory()) continue;
+      if (existing.isSymbolicLink()) fs.unlinkSync(destinationPath);
+      else if (existing.isFile() && fs.readFileSync(destinationPath, 'utf-8') === rendered) {
+        continue;
+      }
+    }
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+    fs.writeFileSync(destinationPath, rendered, 'utf-8');
+  }
+}
+
+function readManagedMaterializationManifest(root: string): string[] {
+  const manifestPath = path.join(root, MATERIALIZATION_MANIFEST);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { files?: unknown };
+    if (!Array.isArray(parsed.files)) return [];
+    return parsed.files.filter((file): file is string => typeof file === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function hashText(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function readFileHash(filePath: string): string | null {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function pruneEmptyParents(root: string, startDir: string) {
+  let current = path.resolve(startDir);
+  const resolvedRoot = path.resolve(root);
+  while (pathInsideRoot(current, resolvedRoot) && current !== resolvedRoot) {
+    try {
+      fs.rmdirSync(current);
+    } catch {
+      return;
+    }
+    current = path.dirname(current);
+  }
+}
+
+export function materializeRunnerWorkspace(setup: RunnerWorkspaceSetupIntent): void {
+  const materialization = setup.materialization;
+  if (materialization.strategy !== 'runner_local_agent_workspace') {
+    throw new Error(
+      `Unsupported workspace materialization strategy: ${
+        (materialization as RunnerWorkspaceMaterialization).strategy
+      }`,
+    );
+  }
+
+  const root = path.resolve(setup.workspace.path);
+  const contextRoot = path.resolve(
+    root,
+    '.openwork',
+    'agent-context',
+    setup.agentId,
+    materialization.agentContext.revision,
+  );
+  fs.mkdirSync(root, { recursive: true });
+  const nextFiles = new Set(materialization.agentContext.files.map((file) => file.path));
+  const previouslyManagedFiles = readManagedMaterializationManifest(root);
+  for (const oldRelativePath of previouslyManagedFiles) {
+    if (nextFiles.has(oldRelativePath)) continue;
+    const oldPath = materializedPath(root, oldRelativePath);
+    fs.rmSync(oldPath, { force: true });
+    pruneEmptyParents(root, path.dirname(oldPath));
+  }
+
+  for (const file of materialization.agentContext.files) {
+    const actualSize = Buffer.byteLength(file.content);
+    if (file.sizeBytes !== undefined && file.sizeBytes !== actualSize) {
+      throw new Error(`Agent context size mismatch for ${file.path}`);
+    }
+    const actualHash = hashText(file.content);
+    if (file.sha256 && file.sha256 !== actualHash) {
+      throw new Error(`Agent context hash mismatch for ${file.path}`);
+    }
+    const cachedDestination = materializedPath(contextRoot, file.path);
+    fs.mkdirSync(path.dirname(cachedDestination), { recursive: true });
+    if (
+      fs.existsSync(cachedDestination) &&
+      file.sha256 &&
+      readFileHash(cachedDestination) === file.sha256
+    ) {
+      // Reuse immutable cached context file by revision/hash.
+    } else {
+      fs.writeFileSync(cachedDestination, file.content, {
+        encoding: 'utf-8',
+        mode: file.mode,
+      });
+    }
+    if (file.sha256 && readFileHash(cachedDestination) !== file.sha256) {
+      throw new Error(`Agent context cache hash mismatch for ${file.path}`);
+    }
+
+    const destination = materializedPath(root, file.path);
+    const wasManaged = previouslyManagedFiles.includes(file.path);
+    if (fs.existsSync(destination) && !wasManaged && readFileHash(destination) !== actualHash) {
+      throw new Error(`Refusing to overwrite unmanaged workspace file: ${file.path}`);
+    }
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, file.content, {
+      encoding: 'utf-8',
+      mode: file.mode,
+    });
+  }
+
+  if (materialization.conversationWorkspace) {
+    ensureRunnerConversationMarkdown(root, materialization.conversationWorkspace);
+    ensureRunnerConversationLinks(root, materialization.conversationWorkspace);
+  }
+
+  const manifestPath = path.join(root, MATERIALIZATION_MANIFEST);
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        strategy: materialization.strategy,
+        revision: materialization.agentContext.revision,
+        files: [...nextFiles].sort(),
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    'utf-8',
+  );
+}
+
 export function validateJobPolicy(
   job: RunnerJobIntent,
   capabilities: RunnerCapabilities,
 ): JobPolicyFailure | null {
-  if (!capabilities.supportedAgentKinds.includes(job.agentKind)) {
-    return { code: 'unsupported_agent_kind', message: `Unsupported agent kind: ${job.agentKind}` };
-  }
   if (!capabilities.supportedProviders.includes(job.provider)) {
     return { code: 'unsupported_provider', message: `Unsupported provider: ${job.provider}` };
   }
@@ -375,13 +617,10 @@ export function validateJobPolicy(
   if (job.allowedOperations.shell && !capabilities.policy.shell) {
     return { code: 'policy_denied', message: 'Runner policy does not allow shell access' };
   }
-  if (
-    capabilities.workspaceRoot &&
-    !pathInsideRoot(job.workspace.path, capabilities.workspaceRoot)
-  ) {
+  if (!path.isAbsolute(job.workspace.path)) {
     return {
-      code: 'policy_denied',
-      message: `Workspace path is outside runner root ${capabilities.workspaceRoot}`,
+      code: 'invalid_job',
+      message: `Workspace path must be absolute: ${job.workspace.path}`,
     };
   }
   if (!fs.existsSync(job.workspace.path)) {

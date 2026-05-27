@@ -61,10 +61,10 @@ export function FallbackModelTab() {
 
   function getVariantHint(): string {
     if (selectedModel === 'cursor') {
-      return 'Curated from the installed Cursor CLI model list on this server';
+      return 'Curated from the installed Cursor CLI model list for the native runner';
     }
     if (selectedModel === 'opencode') {
-      return 'Uses provider/model IDs. Run opencode models on the server for the full list';
+      return 'Uses provider/model IDs. Run opencode models on the native runner for the full list';
     }
     return 'Specific model version to use as fallback';
   }

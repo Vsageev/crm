@@ -1,19 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod/v4';
 import { requirePermission } from '../middleware/rbac.js';
 import {
+  AGENT_INSTRUCTION_FILE_CANDIDATES,
+  buildAgentSkillReference,
+  buildPresetSkillImportFiles,
   listSkills,
   getSkill,
   createSkill,
   updateSkill,
   deleteSkill,
-  attachSkillToAgent,
-  detachSkillFromAgent,
-  getAgentSkills,
+  decodeAgentSkillId,
+  encodeAgentSkillId,
+  getAgentSkillDestination,
+  parseAgentSkillReferencesFromInstructionContent,
+  readAgentSkillDisplayFromContent,
+  readPresetSkillDisplay,
+  renderAgentInstructionWithSkillsSection,
   listSkillFiles,
   readSkillFileContent,
   uploadSkillFile,
@@ -22,8 +29,283 @@ import {
   getSkillFilePath,
   getSkillEntryPath,
   writeSkillFile,
+  type AgentSkillRecord,
 } from '../services/skills.js';
 import { getAgent } from '../services/agents.js';
+import type { AgentRecord } from '../services/agents.js';
+import { dispatchAgentFileRequest } from '../services/runner-agent-files.js';
+import { requireBackendLocalFilesystemGate } from './backend-local-filesystem-gate.js';
+
+const optionalWorkspaceIdQuerySchema = z.object({ workspaceId: z.uuid().optional() });
+
+function sendRunnerAgentSkillError(reply: FastifyReply, error: unknown) {
+  const message = error instanceof Error ? error.message : 'Runner agent skill action failed';
+  if (message.startsWith('runner_unavailable:')) return reply.status(409).send({ code: 'runner_unavailable', message });
+  if (message.startsWith('runner_filesystem_unsupported:')) {
+    return reply.status(409).send({ code: 'runner_filesystem_unsupported', message });
+  }
+  if (message.startsWith('agent_runner_workspace_missing:')) {
+    return reply.status(409).send({ code: 'agent_runner_workspace_missing', message });
+  }
+  if (message.startsWith('agent_runner_workspace_ambiguous:')) {
+    return reply.status(409).send({ code: 'agent_runner_workspace_ambiguous', message });
+  }
+  if (message.startsWith('agent_repository_root_repair_required:')) {
+    return reply.status(409).send({ code: 'agent_repository_root_repair_required', message });
+  }
+  if (message.startsWith('agent_repository_root_runner_mismatch:')) {
+    return reply.status(409).send({ code: 'agent_repository_root_runner_mismatch', message });
+  }
+  if (
+    message.startsWith('agent_runner_workspace_root_missing:') ||
+    message.startsWith('workspace_root_missing:')
+  ) {
+    return reply.status(409).send({ code: 'agent_runner_workspace_root_missing', message });
+  }
+  if (
+    message.startsWith('agent_runner_workspace_root_invalid:') ||
+    message.startsWith('path_outside_workspace_root:')
+  ) {
+    return reply.status(409).send({ code: 'agent_runner_workspace_outside_root', message });
+  }
+  if (message.startsWith('path_inaccessible:')) {
+    return reply.status(409).send({ code: 'agent_runner_workspace_inaccessible', message });
+  }
+  if (message.startsWith('not_found:')) return reply.status(404).send({ code: 'not_found', message });
+  if (message.startsWith('invalid_path:')) return reply.status(400).send({ code: 'invalid_path', message });
+  return reply.badRequest(message);
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('not_found:');
+}
+
+async function readRunnerAgentFile(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  path: string;
+}): Promise<string> {
+  const { result } = await dispatchAgentFileRequest({
+    agent: params.agent,
+    requestUserId: params.requestUserId,
+    workspaceId: params.workspaceId,
+    request: { action: 'read_agent_file', path: params.path, encoding: 'utf8' },
+  });
+  if (result.action !== 'read_agent_file') throw new Error('Unexpected runner response');
+  return result.content;
+}
+
+async function findRunnerInstructionFile(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+}): Promise<{ path: string; content: string }> {
+  for (const name of AGENT_INSTRUCTION_FILE_CANDIDATES) {
+    try {
+      return {
+        path: name,
+        content: await readRunnerAgentFile({ ...params, path: name }),
+      };
+    } catch (error) {
+      if (isNotFoundError(error)) continue;
+      throw error;
+    }
+  }
+  throw new Error('not_found: Agent instruction file not found');
+}
+
+async function readRunnerAgentFileIfExists(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  path: string;
+}): Promise<string | null> {
+  try {
+    return await readRunnerAgentFile(params);
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+async function listRunnerAgentSkills(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+}): Promise<AgentSkillRecord[]> {
+  let instruction: { path: string; content: string };
+  try {
+    instruction = await findRunnerInstructionFile(params);
+  } catch (error) {
+    if (isNotFoundError(error)) return [];
+    throw error;
+  }
+  void instruction.path;
+
+  const references = parseAgentSkillReferencesFromInstructionContent(instruction.content);
+  return Promise.all(
+    references.map(async (ref) => {
+      const content = await readRunnerAgentFileIfExists({ ...params, path: ref.path });
+      const display = readAgentSkillDisplayFromContent(ref.path, content);
+      return {
+        id: encodeAgentSkillId(ref.id),
+        name: ref.name || display.name,
+        description: ref.description || display.description,
+        path: ref.path,
+        missing: content === null,
+      };
+    }),
+  );
+}
+
+async function assertRunnerAgentPathMissing(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  path: string;
+}): Promise<void> {
+  try {
+    await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.requestUserId,
+      workspaceId: params.workspaceId,
+      request: { action: 'list_agent_files', path: params.path },
+    });
+  } catch (error) {
+    if (isNotFoundError(error)) return;
+    throw error;
+  }
+  throw new Error(`Local skill path already exists: ${params.path}`);
+}
+
+async function attachRunnerSkillToAgent(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  skillId: string;
+}): Promise<AgentSkillRecord[]> {
+  const skill = getSkill(params.skillId);
+  if (!skill) throw new Error('Skill not found');
+
+  const instruction = await findRunnerInstructionFile(params);
+  const currentSkills = parseAgentSkillReferencesFromInstructionContent(instruction.content);
+  const destination = getAgentSkillDestination(skill.name);
+  const existing = currentSkills.find((entry) => entry.id === destination.id);
+  if (existing) return listRunnerAgentSkills(params);
+
+  await assertRunnerAgentPathMissing({ ...params, path: destination.id });
+  const files = buildPresetSkillImportFiles(skill.id, destination.id);
+  if (files.length === 0) throw new Error('Skill has no importable files');
+
+  const imported = await dispatchAgentFileRequest({
+    agent: params.agent,
+    requestUserId: params.requestUserId,
+    workspaceId: params.workspaceId,
+    request: { action: 'import_agent_files', files },
+  });
+  if (imported.result.action !== 'import_agent_files') throw new Error('Unexpected runner response');
+
+  const display = readPresetSkillDisplay(skill.id, skill.name);
+  const nextContent = renderAgentInstructionWithSkillsSection(instruction.content, [
+    ...currentSkills,
+    buildAgentSkillReference({
+      id: destination.id,
+      name: display.name,
+      path: destination.path,
+      description: display.description || skill.description,
+    }),
+  ]);
+  const written = await dispatchAgentFileRequest({
+    agent: params.agent,
+    requestUserId: params.requestUserId,
+    workspaceId: params.workspaceId,
+    request: {
+      action: 'write_agent_file',
+      path: instruction.path,
+      content: nextContent,
+      encoding: 'utf8',
+    },
+  });
+  if (written.result.action !== 'write_agent_file') throw new Error('Unexpected runner response');
+  return listRunnerAgentSkills(params);
+}
+
+async function deleteRunnerAgentPathIfExists(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  path: string;
+}): Promise<void> {
+  try {
+    await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.requestUserId,
+      workspaceId: params.workspaceId,
+      request: { action: 'delete_agent_path', path: params.path },
+    });
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
+}
+
+async function removeRunnerSkillsFolderIfEmpty(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+}): Promise<void> {
+  try {
+    const { result } = await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.requestUserId,
+      workspaceId: params.workspaceId,
+      request: { action: 'list_agent_files', path: 'skills' },
+    });
+    if (result.action === 'list_agent_files' && result.entries.length === 0) {
+      await deleteRunnerAgentPathIfExists({ ...params, path: 'skills' });
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
+}
+
+async function detachRunnerSkillFromAgent(params: {
+  agent: AgentRecord;
+  requestUserId: string;
+  workspaceId?: string;
+  skillId: string;
+}): Promise<void> {
+  let instruction: { path: string; content: string };
+  try {
+    instruction = await findRunnerInstructionFile(params);
+  } catch (error) {
+    if (isNotFoundError(error)) return;
+    throw error;
+  }
+  const currentSkills = parseAgentSkillReferencesFromInstructionContent(instruction.content);
+  const targetId = decodeAgentSkillId(params.skillId) ?? params.skillId.replace(/\\/g, '/').replace(/^\/+/, '');
+  const match = currentSkills.find((entry) => entry.id === targetId);
+  if (!match) return;
+
+  await deleteRunnerAgentPathIfExists({ ...params, path: match.id });
+  const nextContent = renderAgentInstructionWithSkillsSection(
+    instruction.content,
+    currentSkills.filter((entry) => entry.id !== match.id),
+  );
+  const written = await dispatchAgentFileRequest({
+    agent: params.agent,
+    requestUserId: params.requestUserId,
+    workspaceId: params.workspaceId,
+    request: {
+      action: 'write_agent_file',
+      path: instruction.path,
+      content: nextContent,
+      encoding: 'utf8',
+    },
+  });
+  if (written.result.action !== 'write_agent_file') throw new Error('Unexpected runner response');
+  await removeRunnerSkillsFolderIfEmpty(params);
+}
 
 export async function skillRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
@@ -241,7 +523,7 @@ export async function skillRoutes(app: FastifyInstance) {
       onRequest: [app.authenticate, requirePermission('settings:read')],
       schema: {
         tags: ['Skills'],
-        summary: 'Open a skill file location in the OS file manager',
+        summary: 'Development-only: open a backend-managed skill file location in the OS file manager',
         params: z.object({ id: z.string() }),
         body: z.object({
           path: z.string().min(1),
@@ -251,6 +533,7 @@ export async function skillRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const skill = getSkill(request.params.id);
       if (!skill) return reply.notFound('Skill not found');
+      if (!requireBackendLocalFilesystemGate(reply, 'skill_file_reveal')) return;
       try {
         const diskPath = getSkillEntryPath(request.params.id, request.body.path);
         if (!diskPath) return reply.notFound('Path not found');
@@ -375,12 +658,23 @@ export async function skillRoutes(app: FastifyInstance) {
         tags: ['Skills'],
         summary: 'List skills referenced by an agent instruction file',
         params: z.object({ id: z.string() }),
+        querystring: optionalWorkspaceIdQuerySchema,
       },
     },
     async (request, reply) => {
       const agent = getAgent(request.params.id);
       if (!agent) return reply.notFound('Agent not found');
-      return reply.send({ entries: getAgentSkills(request.params.id) });
+      try {
+        return reply.send({
+          entries: await listRunnerAgentSkills({
+            agent,
+            requestUserId: request.user.sub,
+            workspaceId: request.query.workspaceId,
+          }),
+        });
+      } catch (err) {
+        return sendRunnerAgentSkillError(reply, err);
+      }
     },
   );
 
@@ -392,6 +686,7 @@ export async function skillRoutes(app: FastifyInstance) {
         tags: ['Skills'],
         summary: 'Copy a preset-library skill into an agent workspace',
         params: z.object({ id: z.string() }),
+        querystring: optionalWorkspaceIdQuerySchema,
         body: z.object({
           skillId: z.string().min(1),
         }),
@@ -401,10 +696,15 @@ export async function skillRoutes(app: FastifyInstance) {
       const agent = getAgent(request.params.id);
       if (!agent) return reply.notFound('Agent not found');
       try {
-        attachSkillToAgent(request.params.id, request.body.skillId);
-        return reply.send({ entries: getAgentSkills(request.params.id) });
+        const entries = await attachRunnerSkillToAgent({
+          agent,
+          requestUserId: request.user.sub,
+          workspaceId: request.query.workspaceId,
+          skillId: request.body.skillId,
+        });
+        return reply.send({ entries });
       } catch (err) {
-        return reply.badRequest((err as Error).message);
+        return sendRunnerAgentSkillError(reply, err);
       }
     },
   );
@@ -420,16 +720,22 @@ export async function skillRoutes(app: FastifyInstance) {
           id: z.string(),
           skillId: z.string(),
         }),
+        querystring: optionalWorkspaceIdQuerySchema,
       },
     },
     async (request, reply) => {
       const agent = getAgent(request.params.id);
       if (!agent) return reply.notFound('Agent not found');
       try {
-        detachSkillFromAgent(request.params.id, request.params.skillId);
+        await detachRunnerSkillFromAgent({
+          agent,
+          requestUserId: request.user.sub,
+          workspaceId: request.query.workspaceId,
+          skillId: request.params.skillId,
+        });
         return reply.status(204).send();
       } catch (err) {
-        return reply.badRequest((err as Error).message);
+        return sendRunnerAgentSkillError(reply, err);
       }
     },
   );

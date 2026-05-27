@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CODEX_INCOMPLETE_OUTPUT_ERROR_MESSAGE,
   STREAM_JSON_INCOMPLETE_OUTPUT_ERROR_MESSAGE,
+  extractAgentOutputErrorText,
   extractAgentOutputIncompleteText,
   extractFinalResponseText,
   formatAgentOutputForDisplay,
@@ -100,6 +101,42 @@ describe('Codex structured output', () => {
     ].join('\n');
 
     expect(extractAgentOutputIncompleteText(stdout)).toBe('');
+  });
+
+  it('ignores transient Codex error events when a later terminal success and final message exist', () => {
+    const stdout = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'error',
+        message: 'Reconnecting... 4/5 (unexpected status 403 Forbidden)',
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'progress-1', type: 'agent_message', text: 'progress' },
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'openwork-final-message-run-1',
+          type: 'openwork_final_message',
+          text: 'Final answer',
+        },
+      }),
+    ].join('\n');
+
+    expect(extractAgentOutputErrorText(stdout)).toBe('');
+    expect(extractAgentOutputIncompleteText(stdout)).toBe('');
+    expect(extractFinalResponseText(stdout)).toBe('Final answer');
+  });
+
+  it('reports Codex error events when no later terminal success exists', () => {
+    const stdout = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({ type: 'error', message: 'Provider failed' }),
+    ].join('\n');
+
+    expect(extractAgentOutputErrorText(stdout)).toBe('Provider failed');
   });
 });
 

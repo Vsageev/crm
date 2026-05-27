@@ -19,6 +19,12 @@
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts",
     "chat-turns:migrate": "node --import tsx src/scripts/migrate-agent-chat-turns.ts",
+    "agent-inventory:report": "node --import tsx src/scripts/backfill-agent-runner-inventory.ts",
+    "agent-inventory:backfill": "node --import tsx src/scripts/backfill-agent-runner-inventory.ts --apply",
+    "agent-ownership:gate": "node --import tsx src/scripts/agent-ownership-gate.ts",
+    "repository-roots:report": "node --import tsx src/scripts/report-repository-root-repairs.ts",
+    "runner-connections:report": "node --import tsx src/scripts/report-runner-connections.ts",
+    "no-repository-agent-files:report": "node --import tsx src/scripts/report-no-repository-agent-files.ts",
     "agents:sync": "node scripts/sync-agent-workspaces.mjs",
     "agents:validate": "node scripts/validate-agent-workspaces.mjs"
   },

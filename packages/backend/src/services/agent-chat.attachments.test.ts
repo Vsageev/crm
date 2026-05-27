@@ -20,6 +20,7 @@ vi.mock('../db/connection.js', () => ({
 import {
   activateMessagePathForSearchResult,
   getActiveMessagePath,
+  getCardAttachmentDiskPaths,
   getConversationAttachmentDiskPaths,
   serializeAllConversationMessageEntries,
   updateQueueItem,
@@ -145,7 +146,7 @@ describe('getConversationAttachmentDiskPaths', () => {
     mockUpdate.mockReset();
   });
 
-  it('includes attachments from every attachment-bearing message in a linear conversation', () => {
+  it('skips missing backend files and reports them without failing the conversation', () => {
     recordsByCollection.messages = [
       {
         id: 'm1',
@@ -186,34 +187,101 @@ describe('getConversationAttachmentDiskPaths', () => {
 
     const result = getConversationAttachmentDiskPaths(CONV_ID);
 
-    expect(result.imagePaths.map((entry) => path.basename(entry))).toEqual(['image-1.png']);
     expect(result.filePaths.map((entry) => path.basename(entry))).toEqual([
       'pasted-text-1.txt',
       'pasted-text-2.txt',
     ]);
-    expect(result.attachments).toMatchObject([
+    expect(result.imagePaths.map((entry) => path.basename(entry))).toEqual(['image-1.png']);
+    expect(result.missingAttachments).toEqual([
       {
-        type: 'file',
-        filename: 'pasted-text-1.txt',
-        mimeType: 'text/plain',
-        textExtraction: { status: 'available' },
-        manifest: { storagePath: '/chat-uploads/pasted-text-1.txt' },
-      },
-      {
-        type: 'image',
-        filename: 'image-1.png',
-        mimeType: 'image/png',
-        textExtraction: { status: 'not_applicable' },
-        manifest: { storagePath: '/chat-uploads/image-1.png' },
-      },
-      {
-        type: 'file',
-        filename: 'pasted-text-2.txt',
-        mimeType: 'text/plain',
-        textExtraction: { status: 'available' },
-        manifest: { storagePath: '/chat-uploads/pasted-text-2.txt' },
+        storagePath: '/chat-uploads/missing.txt',
+        messageId: 'm4',
       },
     ]);
+  });
+
+  it('creates item-scoped staged manifests without backend disk paths', () => {
+    recordsByCollection.messages = [
+      {
+        id: 'm1',
+        conversationId: CONV_ID,
+        direction: 'outbound',
+        createdAt: '2026-05-07T10:01:00.000Z',
+        attachments: [
+          {
+            storagePath: '/chat-uploads/spec.txt',
+            fileName: 'spec.txt',
+            type: 'file',
+            mimeType: 'text/plain',
+            fileSize: 12,
+          },
+        ],
+      },
+    ];
+
+    const result = getConversationAttachmentDiskPaths(CONV_ID);
+
+    expect(result.imagePaths).toEqual([]);
+    expect(result.missingAttachments).toEqual([]);
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]).toMatchObject({
+      type: 'file',
+      path: '.openwork/staging/attachment-1/attachments/1-spec.txt',
+      filename: 'spec.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 12,
+      textExtraction: {
+        status: 'available',
+        textPath: '.openwork/staging/attachment-1/attachments/1-spec.txt',
+      },
+    });
+    const staging = result.attachments[0].manifest?.staging as Record<string, unknown>;
+    expect(staging).toMatchObject({
+      id: 'attachment-1',
+      kind: 'attachment',
+      attachmentIndex: 0,
+      storagePath: '/chat-uploads/spec.txt',
+      destination: 'attachments/1-spec.txt',
+    });
+    expect(String((staging.download as { path: string }).path)).toContain('itemId=attachment-1');
+    expect(JSON.stringify(result.attachments)).not.toContain('/data/storage/');
+  });
+
+  it('creates staged manifests for card comment attachments', () => {
+    recordsByCollection.cardComments = [
+      {
+        id: 'comment-1',
+        cardId: 'card-1',
+        createdAt: '2026-05-07T10:01:00.000Z',
+        attachments: [
+          {
+            storagePath: '/card-uploads/brief.txt',
+            fileName: 'brief.txt',
+            type: 'file',
+            mimeType: 'text/plain',
+            fileSize: 15,
+          },
+        ],
+      },
+    ];
+
+    const result = getCardAttachmentDiskPaths('card-1');
+
+    expect(result.missingAttachments).toEqual([]);
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]).toMatchObject({
+      type: 'file',
+      path: '.openwork/staging/attachment-1/attachments/1-brief.txt',
+      filename: 'brief.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 15,
+    });
+    expect(result.attachments[0].manifest?.staging).toMatchObject({
+      id: 'attachment-1',
+      storagePath: '/card-uploads/brief.txt',
+      destination: 'attachments/1-brief.txt',
+    });
+    expect(JSON.stringify(result.attachments)).not.toContain('/data/storage/');
   });
 
   it('limits attachments to the selected branch path when a leaf message is specified', () => {

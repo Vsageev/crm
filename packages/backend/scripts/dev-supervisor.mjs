@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 const RESTART_DELAY_MS = 1000;
 const HEALTH_POLL_MS = 5000;
 const MISSING_GRANDCHILD_GRACE_MS = 20000;
+const DEFAULT_MAX_OLD_SPACE_MB = 2048;
 let stopping = false;
 let child = null;
 let restartTimer = null;
@@ -51,7 +52,7 @@ function start() {
   const existingNodeOptions = process.env.NODE_OPTIONS ?? '';
   const nodeOptions = /--max-old-space-size/.test(existingNodeOptions)
     ? existingNodeOptions
-    : `${existingNodeOptions} --max-old-space-size=8192`.trim();
+    : `${existingNodeOptions} --max-old-space-size=${process.env.BACKEND_MAX_OLD_SPACE_MB ?? DEFAULT_MAX_OLD_SPACE_MB}`.trim();
 
   child = spawn('tsx', ['watch', 'src/index.ts'], {
     stdio: 'inherit',

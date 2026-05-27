@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -19,12 +20,28 @@ import {
   shouldIgnoreStorageUpload,
   writeStorageFileContent,
 } from '../services/storage.js';
+import { authenticateRunnerCredential } from '../services/runner-devices.js';
+import { env } from '../config/env.js';
+import { requireBackendLocalFilesystemGate } from './backend-local-filesystem-gate.js';
 
 interface CommandResult {
   code: number | null;
   stdout: string;
   stderr: string;
   error?: Error;
+}
+
+function signRunnerAttachmentDownloadPath(itemId: string, storagePath: string): string {
+  return crypto
+    .createHmac('sha256', env.JWT_SECRET)
+    .update(`${itemId}\0${storagePath}`)
+    .digest('base64url');
+}
+
+function safeEqualString(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
 function runCommand(command: string, args: string[]): Promise<CommandResult> {
@@ -211,20 +228,21 @@ export async function storageRoutes(app: FastifyInstance) {
     },
   );
 
-  // Browse host filesystem (for reference picker)
+  // Browse host filesystem (development same-host compatibility only)
   typedApp.get(
     '/api/storage/browse-fs',
     {
       onRequest: [app.authenticate, requirePermission('settings:read')],
       schema: {
         tags: ['Storage'],
-        summary: 'Browse the host filesystem for creating references',
+        summary: 'Development-only: browse the backend host filesystem for creating references',
         querystring: z.object({
           path: z.string().default('/'),
         }),
       },
     },
     async (request, reply) => {
+      if (!requireBackendLocalFilesystemGate(reply, 'host_browse')) return;
       try {
         const entries = browseFileSystem(request.query.path);
         return reply.send({ path: request.query.path, entries });
@@ -240,13 +258,14 @@ export async function storageRoutes(app: FastifyInstance) {
       onRequest: [app.authenticate, requirePermission('settings:read')],
       schema: {
         tags: ['Storage'],
-        summary: 'Open the host OS native folder picker',
+        summary: 'Development-only: open the backend host OS native folder picker',
         body: z.object({
           startPath: z.string().optional(),
         }),
       },
     },
     async (request, reply) => {
+      if (!requireBackendLocalFilesystemGate(reply, 'host_picker')) return;
       try {
         const selectedPath = await pickDirectory(request.body.startPath);
         return reply.send({ path: selectedPath });
@@ -280,14 +299,14 @@ export async function storageRoutes(app: FastifyInstance) {
     },
   );
 
-  // Create reference (symlink)
+  // Create reference (symlink) to a backend host path (development same-host compatibility only)
   typedApp.post(
     '/api/storage/references',
     {
       onRequest: [app.authenticate, requirePermission('settings:update')],
       schema: {
         tags: ['Storage'],
-        summary: 'Create a reference (symlink) to a local path',
+        summary: 'Development-only: create a backend-storage reference to a backend host path',
         body: z.object({
           path: z.string().default('/'),
           name: z.string().min(1).max(255),
@@ -296,6 +315,7 @@ export async function storageRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      if (!requireBackendLocalFilesystemGate(reply, 'host_reference')) return;
       try {
         const entry = createReference(request.body.path, request.body.name, request.body.target);
         return reply.status(201).send(entry);
@@ -339,6 +359,55 @@ export async function storageRoutes(app: FastifyInstance) {
       try {
         const entry = await uploadFile(dirPath, fileName, mimeType, buffer);
         return reply.status(201).send(entry);
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
+  typedApp.get(
+    '/api/runner-attachments/download',
+    {
+      schema: {
+        tags: ['Storage'],
+        summary: 'Download a staged runner attachment',
+        querystring: z.object({
+          itemId: z.string(),
+          path: z.string(),
+          token: z.string(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const auth = request.headers.authorization;
+      const credential = auth?.toLowerCase().startsWith('bearer ')
+        ? auth.slice(7).trim()
+        : null;
+      if (!credential || !(await authenticateRunnerCredential(credential))) {
+        return reply
+          .code(401)
+          .send({ error: 'Runner attachment download requires runner authentication' });
+      }
+      if (
+        !safeEqualString(
+          request.query.token,
+          signRunnerAttachmentDownloadPath(request.query.itemId, request.query.path),
+        )
+      ) {
+        return reply.code(403).send({ error: 'Runner attachment download token is invalid' });
+      }
+
+      try {
+        const diskPath = getFilePath(request.query.path);
+        if (!diskPath) {
+          return reply.notFound('File not found');
+        }
+
+        const fileName = path.basename(diskPath);
+        return reply
+          .header('Content-Type', 'application/octet-stream')
+          .header('Content-Disposition', `attachment; filename="${fileName}"`)
+          .send(fs.createReadStream(diskPath));
       } catch (err) {
         return reply.badRequest((err as Error).message);
       }
@@ -494,6 +563,7 @@ export async function storageRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      if (!requireBackendLocalFilesystemGate(reply, 'backend_storage_reveal')) return;
       try {
         const diskPath = getDiskPath(request.body.path);
         if (!diskPath) {
@@ -509,20 +579,21 @@ export async function storageRoutes(app: FastifyInstance) {
     },
   );
 
-  // Reveal an absolute host path linked from markdown/chat output
+  // Reveal an absolute host path linked from markdown/chat output (development same-host compatibility only)
   typedApp.post(
     '/api/storage/reveal-local',
     {
       onRequest: [app.authenticate, requirePermission('settings:read')],
       schema: {
         tags: ['Storage'],
-        summary: 'Open an absolute host path in the OS file manager',
+        summary: 'Development-only: open an absolute backend host path in the OS file manager',
         body: z.object({
           path: z.string().min(1),
         }),
       },
     },
     async (request, reply) => {
+      if (!requireBackendLocalFilesystemGate(reply, 'absolute_host_reveal')) return;
       try {
         const diskPath = path.resolve(request.body.path);
         if (!path.isAbsolute(request.body.path)) {

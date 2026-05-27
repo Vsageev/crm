@@ -44,7 +44,13 @@ import {
 } from '../services/agent-chat.js';
 import { listAgentRuns } from '../services/agent-runs.js';
 import { getAgentConversationChatView } from '../services/agent-chat-view.js';
+import { ensureBackendLocalConversationSubfolderWorkspace } from '../services/agent-workspace-local-materialization.js';
+import {
+  resolveAgentExecutionRootFromRecord,
+  resolveAgentWorkspacePathFromRecord,
+} from '../services/agent-workspaces.js';
 import { ApiError } from '../utils/api-errors.js';
+import { requireBackendLocalFilesystemGate } from './backend-local-filesystem-gate.js';
 
 // Rate limiter for agent prompt execution — shared across all requests in this process
 export const promptRateLimiter = createAgentRateLimiter();
@@ -291,6 +297,9 @@ function toAgentChatApiError(error: AgentChatError): ApiError {
   if (error.statusCode === 404) {
     return ApiError.notFound(error.code, error.message, error.hint);
   }
+  if (error.statusCode === 403) {
+    return ApiError.forbidden(error.code, error.message, error.hint);
+  }
   if (error.statusCode === 409) {
     return ApiError.conflict(error.code, error.message, error.hint);
   }
@@ -464,7 +473,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
       onRequest: [app.authenticate, requirePermission('settings:read')],
       schema: {
         tags: ['Agent Chat'],
-        summary: 'Reveal a conversation subfolder in the OS file manager',
+        summary: 'Development-only: reveal a backend-local conversation subfolder in the OS file manager',
         params: z.object({ id: z.string(), conversationId: z.string() }),
       },
     },
@@ -482,7 +491,16 @@ export async function agentChatRoutes(app: FastifyInstance) {
           'This conversation does not use a dedicated subfolder',
         );
       }
+      if (!requireBackendLocalFilesystemGate(reply, 'conversation_folder_reveal')) return;
 
+      const agentRecord = getAgent(request.params.id) as Record<string, unknown> | null;
+      const agentWorkspaceRoot = resolveAgentWorkspacePathFromRecord(agentRecord, request.params.id);
+      const executionRoot = resolveAgentExecutionRootFromRecord(agentRecord, request.params.id);
+      ensureBackendLocalConversationSubfolderWorkspace(
+        agentWorkspaceRoot,
+        executionRoot,
+        request.params.conversationId,
+      );
       const diskPath = resolveAgentChatProcessWorkingDirectory(
         request.params.id,
         request.params.conversationId,
@@ -658,7 +676,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
         const wasQueuedOrBusy =
           isAgentBusy(request.params.id, request.body.conversationId) ||
           getAgentQueuedPromptCount(request.params.id, request.body.conversationId) > 0;
-        const queued = enqueueAgentPrompt(
+        const queued = await enqueueAgentPrompt(
           request.params.id,
           request.body.conversationId,
           request.body.prompt,
@@ -934,7 +952,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
       requireConversationExists(request.body.conversationId, request.params.id);
 
       try {
-        const queued = enqueueAgentResponseToMessage(
+        const queued = await enqueueAgentResponseToMessage(
           request.params.id,
           request.body.conversationId,
           {
@@ -1001,7 +1019,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
           request.params.cid,
           newMessage.id as string,
         );
-        const queued = enqueueAgentPrompt(
+        const queued = await enqueueAgentPrompt(
           request.params.id,
           request.params.cid,
           request.body.content,
@@ -1113,7 +1131,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
           request.params.cid,
           newMessage.id as string,
         );
-        const queued = enqueueAgentPrompt(request.params.id, request.params.cid, content, {
+        const queued = await enqueueAgentPrompt(request.params.id, request.params.cid, content, {
           mode: 'respond_to_message',
           targetMessageId: newMessage.id as string,
           createdById: userId,
@@ -1271,7 +1289,7 @@ export async function agentChatRoutes(app: FastifyInstance) {
         const wasQueuedOrBusy =
           isAgentBusy(request.params.id, conversationId) ||
           getAgentQueuedPromptCount(request.params.id, conversationId) > 0;
-        const queued = enqueueAgentPrompt(request.params.id, conversationId, caption || '', {
+        const queued = await enqueueAgentPrompt(request.params.id, conversationId, caption || '', {
           queuedMessageId: messageId,
           previousUserMessageId,
           attachments,

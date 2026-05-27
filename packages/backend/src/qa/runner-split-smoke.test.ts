@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Fastify, { type FastifyRequest } from 'fastify';
 import sensible from '@fastify/sensible';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -5,8 +8,42 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type RecordMap = Map<string, Map<string, Record<string, unknown>>>;
 
+function createQaAgentContext(agentId: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `${agentId}-context-`));
+  fs.writeFileSync(
+    path.join(root, 'AGENTS.md'),
+    `# QA smoke agent context\n\nAgent: ${agentId}\n`,
+    'utf8',
+  );
+  return root;
+}
+
 const mocks = vi.hoisted(() => {
   const records: RecordMap = new Map();
+  const defaultRunnerRoot = '/tmp/openwork-runner';
+  const noRepositoryAgentIds = [
+    'qa-smoke-agent-runner-split',
+    'qa-smoke-agent-multi-queue',
+    'qa-smoke-agent-turn-paths',
+    '22222222-2222-4222-8222-222222222222',
+  ];
+  function agentInventory(workspaceRoot = defaultRunnerRoot, agentIds = noRepositoryAgentIds) {
+    return {
+      protocolVersion: 1,
+      revision: `qa-smoke-${workspaceRoot}`,
+      advertisedAt: new Date().toISOString(),
+      ttlMs: 60_000,
+      workspaceRoots: [{ id: 'default', path: workspaceRoot, scope: 'workspace', writable: true }],
+      fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+      agents: agentIds.map((agentId) => ({
+        agentId,
+        readiness: 'ready',
+        fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+        workspaceRootPath: `${workspaceRoot}/.openwork/no-repository-agents/${agentId}/workspace`,
+        updatedAt: new Date().toISOString(),
+      })),
+    };
+  }
 
   function collection(name: string) {
     let map = records.get(name);
@@ -70,8 +107,41 @@ const mocks = vi.hoisted(() => {
     store,
     cancelRemoteAgentRun: vi.fn(() => true),
     dispatchRemoteAgentJob: vi.fn(),
+    dispatchRunnerFilesystemRequest: vi.fn(),
+    getAvailableRemoteAgentRunnerCapabilities: vi.fn(() => ({
+      supportedProviders: ['codex', 'claude', 'qwen', 'cursor', 'opencode'],
+      supportsFilesystem: true,
+      workspaceRoot: defaultRunnerRoot,
+      agentInventory: agentInventory(),
+      policy: { workspaceRootRequired: false },
+    })),
+    getAvailableRemoteAgentRunnerSelection: vi.fn(() => ({
+      runnerId: 'qa-smoke-runner',
+      capabilities: {
+        supportedProviders: ['codex', 'claude', 'qwen', 'cursor', 'opencode'],
+        supportsFilesystem: true,
+        workspaceRoot: defaultRunnerRoot,
+        agentInventory: agentInventory(),
+        policy: { workspaceRootRequired: false },
+      },
+    })),
     hasAvailableRemoteAgentRunner: vi.fn(() => true),
     hasConnectedRemoteAgentRunner: vi.fn(() => true),
+    getRunnerFilesystemAvailability: vi.fn(() => ({
+      state: 'available',
+      runnerId: 'qa-smoke-runner',
+    })),
+    getRunnerFilesystemSelection: vi.fn(() => ({
+      runnerId: 'qa-smoke-runner',
+      capabilities: {
+        supportedProviders: ['codex', 'claude', 'qwen', 'cursor', 'opencode'],
+        supportsFilesystem: true,
+        workspaceRoot: defaultRunnerRoot,
+        agentInventory: agentInventory(),
+        policy: { workspaceRootRequired: false },
+      },
+    })),
+    agentInventory,
   };
 });
 
@@ -79,14 +149,43 @@ vi.mock('../db/index.js', () => ({ store: mocks.store }));
 vi.mock('../db/connection.js', () => ({ store: mocks.store }));
 vi.mock('../services/agent-runners.js', () => ({
   cancelRemoteAgentRun: mocks.cancelRemoteAgentRun,
+  dispatchRunnerFilesystemRequest: mocks.dispatchRunnerFilesystemRequest,
   dispatchRemoteAgentJob: mocks.dispatchRemoteAgentJob,
+  getAvailableRemoteAgentRunnerCapabilities: mocks.getAvailableRemoteAgentRunnerCapabilities,
+  getAvailableRemoteAgentRunnerSelection: mocks.getAvailableRemoteAgentRunnerSelection,
   getRemoteAgentRunnerUnavailableMessage: vi.fn(() => 'No remote agent runner is connected.'),
+  getRunnerFilesystemAvailability: mocks.getRunnerFilesystemAvailability,
+  getRunnerFilesystemSelection: mocks.getRunnerFilesystemSelection,
   hasAvailableRemoteAgentRunner: mocks.hasAvailableRemoteAgentRunner,
   hasConnectedRemoteAgentRunner: mocks.hasConnectedRemoteAgentRunner,
 }));
 vi.mock('../services/audit-log.js', () => ({
   createAuditLog: vi.fn(async () => ({ id: 'qa-smoke-audit-log' })),
 }));
+
+function restoreDefaultRunnerMocks() {
+  const workspaceRoot = '/tmp/openwork-runner';
+  const capabilities = {
+    supportedProviders: ['codex', 'claude', 'qwen', 'cursor', 'opencode'],
+    supportsFilesystem: true,
+    workspaceRoot,
+    agentInventory: mocks.agentInventory(workspaceRoot),
+    policy: { workspaceRootRequired: false },
+  };
+  mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue(capabilities);
+  mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
+    runnerId: 'qa-smoke-runner',
+    capabilities,
+  });
+  mocks.getRunnerFilesystemSelection.mockReturnValue({
+    runnerId: 'qa-smoke-runner',
+    capabilities,
+  });
+}
+
+afterEach(() => {
+  restoreDefaultRunnerMocks();
+});
 
 import {
   createAgentConversation,
@@ -100,6 +199,7 @@ import {
 import { createAgentChatTurn, listAgentChatTurns } from '../services/agent-chat-turns.js';
 import { agentRunRoutes } from '../routes/agent-runs.js';
 import { cardRoutes } from '../routes/cards.js';
+import { runnerFilesystemRoutes } from '../routes/runner-filesystem.js';
 import {
   completeAgentRun,
   createAgentRun,
@@ -259,6 +359,7 @@ async function buildSmokeApi() {
   });
   await app.register(agentRunRoutes);
   await app.register(cardRoutes);
+  await app.register(runnerFilesystemRoutes);
   return app;
 }
 
@@ -298,6 +399,7 @@ describe('runner-split QA backend smoke', () => {
       groupId: ids.group,
       status: 'active',
       separateFolderPerChat: false,
+      workspacePath: createQaAgentContext(ids.agent),
     });
     mocks.store.insert('workspaces', {
       id: ids.workspace,
@@ -342,7 +444,7 @@ describe('runner-split QA backend smoke', () => {
         },
       }),
     ].join('\n');
-    const queued = enqueueAgentPrompt(
+    const queued = await enqueueAgentPrompt(
       ids.agent,
       String(conversation.id),
       'runner split smoke prompt',
@@ -391,8 +493,17 @@ describe('runner-split QA backend smoke', () => {
       ok: true,
       reason: 'queued chat alignment matched conversation and queued message ids',
     });
-    expect(mocks.hasConnectedRemoteAgentRunner).toHaveBeenCalledWith(ids.user, ids.workspace);
-    expect(mocks.hasAvailableRemoteAgentRunner).toHaveBeenCalledWith(ids.user, ids.workspace, 'codex');
+    expect(mocks.hasConnectedRemoteAgentRunner).toHaveBeenCalledWith(
+      ids.user,
+      ids.workspace,
+      ids.user,
+    );
+    expect(mocks.hasAvailableRemoteAgentRunner).toHaveBeenCalledWith(
+      ids.user,
+      ids.workspace,
+      'codex',
+      ids.user,
+    );
 
     const run = createAgentRun({
       id: ids.run,
@@ -463,6 +574,399 @@ describe('runner-split QA backend smoke', () => {
     console.info(
       `qa-smoke report: ${JSON.stringify({ check: 'backend API/service smoke', status: 'PASS', reason: completionCheck.reason, ids: completionCheck.ids })}`,
     );
+  });
+
+  it('exposes cross-machine workspace acceptance evidence through API-visible runner-local operations', async () => {
+    mocks.store.reset();
+    mocks.dispatchRunnerFilesystemRequest.mockReset();
+    mocks.getRunnerFilesystemAvailability.mockReset();
+    mocks.getRunnerFilesystemSelection.mockReset();
+    mocks.getAvailableRemoteAgentRunnerCapabilities.mockReset();
+    mocks.getAvailableRemoteAgentRunnerSelection.mockReset();
+    mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
+    mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openwork-cross-machine-smoke-'));
+    const backendDataRoot = path.join(tempRoot, 'hosted-backend-data');
+    const runnerRoot = path.join(tempRoot, 'runner-workspace-root');
+    const repositoryRoot = path.join(runnerRoot, 'repo-agent');
+    const noRepositoryWorkspace = path.join(
+      runnerRoot,
+      '.openwork',
+      'no-repository-agents',
+      '22222222-2222-4222-8222-222222222222',
+      'workspace',
+    );
+    const backendLegacyAgentRoot = path.join(
+      backendDataRoot,
+      'agents',
+      '22222222-2222-4222-8222-222222222222',
+    );
+    fs.mkdirSync(repositoryRoot, { recursive: true });
+    fs.mkdirSync(backendLegacyAgentRoot, { recursive: true });
+    fs.writeFileSync(path.join(repositoryRoot, 'README.md'), 'runner repository root\n');
+    fs.writeFileSync(path.join(backendLegacyAgentRoot, 'AGENTS.md'), 'backend legacy copy\n');
+
+    const ids = {
+      user: 'qa-smoke-user-runner-split',
+      group: '33333333-3333-4333-8333-333333333333',
+      workspace: '44444444-4444-4444-8444-444444444444',
+      collection: '55555555-5555-4555-8555-555555555555',
+      repositoryAgent: '11111111-1111-4111-8111-111111111111',
+      noRepositoryAgent: '22222222-2222-4222-8222-222222222222',
+      conversation: '66666666-6666-4666-8666-666666666666',
+      repositorySubfolderConversation: '77777777-7777-4777-8777-777777777777',
+      noRepositorySubfolderConversation: '88888888-8888-4888-8888-888888888888',
+    };
+
+    try {
+      mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
+        supportedProviders: ['codex'],
+        supportsFilesystem: true,
+        workspaceRoot: runnerRoot,
+        agentInventory: mocks.agentInventory(runnerRoot, [ids.noRepositoryAgent]),
+        policy: { workspaceRootRequired: true },
+      });
+      mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
+        runnerId: 'qa-cross-runner',
+        capabilities: {
+          supportedProviders: ['codex'],
+          supportsFilesystem: true,
+          workspaceRoot: runnerRoot,
+          agentInventory: mocks.agentInventory(runnerRoot, [ids.noRepositoryAgent]),
+          policy: { workspaceRootRequired: true },
+        },
+      });
+      mocks.getRunnerFilesystemAvailability.mockReturnValue({
+        state: 'available',
+        runnerId: 'qa-cross-runner',
+      });
+      mocks.getRunnerFilesystemSelection.mockReturnValue({
+        runnerId: 'qa-cross-runner',
+        capabilities: {
+          supportedProviders: ['codex'],
+          supportsFilesystem: true,
+          workspaceRoot: runnerRoot,
+          agentInventory: mocks.agentInventory(runnerRoot, [ids.noRepositoryAgent]),
+          policy: { workspaceRootRequired: true },
+        },
+      });
+      mocks.dispatchRunnerFilesystemRequest.mockImplementation(
+        async ({ request }: { request: Record<string, unknown> }) => {
+          const requestPath = typeof request.path === 'string' ? request.path : '';
+          const destinationPath =
+            typeof request.destinationPath === 'string' ? request.destinationPath : '';
+          const workspacePath =
+            typeof request.workspacePath === 'string' ? request.workspacePath : '';
+          const serialized = JSON.stringify(request);
+          if (serialized.includes(backendDataRoot)) {
+            throw new Error(`backend_path_leak: ${backendDataRoot}`);
+          }
+          if (requestPath && !requestPath.startsWith(runnerRoot)) {
+            throw new Error(`path_outside_workspace_root: ${requestPath}`);
+          }
+          if (destinationPath && !destinationPath.startsWith(runnerRoot)) {
+            throw new Error(`path_outside_workspace_root: ${destinationPath}`);
+          }
+          if (workspacePath && !workspacePath.startsWith(runnerRoot)) {
+            throw new Error(`path_outside_workspace_root: ${workspacePath}`);
+          }
+
+          if (request.action === 'browse') {
+            return {
+              runnerId: 'qa-cross-runner',
+              result: {
+                action: 'browse',
+                path: requestPath,
+                entries: [{ name: 'README.md', path: path.join(requestPath, 'README.md'), type: 'file', size: 23 }],
+              },
+            };
+          }
+          if (request.action === 'reveal') {
+            return { runnerId: 'qa-cross-runner', result: { action: 'reveal' } };
+          }
+          if (request.action === 'validate_repository_root') {
+            return {
+              runnerId: 'qa-cross-runner',
+              result: {
+                action: 'validate_repository_root',
+                path: repositoryRoot,
+                repositoryRootOrigin: 'runner_local',
+                repositoryRootVerifiedAt: '2026-05-23T00:00:00.000Z',
+              },
+            };
+          }
+          if (request.action === 'prepare_workspace') {
+            return {
+              runnerId: 'qa-cross-runner',
+              result: {
+                action: 'prepare_workspace',
+                path: requestPath,
+                workspaceRoot: runnerRoot,
+                status: 'ready',
+                preparedAt: '2026-05-23T00:00:01.000Z',
+              },
+            };
+          }
+          if (request.action === 'reveal_agent_path') {
+            return { runnerId: 'qa-cross-runner', result: { action: 'reveal_agent_path' } };
+          }
+          return { runnerId: 'qa-cross-runner', result: { action: request.action } };
+        },
+      );
+
+      mocks.store.insert('users', {
+        id: ids.user,
+        email: 'qa-smoke-cross@example.test',
+        firstName: 'QA',
+        lastName: 'Cross',
+        type: 'human',
+        isActive: true,
+      });
+      mocks.store.insert('workspaces', {
+        id: ids.workspace,
+        userId: ids.user,
+        name: '[qa-smoke] cross-machine workspace',
+        agentGroupIds: [ids.group],
+        collectionIds: [ids.collection],
+      });
+      mocks.store.insert('collections', {
+        id: ids.collection,
+        name: '[qa-smoke] cross-machine collection',
+      });
+      mocks.store.insert('agents', {
+        id: ids.repositoryAgent,
+        name: '[qa-smoke] repository root agent',
+        model: 'codex',
+        modelId: 'gpt-5.3-codex',
+        groupId: ids.group,
+        status: 'active',
+        repositoryRoot,
+        repositoryRootOrigin: 'runner_local',
+        repositoryRootRunnerId: 'qa-cross-runner',
+        repositoryRootVerifiedAt: '2026-05-23T00:00:00.000Z',
+        repositoryRootRepairRequired: false,
+        workspacePath: path.join(repositoryRoot, '.openwork', 'agents', 'repository-root-agent'),
+      });
+      mocks.store.insert('agents', {
+        id: ids.noRepositoryAgent,
+        name: '[qa-smoke] no repository agent',
+        model: 'codex',
+        modelId: 'gpt-5.3-codex',
+        groupId: ids.group,
+        status: 'active',
+        workspacePath: backendLegacyAgentRoot,
+      });
+      mocks.store.insert('conversations', {
+        id: ids.conversation,
+        contactId: null,
+        channelType: 'agent',
+        subject: '[qa-smoke] cross-machine conversation',
+        status: 'open',
+        isUnread: false,
+        metadata: JSON.stringify({ agentId: ids.repositoryAgent }),
+      });
+      mocks.store.insert('conversations', {
+        id: ids.repositorySubfolderConversation,
+        contactId: null,
+        channelType: 'agent',
+        subject: '[qa-smoke] repository subfolder conversation',
+        status: 'open',
+        isUnread: false,
+        metadata: JSON.stringify({
+          agentId: ids.repositoryAgent,
+          workspaceMode: 'subfolder',
+          workspaceRelativePath: `conversations/${ids.repositorySubfolderConversation}`,
+        }),
+      });
+      mocks.store.insert('conversations', {
+        id: ids.noRepositorySubfolderConversation,
+        contactId: null,
+        channelType: 'agent',
+        subject: '[qa-smoke] no repository subfolder conversation',
+        status: 'open',
+        isUnread: false,
+        metadata: JSON.stringify({
+          agentId: ids.noRepositoryAgent,
+          workspaceMode: 'subfolder',
+          workspaceRelativePath: `conversations/${ids.noRepositorySubfolderConversation}`,
+        }),
+      });
+
+      const send = await enqueueAgentPrompt(ids.repositoryAgent, ids.conversation, 'cross-machine send', {
+        queuedMessageId: 'qa-cross-send-message',
+        attachments: [
+          {
+            type: 'file',
+            fileName: 'spec.txt',
+            mimeType: 'text/plain',
+            fileSize: 24,
+            storagePath: '/chat-uploads/spec.txt',
+          },
+        ],
+      });
+      expect(send.userMessage).toMatchObject({
+        id: 'qa-cross-send-message',
+        content: 'cross-machine send',
+      });
+      expect(JSON.stringify(send)).not.toContain(backendDataRoot);
+
+      const editedMessage = editMessageAndBranch(
+        ids.conversation,
+        'qa-cross-send-message',
+        'cross-machine edit',
+        { newMessageId: 'qa-cross-edit-message' },
+      );
+      const edit = await enqueueAgentPrompt(ids.repositoryAgent, ids.conversation, 'cross-machine edit', {
+        mode: 'respond_to_message',
+        targetMessageId: String(editedMessage.id),
+        turnType: 'edit',
+        supersedesMessageId: 'qa-cross-send-message',
+      });
+      expect(editedMessage).toMatchObject({
+        id: 'qa-cross-edit-message',
+        content: 'cross-machine edit',
+      });
+      expect(edit.queueItem).toMatchObject({
+        agentId: ids.repositoryAgent,
+        conversationId: ids.conversation,
+        status: 'queued',
+        targetMessageId: 'qa-cross-edit-message',
+      });
+      expect(JSON.stringify(edit)).not.toContain(backendDataRoot);
+
+      const app = await buildSmokeApi();
+      try {
+        const statusResponse = await app.inject({
+          method: 'GET',
+          url: `/api/runner-filesystem/status?workspaceId=${ids.workspace}`,
+        });
+        expect(statusResponse.statusCode).toBe(200);
+        expect(statusResponse.json()).toMatchObject({
+          state: 'available',
+          runnerId: 'qa-cross-runner',
+        });
+
+        const browseResponse = await app.inject({
+          method: 'GET',
+          url: `/api/runner-filesystem/browse?workspaceId=${ids.workspace}&path=${encodeURIComponent(repositoryRoot)}&mode=folder`,
+        });
+        expect(browseResponse.statusCode).toBe(200);
+        expect(browseResponse.json()).toMatchObject({
+          origin: 'runner',
+          runnerId: 'qa-cross-runner',
+          path: repositoryRoot,
+        });
+        expect(JSON.stringify(browseResponse.json())).not.toContain(backendDataRoot);
+
+        const revealResponse = await app.inject({
+          method: 'POST',
+          url: '/api/runner-filesystem/reveal',
+          payload: { workspaceId: ids.workspace, path: repositoryRoot },
+        });
+        expect(revealResponse.statusCode).toBe(204);
+
+        const validateResponse = await app.inject({
+          method: 'POST',
+          url: '/api/runner-filesystem/validate-repository-root',
+          payload: { workspaceId: ids.workspace, agentId: ids.repositoryAgent, path: repositoryRoot },
+        });
+        expect(validateResponse.statusCode).toBe(200);
+        expect(validateResponse.json()).toMatchObject({
+          origin: 'runner',
+          runnerId: 'qa-cross-runner',
+          path: repositoryRoot,
+          repositoryRootOrigin: 'runner_local',
+        });
+
+        const prepareResponse = await app.inject({
+          method: 'POST',
+          url: '/api/runner-filesystem/prepare-agent-workspace',
+          payload: { workspaceId: ids.workspace, agentId: ids.noRepositoryAgent },
+        });
+        expect(prepareResponse.statusCode).toBe(200);
+        expect(prepareResponse.json()).toMatchObject({
+          origin: 'runner',
+          runnerId: 'qa-cross-runner',
+          path: noRepositoryWorkspace,
+          conversationPaths: [
+            path.join(noRepositoryWorkspace, 'conversations', ids.noRepositorySubfolderConversation),
+          ],
+          workspaceRoot: runnerRoot,
+          status: 'ready',
+        });
+        expect(JSON.stringify(prepareResponse.json())).not.toContain(backendDataRoot);
+
+        const prepareConversationResponse = await app.inject({
+          method: 'POST',
+          url: '/api/runner-filesystem/prepare-conversation-workspace',
+          payload: {
+            workspaceId: ids.workspace,
+            agentId: ids.repositoryAgent,
+            conversationId: ids.repositorySubfolderConversation,
+          },
+        });
+        expect(prepareConversationResponse.statusCode).toBe(200);
+        expect(prepareConversationResponse.json()).toMatchObject({
+          origin: 'runner',
+          runnerId: 'qa-cross-runner',
+          path: path.join(
+            repositoryRoot,
+            'conversations',
+            ids.repositorySubfolderConversation,
+          ),
+          workspaceRoot: runnerRoot,
+          status: 'ready',
+        });
+        expect(JSON.stringify(prepareConversationResponse.json())).not.toContain(backendDataRoot);
+      } finally {
+        await app.close();
+      }
+
+      expect(mocks.dispatchRunnerFilesystemRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({ action: 'prepare_workspace', path: noRepositoryWorkspace }),
+        }),
+      );
+      expect(mocks.dispatchRunnerFilesystemRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            action: 'prepare_workspace',
+            purpose: 'conversation_subfolder',
+            path: path.join(repositoryRoot, 'conversations', ids.repositorySubfolderConversation),
+          }),
+        }),
+      );
+      expect(JSON.stringify(mocks.dispatchRunnerFilesystemRequest.mock.calls)).not.toContain(
+        backendDataRoot,
+      );
+
+      console.info(
+        `qa-smoke report: ${JSON.stringify({
+          check: 'cross-machine workspace acceptance',
+          status: 'PASS',
+          reason:
+            'chat send/edit, attachment metadata, repository-root filesystem APIs, no-repository prepare, and conversation subfolder prepare all used runner-local paths with distinct backend DATA_DIR and runner roots',
+          ids: {
+            runnerId: 'qa-cross-runner',
+            workspaceId: ids.workspace,
+            repositoryAgentId: ids.repositoryAgent,
+            noRepositoryAgentId: ids.noRepositoryAgent,
+            conversationId: ids.conversation,
+            sendQueueId: String(send.queueItem.id),
+            editQueueId: String(edit.queueItem.id),
+          },
+          evidence: {
+            backendDataRoot,
+            runnerRoot,
+            repositoryRoot,
+            noRepositoryWorkspace,
+          },
+        })}`,
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('repairs stale processing chat queue rows when their linked run is already terminal', () => {
@@ -669,6 +1173,7 @@ describe('runner-split QA backend smoke', () => {
       groupId: ids.group,
       status: 'active',
       separateFolderPerChat: false,
+      workspacePath: createQaAgentContext(ids.agent),
     });
     mocks.store.insert('workspaces', {
       id: ids.workspace,
@@ -734,15 +1239,15 @@ describe('runner-split QA backend smoke', () => {
     const expectedPrompts = ['queued prompt alpha', 'queued prompt beta', 'queued prompt gamma'];
     const expectedQueuedMessageIds = ['qa-msg-q1', 'qa-msg-q2', 'qa-msg-q3'];
 
-    enqueueAgentPrompt(ids.agent, convId, expectedPrompts[0], {
+    await enqueueAgentPrompt(ids.agent, convId, expectedPrompts[0], {
       queuedMessageId: expectedQueuedMessageIds[0],
       previousUserMessageId: 'qa-msg-root',
     });
-    enqueueAgentPrompt(ids.agent, convId, expectedPrompts[1], {
+    await enqueueAgentPrompt(ids.agent, convId, expectedPrompts[1], {
       queuedMessageId: expectedQueuedMessageIds[1],
       previousUserMessageId: 'qa-msg-q1',
     });
-    enqueueAgentPrompt(ids.agent, convId, expectedPrompts[2], {
+    await enqueueAgentPrompt(ids.agent, convId, expectedPrompts[2], {
       queuedMessageId: expectedQueuedMessageIds[2],
       previousUserMessageId: 'qa-msg-q2',
     });
@@ -847,6 +1352,7 @@ describe('runner-split QA backend smoke', () => {
       groupId: ids.group,
       status: 'active',
       separateFolderPerChat: false,
+      workspacePath: createQaAgentContext(ids.agent),
     });
     mocks.store.insert('workspaces', {
       id: ids.workspace,
@@ -867,7 +1373,7 @@ describe('runner-split QA backend smoke', () => {
     ) as Record<string, unknown>;
     const convId = String(conversation.id);
 
-    const root = enqueueAgentPrompt(ids.agent, convId, 'root prompt', {
+    const root = await enqueueAgentPrompt(ids.agent, convId, 'root prompt', {
       queuedMessageId: 'qa-turn-msg-root',
     });
     const rootTurnId = String(root.queueItem.turnId);
@@ -904,7 +1410,7 @@ describe('runner-split QA backend smoke', () => {
       runId: 'qa-turn-run-root',
     });
 
-    const afterStop = enqueueAgentPrompt(ids.agent, convId, 'after stop follow-up', {
+    const afterStop = await enqueueAgentPrompt(ids.agent, convId, 'after stop follow-up', {
       queuedMessageId: 'qa-turn-msg-after-stop',
       previousUserMessageId: 'qa-turn-msg-root',
     });
@@ -919,7 +1425,7 @@ describe('runner-split QA backend smoke', () => {
     const editedMessage = editMessageAndBranch(convId, 'qa-turn-msg-root', 'edited root prompt', {
       newMessageId: 'qa-turn-msg-root-edit',
     });
-    const editQueue = enqueueAgentPrompt(ids.agent, convId, 'edited root prompt', {
+    const editQueue = await enqueueAgentPrompt(ids.agent, convId, 'edited root prompt', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       turnType: 'edit',
@@ -936,7 +1442,7 @@ describe('runner-split QA backend smoke', () => {
       status: 'superseded',
     });
 
-    const afterEdit = enqueueAgentPrompt(ids.agent, convId, 'after edit follow-up', {
+    const afterEdit = await enqueueAgentPrompt(ids.agent, convId, 'after edit follow-up', {
       queuedMessageId: 'qa-turn-msg-after-edit',
       previousUserMessageId: 'qa-turn-msg-root-edit',
     });
@@ -946,7 +1452,7 @@ describe('runner-split QA backend smoke', () => {
       status: 'queued',
     });
 
-    const failed = enqueueAgentPrompt(ids.agent, convId, 'failed prompt', {
+    const failed = await enqueueAgentPrompt(ids.agent, convId, 'failed prompt', {
       queuedMessageId: 'qa-turn-msg-failed',
     });
     const failedTurnId = String(failed.queueItem.turnId);
@@ -977,7 +1483,7 @@ describe('runner-split QA backend smoke', () => {
       fileSize: 42,
       storagePath: '/chat-uploads/spec.txt',
     };
-    const attachmentPrompt = enqueueAgentPrompt(ids.agent, convId, '', {
+    const attachmentPrompt = await enqueueAgentPrompt(ids.agent, convId, '', {
       queuedMessageId: 'qa-turn-msg-attachment',
       attachments: [attachment],
     });
@@ -1210,6 +1716,7 @@ describe('runner-split QA backend smoke', () => {
       modelId: 'gpt-5.3-codex',
       groupId: ids.group,
       status: 'active',
+      workspacePath: createQaAgentContext(ids.agent),
     });
     mocks.store.insert('workspaces', {
       id: ids.workspace,
@@ -1255,7 +1762,7 @@ describe('runner-split QA backend smoke', () => {
       ids.agent,
       '[qa-smoke] negative queue alignment conversation',
     ) as Record<string, unknown>;
-    const queued = enqueueAgentPrompt(
+    const queued = await enqueueAgentPrompt(
       ids.agent,
       String(conversation.id),
       'runner split negative queue prompt',

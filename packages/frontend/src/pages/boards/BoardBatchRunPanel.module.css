@@ -158,6 +158,49 @@
   position: relative;
 }
 
+.runnerPreflight {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.runnerPreflightReady {
+  border-color: rgba(16, 185, 129, 0.22);
+  background: rgba(16, 185, 129, 0.06);
+  color: var(--color-success, #10b981);
+}
+
+.runnerPreflightIssue {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--color-warning, #b45309);
+}
+
+.runnerPreflightText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.runnerPreflightTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.runnerPreflightMessage {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
 .agentTrigger {
   display: flex;
   align-items: center;

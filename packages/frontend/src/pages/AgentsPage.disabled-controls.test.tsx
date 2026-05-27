@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ReplyComposer } from './AgentsPage';
@@ -14,6 +14,42 @@ afterEach(() => {
 });
 
 describe('ReplyComposer disabled control reasons', () => {
+  it('sends staged image attachments while a run is streaming so they can queue', async () => {
+    const onSendAttachments = vi.fn(async () => {});
+    const createObjectURL = vi.fn(() => 'blob:preview');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectURL,
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: revokeObjectURL,
+    });
+
+    const { container } = render(
+      <ReplyComposer
+        streaming
+        autoAttachOversizedPasteAsTextFile
+        onSendAttachments={onSendAttachments}
+        onSendText={noopAsync}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Attach images' })).not.toBeDisabled();
+
+    const imageInput = container.querySelector<HTMLInputElement>('input[accept="image/*"]');
+    expect(imageInput).not.toBeNull();
+    const image = new File(['fake image'], 'queued-photo.jpg', { type: 'image/jpeg' });
+    fireEvent.change(imageInput!, { target: { files: [image] } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => {
+      expect(onSendAttachments).toHaveBeenCalledWith('', [image]);
+    });
+  });
+
   it('explains missing runner configuration on the send button', async () => {
     render(
       <ReplyComposer

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { X, Bot, Play, Check, CheckCircle2, Minus, Plus, Zap, Layers, ChevronDown, Search, ListOrdered } from 'lucide-react';
+import { X, Bot, Play, Check, CheckCircle2, Minus, Plus, Zap, Layers, ChevronDown, Search, ListOrdered, AlertCircle, Wrench } from 'lucide-react';
 import { ReasonedActionButton } from '../../ui';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -38,6 +38,19 @@ interface BatchResult {
   total: number;
   queued: number;
   message: string;
+}
+
+interface RunnerPreflightStatus {
+  state:
+    | 'ready'
+    | 'runner_unavailable'
+    | 'runner_repair_required'
+    | 'runner_capability_missing'
+    | 'workspace_repair_required'
+    | 'error';
+  code: string;
+  message: string;
+  hint?: string;
 }
 
 interface BoardBatchRunPanelProps {
@@ -93,6 +106,8 @@ export function BoardBatchRunPanel({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [runnerPreflight, setRunnerPreflight] = useState<RunnerPreflightStatus | null>(null);
+  const [runnerPreflightLoading, setRunnerPreflightLoading] = useState(false);
   const agentPickerRef = useRef<HTMLDivElement>(null);
 
   // Preview count
@@ -117,6 +132,36 @@ export function BoardBatchRunPanel({
       });
     }).catch(() => {});
   }, [savedPrefs?.agentId]);
+
+  useEffect(() => {
+    if (!agentId) {
+      setRunnerPreflight(null);
+      setRunnerPreflightLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setRunnerPreflightLoading(true);
+    api<RunnerPreflightStatus>(`/agents/${agentId}/runner-preflight`)
+      .then((status) => {
+        if (!cancelled) setRunnerPreflight(status);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRunnerPreflight({
+          state: 'error',
+          code: 'runner_preflight_unavailable',
+          message: error instanceof Error ? error.message : 'Runner readiness could not be checked.',
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setRunnerPreflightLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -327,11 +372,19 @@ export function BoardBatchRunPanel({
 
   const allSelected = selectedColumnIds.size === columns.length;
   const selectedAgent = agents.find((a) => a.id === agentId);
+  const runnerPreflightBlockingReason =
+    runnerPreflightLoading
+      ? 'Checking runner readiness…'
+      : runnerPreflight && runnerPreflight.state !== 'ready'
+        ? runnerPreflight.hint || runnerPreflight.message
+        : undefined;
 
   const disabledReason = submitting
     ? 'Batch run is starting…'
     : !agentId
       ? 'Select an agent first'
+      : runnerPreflightBlockingReason
+        ? runnerPreflightBlockingReason
       : scopeMode === 'manual' && manualCardCount === 0
         ? 'Add at least one card'
         : scopeMode === 'filters' && selectedColumnIds.size === 0
@@ -410,6 +463,45 @@ export function BoardBatchRunPanel({
                 </div>
               )}
             </div>
+            {(runnerPreflightLoading || runnerPreflight) && (
+              <div
+                className={[
+                  styles.runnerPreflight,
+                  runnerPreflight?.state === 'ready' ? styles.runnerPreflightReady : '',
+                  runnerPreflight && runnerPreflight.state !== 'ready' ? styles.runnerPreflightIssue : '',
+                ].filter(Boolean).join(' ')}
+              >
+                {runnerPreflight?.state === 'ready' ? (
+                  <CheckCircle2 size={15} />
+                ) : runnerPreflight?.state === 'workspace_repair_required' || runnerPreflight?.state === 'runner_repair_required' ? (
+                  <Wrench size={15} />
+                ) : (
+                  <AlertCircle size={15} />
+                )}
+                <div className={styles.runnerPreflightText}>
+                  <span className={styles.runnerPreflightTitle}>
+                    {runnerPreflightLoading
+                      ? 'Checking runner readiness'
+                      : runnerPreflight?.state === 'ready'
+                        ? 'Runner online'
+                        : runnerPreflight?.state === 'workspace_repair_required'
+                          ? 'Workspace repair required'
+                          : runnerPreflight?.state === 'runner_capability_missing'
+                            ? 'Capability missing'
+                            : runnerPreflight?.state === 'runner_repair_required'
+                              ? 'Runner repair required'
+                              : runnerPreflight?.state === 'runner_unavailable'
+                                ? 'Runner offline'
+                                : 'Runner preflight failed'}
+                  </span>
+                  <span className={styles.runnerPreflightMessage}>
+                    {runnerPreflightLoading
+                      ? 'Batch runs start only after metadata and runner workspace checks pass.'
+                      : runnerPreflight?.hint || runnerPreflight?.message}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className={styles.section}>

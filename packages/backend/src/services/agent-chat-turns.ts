@@ -128,6 +128,7 @@ export function updateAgentChatTurn(
 function updateAgentChatTurnLifecycle(
   turnId: string | null | undefined,
   patch: Partial<CreateAgentChatTurnParams>,
+  options: { replaceMetadata?: Record<string, unknown> } = {},
 ): StoreRecord | null {
   if (!turnId) return null;
   const existing = getAgentChatTurnRecord(turnId);
@@ -135,6 +136,15 @@ function updateAgentChatTurnLifecycle(
   const nextPatch = { ...patch };
   if (existing.status === 'superseded' && nextPatch.status !== 'superseded') {
     delete nextPatch.status;
+  }
+  if (options.replaceMetadata) {
+    return updateAgentChatTurnRecord(
+      turnId,
+      stripUndefined({
+        ...nextPatch,
+        metadata: normalizeMetadata(options.replaceMetadata),
+      }),
+    );
   }
   return updateAgentChatTurn(turnId, nextPatch);
 }
@@ -205,13 +215,24 @@ export function markAgentChatTurnRunning(
   turnId: string | null | undefined,
   params: { runId?: string | null; userMessageId?: string | null } = {},
 ): StoreRecord | null {
-  return updateAgentChatTurnLifecycle(turnId, {
-    status: 'running',
-    runId: params.runId ?? undefined,
-    userMessageId: params.userMessageId ?? undefined,
-    startedAt: new Date().toISOString(),
-    completedAt: null,
-  });
+  const existing = turnId ? getAgentChatTurnRecord(turnId) : null;
+  const existingMetadata =
+    existing?.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
+      ? (existing.metadata as Record<string, unknown>)
+      : {};
+  const metadataWithoutTerminalError = { ...existingMetadata };
+  delete metadataWithoutTerminalError.errorMessage;
+  return updateAgentChatTurnLifecycle(
+    turnId,
+    {
+      status: 'running',
+      runId: params.runId ?? undefined,
+      userMessageId: params.userMessageId ?? undefined,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    },
+    { replaceMetadata: metadataWithoutTerminalError },
+  );
 }
 
 export function markAgentChatTurnCompleted(

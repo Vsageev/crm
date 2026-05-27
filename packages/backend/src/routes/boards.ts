@@ -52,6 +52,7 @@ import {
   updateBoardExecutionPlan,
 } from '../services/board-execution-plans.js';
 import { runBoardAgentBatch, countBoardBatchCards } from '../services/board-batch.js';
+import { getCardById, listCardComments } from '../services/cards.js';
 
 const columnSchema = z.object({
   name: z.string().min(1).max(255),
@@ -87,6 +88,54 @@ const batchItemStatusSchema = z.enum([
   'cancelled',
   'skipped',
 ]);
+
+function isDoneColumnName(name: unknown): boolean {
+  const normalized = typeof name === 'string' ? name.trim().toLowerCase() : '';
+  return normalized === 'done' || normalized === 'complete' || normalized === 'completed';
+}
+
+function cardText(card: { name?: unknown; description?: unknown; customFields?: unknown }): string {
+  return [
+    typeof card.name === 'string' ? card.name : '',
+    typeof card.description === 'string' ? card.description : '',
+    card.customFields ? JSON.stringify(card.customFields) : '',
+  ].join('\n');
+}
+
+function isRunnerOwnershipCard(card: { name?: unknown; description?: unknown; customFields?: unknown }): boolean {
+  return /runner-owned|runner owned|executableOwnership|backend_local_legacy|legacy_import_required|repository-root|agent-inventory|ownership migration|runner-validation|migration gate/i.test(
+    cardText(card),
+  );
+}
+
+function hasOwnershipCompletionEvidence(content: string): boolean {
+  return /Live transition evidence:|ownership migration evidence:|pnpm acceptance:live-transition|repository-roots:report|agent-inventory:report|agent-ownership:gate/i.test(
+    content,
+  );
+}
+
+async function ensureOwnershipDoneEvidence(
+  board: Awaited<ReturnType<typeof getBoardById>>,
+  cardId: string,
+  targetColumnId: string,
+) {
+  const targetColumn = board?.columns.find((column) => column.id === targetColumnId);
+  if (!targetColumn || !isDoneColumnName(targetColumn.name)) return;
+
+  const card = await getCardById(cardId);
+  if (!card || !isRunnerOwnershipCard(card)) return;
+
+  const comments = await listCardComments(cardId, 100, 0);
+  if (comments.entries.some((comment) => hasOwnershipCompletionEvidence(comment.content))) {
+    return;
+  }
+
+  throw ApiError.conflict(
+    'ownership_completion_evidence_required',
+    'Runner ownership migration cards require card-comment evidence before moving to Done.',
+    'Add a comment with live transition evidence, repository-roots:report, agent-inventory:report, and agent-ownership:gate results.',
+  );
+}
 const batchBlockingModeSchema = z.enum(['all_success', 'all_settled']);
 const batchStageSchema = z.object({
   id: z.string().min(1).max(100).optional(),
@@ -407,6 +456,12 @@ export async function boardRoutes(app: FastifyInstance) {
           return reply.notFound('Target column not found');
         }
 
+        const boardWithCards = await getBoardWithCards(request.params.id);
+        for (const entry of boardWithCards?.cards ?? []) {
+          if (entry.columnId !== request.params.columnId || !entry.card?.id) continue;
+          await ensureOwnershipDoneEvidence(board, entry.card.id, targetColumnId);
+        }
+
         const result = await moveColumnCards(request.params.id, request.params.columnId, targetColumnId);
         if (!result) {
           return reply.notFound('Column not found');
@@ -448,6 +503,8 @@ export async function boardRoutes(app: FastifyInstance) {
         return reply.notFound('Board not found');
       }
 
+      await ensureOwnershipDoneEvidence(board, request.body.cardId, request.body.columnId);
+
       const boardCard = await addCardToBoard(
         request.params.id,
         request.body.cardId,
@@ -475,6 +532,13 @@ export async function boardRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
+      const board = await getBoardById(request.params.id);
+      if (!board) {
+        return reply.notFound('Board not found');
+      }
+
+      await ensureOwnershipDoneEvidence(board, request.params.cardId, request.body.columnId);
+
       const moved = await moveCardOnBoard(
         request.params.id,
         request.params.cardId,
@@ -857,6 +921,7 @@ export async function boardRoutes(app: FastifyInstance) {
 
       const result = await runBoardAgentBatch({
         boardId: request.params.id,
+        activationActorId: request.user.sub,
         ...request.body,
       });
 

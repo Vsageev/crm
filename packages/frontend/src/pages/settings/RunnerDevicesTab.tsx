@@ -1,34 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Monitor, Pencil, Plug, RefreshCw, ShieldOff, X } from 'lucide-react';
-import { ActionTooltip, Badge, Button, Input, ReasonedActionButton } from '../../ui';
+import {
+  Check,
+  Clock,
+  Copy,
+  Plug,
+  RefreshCw,
+  X,
+} from 'lucide-react';
+import { RunnerConnectionList, RunnerScopePicker } from '../../components/RunnerConnectionList';
+import { Button, Input, Modal, ReasonedActionButton } from '../../ui';
 import { api, ApiError } from '../../lib/api';
+import {
+  buildRunnerListQuery,
+  type RunnerConnection,
+  type RunnerConnectionScope,
+} from '../../lib/runner-connections';
+import { useAuth } from '../../stores/useAuth';
 import { useWorkspace } from '../../stores/WorkspaceContext';
 import styles from './SettingsPage.module.css';
-
-interface RunnerDevice {
-  id: string;
-  workspaceId: string;
-  displayName: string;
-  status: 'online' | 'offline' | 'busy' | 'stale' | 'revoked';
-  lastSeenAt: string | null;
-  version: string | null;
-  capabilities: Record<string, unknown>;
-  revoked: boolean;
-}
 
 interface PairingCode {
   id: string;
   code: string;
   expiresAt: string;
 }
-
-const STATUS_COLOR: Record<RunnerDevice['status'], 'success' | 'warning' | 'error' | 'default' | 'info'> = {
-  online: 'success',
-  busy: 'info',
-  stale: 'warning',
-  offline: 'default',
-  revoked: 'error',
-};
 
 function getRunnerServerUrl(): string {
   const configured = import.meta.env.VITE_API_URL;
@@ -43,35 +38,49 @@ function getRunnerServerUrl(): string {
   return url.toString().replace(/\/$/, '');
 }
 
-export function RunnerDevicesTab() {
-  const { activeWorkspaceId } = useWorkspace();
-  const [devices, setDevices] = useState<RunnerDevice[]>([]);
+interface RunnerDevicesTabProps {
+  initialPairingScope?: RunnerConnectionScope;
+}
+
+export function RunnerDevicesTab({ initialPairingScope = 'account' }: RunnerDevicesTabProps) {
+  const { user } = useAuth();
+  const { activeWorkspaceId, activeWorkspace } = useWorkspace();
+  const [devices, setDevices] = useState<RunnerConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [pairingName, setPairingName] = useState('My runner');
+  const [pairingScope, setPairingScope] = useState<RunnerConnectionScope>(initialPairingScope);
   const [pairingCode, setPairingCode] = useState<PairingCode | null>(null);
+  const [isAddRunnerOpen, setIsAddRunnerOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
 
+  useEffect(() => {
+    setPairingScope(initialPairingScope);
+  }, [initialPairingScope]);
+
   const connectCommand = useMemo(() => {
     if (!pairingCode) return '';
-    return `OPENWORK_SERVER_URL=${getRunnerServerUrl()} OPENWORK_RUNNER_PAIRING_CODE=${pairingCode.code} pnpm --filter openwork-runner dev`;
+    return `OPENWORK_SERVER_URL=${getRunnerServerUrl()} OPENWORK_RUNNER_PAIRING_CODE=${pairingCode.code} OPENWORK_RUNNER_WORKSPACE_ROOT=$PWD pnpm --filter openwork-runner dev`;
   }, [pairingCode]);
+  const pairingScopeHint =
+    pairingScope === 'project'
+      ? 'Workspace members with agent-run permission can activate it after pairing.'
+      : 'Only your account can activate it after pairing.';
   const connectDisabledReason = !activeWorkspaceId
     ? 'Open a workspace before connecting a runner.'
-    : null;
-  const renameDisabledReason = !editingName.trim()
-    ? 'Enter a runner name before saving.'
     : null;
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const query = activeWorkspaceId ? `?workspaceId=${activeWorkspaceId}` : '';
-      const data = await api<{ entries: RunnerDevice[] }>(`/agent-runners${query}`);
+      const query = buildRunnerListQuery({
+        workspaceId: activeWorkspaceId,
+      });
+      const data = await api<{ entries: RunnerConnection[] }>(`/agent-runners${query}`);
       setDevices(data.entries);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load runners');
@@ -86,7 +95,9 @@ export function RunnerDevicesTab() {
 
   async function createPairingCode() {
     if (!activeWorkspaceId) {
-      setError('Runners connect to one workspace. Open the workspace you want this machine to run agents for, then connect the runner.');
+      setError(
+        'Runners connect to one workspace. Open the workspace you want this machine to run agents for, then connect the runner.',
+      );
       return;
     }
     setError('');
@@ -97,6 +108,7 @@ export function RunnerDevicesTab() {
         body: JSON.stringify({
           workspaceId: activeWorkspaceId,
           displayName: pairingName.trim() || 'Runner',
+          connectionScope: pairingScope,
         }),
       });
       setPairingCode(result);
@@ -112,11 +124,71 @@ export function RunnerDevicesTab() {
     window.setTimeout(() => setCopied(false), 1400);
   }
 
-  async function saveRename(device: RunnerDevice) {
+  function openAddRunner() {
+    setError('');
+    setSuccess('');
+    setCopied(false);
+    setPairingCode(null);
+    setPairingScope(initialPairingScope);
+    setIsAddRunnerOpen(true);
+  }
+
+  const addRunnerDialog = (
+    <div aria-live="polite">
+      {!pairingCode ? (
+        <>
+          <p className={styles.runnerAddLead}>
+            Name this machine, choose who can activate it, then run the generated command in a
+            terminal on that machine.
+          </p>
+          <Input
+            label="Runner name"
+            value={pairingName}
+            onChange={(event) => setPairingName(event.target.value)}
+            placeholder="Design workstation"
+          />
+          <RunnerScopePicker
+            value={pairingScope}
+            onChange={setPairingScope}
+            disabled={Boolean(connectDisabledReason)}
+            disabledReason={connectDisabledReason}
+          />
+        </>
+      ) : (
+        <div className={styles.runnerAddResult}>
+          <div className={styles.runnerAddField}>
+            <span className={styles.runnerFieldLabel}>Pairing code</span>
+            <div className={styles.runnerCodeBox}>
+              <code className={styles.runnerPairingCode}>{pairingCode.code}</code>
+            </div>
+            <p className={styles.runnerCommandMeta}>
+              <Clock size={14} aria-hidden />
+              Expires {new Date(pairingCode.expiresAt).toLocaleTimeString()}
+            </p>
+          </div>
+
+          <div className={styles.runnerAddField}>
+            <span className={styles.runnerFieldLabel}>Run in terminal</span>
+            <pre className={styles.runnerCommandBlock}>
+              <code>{connectCommand}</code>
+            </pre>
+            <Button size="sm" variant="secondary" onClick={() => void copyCommand()}>
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? 'Copied' : 'Copy command'}
+            </Button>
+          </div>
+
+          <p className={styles.runnerResultHint}>{pairingScopeHint}</p>
+        </div>
+      )}
+    </div>
+  );
+
+  async function saveRename(device: RunnerConnection) {
     const displayName = editingName.trim();
     if (!displayName) return;
     try {
-      const updated = await api<RunnerDevice>(`/agent-runners/${device.id}`, {
+      const updated = await api<RunnerConnection>(`/agent-runners/${device.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ displayName }),
       });
@@ -128,9 +200,9 @@ export function RunnerDevicesTab() {
     }
   }
 
-  async function revoke(device: RunnerDevice) {
+  async function revoke(device: RunnerConnection) {
     try {
-      const updated = await api<RunnerDevice>(`/agent-runners/${device.id}/revoke`, {
+      const updated = await api<RunnerConnection>(`/agent-runners/${device.id}/revoke`, {
         method: 'POST',
       });
       setDevices((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
@@ -144,149 +216,92 @@ export function RunnerDevicesTab() {
     <div className={styles.section}>
       <div className={styles.sectionHeader}>
         <div>
-          <h2 className={styles.sectionTitle}>Runner Devices</h2>
+          <h2 className={styles.sectionTitle}>Runners</h2>
           <p className={styles.sectionDescription}>
-            Pair user-owned runners for this workspace. Status reflects the live socket and recent
-            heartbeats: online when idle, busy while a job runs, stale when the runner stopped
-            responding, offline when disconnected, and revoked when access is removed.
+            Pair a local machine for agent work, then manage account and project runner access from
+            the same workspace.
           </p>
         </div>
-        <Button size="sm" variant="secondary" onClick={() => void fetchDevices()}>
-          <RefreshCw size={14} />
-          Refresh
-        </Button>
-      </div>
-
-      {error && <div className={styles.alert}>{error}</div>}
-      {success && <div className={styles.success}>{success}</div>}
-
-      <div className={styles.connectForm}>
-        <Input
-          value={pairingName}
-          onChange={(event) => setPairingName(event.target.value)}
-          placeholder="Runner display name"
-        />
-        <ReasonedActionButton
-          onClick={() => void createPairingCode()}
-          disabled={Boolean(connectDisabledReason)}
-          disabledReason={connectDisabledReason}
-        >
-          <Plug size={14} />
-          Connect runner
-        </ReasonedActionButton>
-      </div>
-
-      {pairingCode && (
-        <div className={styles.botCard} style={{ marginTop: 16, alignItems: 'flex-start' }}>
-          <div className={styles.botInfo}>
-            <div className={styles.botName}>Pairing code {pairingCode.code}</div>
-            <div className={styles.botUsername}>
-              Expires {new Date(pairingCode.expiresAt).toLocaleTimeString()}
-            </div>
-            <code className={styles.templateContent} style={{ maxWidth: '100%' }}>
-              {connectCommand}
-            </code>
-          </div>
-          <Button size="sm" variant="secondary" onClick={() => void copyCommand()}>
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? 'Copied' : 'Copy'}
+        <div className={styles.botActions}>
+          <ReasonedActionButton
+            size="sm"
+            onClick={openAddRunner}
+            disabled={Boolean(connectDisabledReason)}
+            disabledReason={connectDisabledReason}
+          >
+            <Plug size={14} />
+            Add runner
+          </ReasonedActionButton>
+          <Button size="sm" variant="secondary" onClick={() => void fetchDevices()}>
+            <RefreshCw size={14} />
+            Refresh
           </Button>
         </div>
-      )}
+      </div>
 
-      <div className={styles.botList} style={{ marginTop: 20 }}>
-        {loading && <div className={styles.loadingState}>Loading runners...</div>}
-        {!loading && devices.length === 0 && (
-          <div className={styles.emptyState}>
-            <Monitor size={28} />
-            No paired runners
+      {error && !isAddRunnerOpen ? <div className={styles.alert}>{error}</div> : null}
+      {success && !isAddRunnerOpen ? <div className={styles.success}>{success}</div> : null}
+
+      {isAddRunnerOpen ? (
+        <Modal onClose={() => setIsAddRunnerOpen(false)} size="md" ariaLabel="Add runner">
+          <div className={styles.modalHeader}>
+            <h3 className={styles.modalTitle}>Add runner</h3>
+            <button
+              type="button"
+              className={styles.iconBtn}
+              onClick={() => setIsAddRunnerOpen(false)}
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
           </div>
-        )}
-        {!loading &&
-          devices.map((device) => (
-            <div key={device.id} className={styles.botCard}>
-              <div className={styles.botInfo}>
-                <div className={styles.botName}>
-                  {editingId === device.id ? (
-                    <Input
-                      value={editingName}
-                      onChange={(event) => setEditingName(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') void saveRename(device);
-                        if (event.key === 'Escape') setEditingId(null);
-                      }}
-                    />
-                  ) : (
-                    device.displayName
-                  )}
-                  <Badge color={STATUS_COLOR[device.status]}>{device.status}</Badge>
-                </div>
-                <div className={styles.botUsername}>
-                  {device.lastSeenAt ? `Last seen ${new Date(device.lastSeenAt).toLocaleString()}` : 'Never seen'}
-                </div>
-                <div className={styles.botMeta}>
-                  {[device.capabilities.os, device.capabilities.arch, device.version]
-                    .filter(Boolean)
-                    .join(' / ')}
-                </div>
-              </div>
-              <div className={styles.botActions}>
-                {editingId === device.id ? (
-                  <>
-                    <ActionTooltip
-                      label={renameDisabledReason ?? 'Save runner name'}
-                      disabled={Boolean(renameDisabledReason)}
-                      triggerLabel="Save runner name"
-                    >
-                      <button
-                        className={styles.iconBtn}
-                        onClick={() => void saveRename(device)}
-                        disabled={Boolean(renameDisabledReason)}
-                        aria-label="Save runner name"
-                      >
-                        <Check size={16} />
-                      </button>
-                    </ActionTooltip>
-                    <button className={styles.iconBtn} onClick={() => setEditingId(null)}>
-                      <X size={16} />
-                    </button>
-                  </>
-                ) : (
-                  <ActionTooltip
-                    label={device.revoked ? 'Revoked runners cannot be renamed.' : 'Rename runner'}
-                    disabled={device.revoked}
-                    triggerLabel="Rename runner"
-                  >
-                    <button
-                      className={styles.iconBtn}
-                      onClick={() => {
-                        setEditingId(device.id);
-                        setEditingName(device.displayName);
-                      }}
-                      disabled={device.revoked}
-                      aria-label="Rename runner"
-                    >
-                      <Pencil size={16} />
-                    </button>
-                  </ActionTooltip>
-                )}
-                <ActionTooltip
-                  label={device.revoked ? 'This runner is already revoked.' : 'Revoke runner'}
-                  disabled={device.revoked}
-                  triggerLabel="Revoke runner"
-                >
-                  <button
-                    className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                    onClick={() => void revoke(device)}
-                    disabled={device.revoked}
-                    aria-label="Revoke runner"
-                  >
-                    <ShieldOff size={16} />
-                  </button>
-                </ActionTooltip>
-              </div>
-            </div>
-          ))}
+          <div className={styles.modalBody}>
+            {error ? <div className={styles.alert}>{error}</div> : null}
+            {addRunnerDialog}
+          </div>
+          <div className={styles.runnerAddFooter}>
+            <Button type="button" variant="secondary" size="md" onClick={() => setIsAddRunnerOpen(false)}>
+              Cancel
+            </Button>
+            {!pairingCode ? (
+              <ReasonedActionButton
+                size="md"
+                onClick={() => void createPairingCode()}
+                disabled={Boolean(connectDisabledReason)}
+                disabledReason={connectDisabledReason}
+              >
+                Generate command
+              </ReasonedActionButton>
+            ) : (
+              <Button size="md" variant="secondary" onClick={() => void fetchDevices()}>
+                <RefreshCw size={14} />
+                Check connection
+              </Button>
+            )}
+          </div>
+        </Modal>
+      ) : null}
+
+      <div className={styles.runnerDevicesList}>
+        <RunnerConnectionList
+          devices={devices}
+          loading={loading}
+          emptyTitle="No paired runners"
+          emptyHint="Pair an account runner for personal activation or a project runner for shared workspace activation."
+          currentUserId={user?.id}
+          workspaceName={activeWorkspace?.name ?? null}
+          allowManage
+          editingId={editingId}
+          editingName={editingName}
+          onStartRename={(entry) => {
+            setEditingId(entry.id);
+            setEditingName(entry.displayName);
+          }}
+          onEditingNameChange={setEditingName}
+          onCancelRename={() => setEditingId(null)}
+          onSaveRename={(entry) => void saveRename(entry)}
+          onRevoke={(entry) => void revoke(entry)}
+        />
       </div>
     </div>
   );

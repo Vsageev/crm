@@ -14,7 +14,11 @@ vi.mock('../db/index.js', () => ({
   },
 }));
 
-import { buildRunnerJobIntent, resolveAgentChatProcessWorkingDirectory } from './agent-chat.js';
+import {
+  __agentChatTestUtils,
+  buildRunnerJobIntent,
+  resolveAgentChatProcessWorkingDirectory,
+} from './agent-chat.js';
 
 const AGENT_ID = '11111111-2222-3333-4444-555555555555';
 const CONV_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -29,7 +33,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ow-chat-cwd-'));
     repositoryRoot = path.join(tmp, 'repo');
-    agentRoot = path.join(repositoryRoot, '.openwork', 'agents', 'test-agent');
+    agentRoot = path.join(repositoryRoot, '.openwork', 'agents', 'test');
     fs.mkdirSync(agentRoot, { recursive: true });
     conversationMetadata = undefined;
     separateFolderPerChat = false;
@@ -88,7 +92,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     });
   });
 
-  it('uses conversation subfolder cwd and materializes instruction markdown with conversation cwd', () => {
+  it('uses conversation subfolder cwd without creating backend files in hosted mode', () => {
     fs.writeFileSync(
       path.join(agentRoot, 'CLAUDE.MD'),
       'Default workspace behavior: - Work in `/tmp/original/` by default for commands and file operations.\n',
@@ -109,12 +113,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     expect(cwd.startsWith(path.resolve(agentRoot))).toBe(false);
     expect(cwd).not.toBe(path.resolve(agentRoot));
 
-    expect(fs.readFileSync(path.join(cwd, 'CLAUDE.MD'), 'utf-8')).toContain(
-      `Default workspace behavior: - Work in \`${path.resolve(cwd)}/\` by default for commands and file operations.`,
-    );
-    expect(fs.realpathSync(path.join(cwd, 'skills', 'x.md'))).toBe(
-      fs.realpathSync(path.join(agentRoot, 'skills', 'x.md')),
-    );
+    expect(fs.existsSync(cwd)).toBe(false);
   });
 
   it('defaults subfolder relative path to conversations/<id> when metadata omits workspaceRelativePath', () => {
@@ -148,7 +147,57 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     });
   });
 
-  it('falls back to the agent folder when there is no repository root', () => {
+  it('builds runner-local conversation cwd without creating backend subfolders or file materialization', () => {
+    const hostedBackendRepo = path.join(tmp, 'hosted-backend-repo');
+    const runnerRepo = path.join(tmp, 'runner-root', 'repo');
+    const backendConversationDir = path.join(hostedBackendRepo, 'conversations', CONV_ID);
+    separateFolderPerChat = true;
+    conversationMetadata = { agentId: AGENT_ID, activeBranches: { root: 'message-id' } };
+    mockGetById.mockImplementation((col: string, id: string) => {
+      if (col === 'agents' && id === AGENT_ID) {
+        return {
+          id: AGENT_ID,
+          name: 'Test',
+          repositoryRoot: runnerRepo,
+          workspacePath: path.join(hostedBackendRepo, '.openwork', 'agents', 'test'),
+          separateFolderPerChat,
+        };
+      }
+      if (col === 'conversations' && id === CONV_ID) {
+        return {
+          id: CONV_ID,
+          metadata:
+            conversationMetadata === undefined ? undefined : JSON.stringify(conversationMetadata),
+        };
+      }
+      return null;
+    });
+
+    const result = __agentChatTestUtils.buildConversationWorkspace({
+      agentId: AGENT_ID,
+      agent: {
+        id: AGENT_ID,
+        name: 'Test',
+        repositoryRoot: runnerRepo,
+        workspacePath: path.join(runnerRepo, '.openwork', 'agents', 'test'),
+        separateFolderPerChat,
+      },
+      conversationId: CONV_ID,
+    });
+
+    expect(result.workDir).toBe(path.join(runnerRepo, 'conversations', CONV_ID));
+    expect(result).not.toHaveProperty('materialization');
+    expect(fs.existsSync(backendConversationDir)).toBe(false);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'conversations',
+      CONV_ID,
+      expect.objectContaining({
+        metadata: expect.stringContaining('"workspaceMode":"subfolder"'),
+      }),
+    );
+  });
+
+  it('does not treat legacy workspacePath as a backend executable no-repository cwd', () => {
     mockGetById.mockImplementation((col: string, id: string) => {
       if (col === 'agents' && id === AGENT_ID) {
         return {
@@ -169,8 +218,9 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
       return null;
     });
 
-    const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, undefined);
-    expect(cwd).toBe(path.resolve(agentRoot));
+    expect(() => resolveAgentChatProcessWorkingDirectory(AGENT_ID, undefined)).toThrow(
+      'runner workspace readiness is required',
+    );
   });
 });
 
@@ -201,7 +251,6 @@ describe('buildRunnerJobIntent', () => {
     expect(intent).toMatchObject({
       runId: 'run-1',
       agentId: AGENT_ID,
-      agentKind: 'dev_agent',
       provider: 'codex',
       modelPreference: {
         displayName: 'codex',
@@ -245,5 +294,98 @@ describe('buildRunnerJobIntent', () => {
         secret: true,
       },
     ]);
+  });
+
+  it('normalizes staged attachment paths to a run-scoped runner workspace manifest', () => {
+    const intent = buildRunnerJobIntent({
+      runId: 'run-attachment-1',
+      agentId: AGENT_ID,
+      workspaceId: 'workspace-1',
+      agent: {
+        name: 'Test',
+        model: 'codex',
+        modelId: null,
+        thinkingLevel: null,
+        apiKeyId: 'key-1',
+        workspaceApiKey: null,
+      },
+      prompt: 'use attachment',
+      workDir: '/runner/workspace',
+      childEnv: {},
+      attachments: [
+        {
+          type: 'file',
+          path: '.openwork/staging/pending/attachment-1/attachments/spec.txt',
+          filename: 'spec.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 12,
+          textExtraction: {
+            status: 'available',
+            textPath: '.openwork/staging/pending/attachment-1/attachments/spec.txt',
+          },
+          manifest: {
+            transfer: 'runner_staged_manifest',
+            storageId: '/chat-uploads/spec.txt',
+            storagePath: '/chat-uploads/spec.txt',
+            staging: {
+              id: 'attachment-1',
+              kind: 'attachment',
+              attachmentIndex: 0,
+              filename: 'spec.txt',
+              mimeType: 'text/plain',
+              sizeBytes: 12,
+              storageId: '/chat-uploads/spec.txt',
+              storagePath: '/chat-uploads/spec.txt',
+              download: {
+                method: 'GET',
+                path: '/api/runner-attachments/download?itemId=attachment-1&path=x&token=x',
+              },
+              destination: 'attachments/spec.txt',
+            },
+          },
+        },
+      ],
+    });
+
+    expect(intent.stagingManifest).toMatchObject({
+      version: 1,
+      root: '.openwork/staging/jobs/run-attachment-1',
+      policy: {
+        scope: 'runner_job_workspace',
+        materialization: 'download_before_launch',
+        cleanup: 'runner_managed',
+      },
+      attachments: [expect.objectContaining({ storageId: '/chat-uploads/spec.txt' })],
+    });
+    expect(intent.attachments?.[0]?.path).toBe(
+      '.openwork/staging/jobs/run-attachment-1/attachments/spec.txt',
+    );
+    expect(JSON.stringify(intent)).not.toContain('/data/storage/');
+  });
+
+  it('omits backend-local project env values when they are not explicitly runner-scoped', () => {
+    const intent = buildRunnerJobIntent({
+      runId: 'run-remote-env',
+      agentId: AGENT_ID,
+      workspaceId: 'workspace-1',
+      agent: {
+        name: 'Test',
+        model: 'codex',
+        modelId: null,
+        thinkingLevel: null,
+        apiKeyId: '',
+        workspaceApiKey: null,
+      },
+      prompt: 'hello',
+      workDir: '/runner/workspace',
+      childEnv: {
+        PWD: '/runner/workspace',
+      },
+    });
+
+    const names = intent.environment?.variables.map((variable) => variable.name) ?? [];
+    expect(names).toEqual(['PWD']);
+    expect(names).not.toContain('PROJECT_PORT');
+    expect(names).not.toContain('PROJECTS_DIR');
   });
 });

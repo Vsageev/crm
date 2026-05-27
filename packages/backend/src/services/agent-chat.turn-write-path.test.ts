@@ -5,6 +5,24 @@ type RecordMap = Map<string, Map<string, Record<string, unknown>>>;
 const mocks = vi.hoisted(() => {
   let nextId = 1;
   const records: RecordMap = new Map();
+  const runnerRoot = '/tmp/openwork-runner';
+  const agentInventory = {
+    protocolVersion: 1,
+    revision: 'turn-write-path-test',
+    advertisedAt: new Date().toISOString(),
+    ttlMs: 60_000,
+    workspaceRoots: [{ id: 'default', path: runnerRoot, scope: 'workspace', writable: true }],
+    fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+    agents: [
+      {
+        agentId: 'agent-1',
+        readiness: 'ready',
+        fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+        workspaceRootPath: `${runnerRoot}/.openwork/no-repository-agents/agent-1/workspace`,
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  };
 
   function collection(name: string) {
     let map = records.get(name);
@@ -73,6 +91,18 @@ const mocks = vi.hoisted(() => {
     hasAvailableRemoteAgentRunner: vi.fn(),
     cancelRemoteAgentRun: vi.fn(),
     dispatchRemoteAgentJob: vi.fn(),
+    dispatchRunnerFilesystemRequest: vi.fn(),
+    getAvailableRemoteAgentRunnerSelection: vi.fn(() => ({
+      runnerId: 'runner-1',
+      capabilities: {
+        supportedProviders: ['codex'],
+        workspaceRoot: runnerRoot,
+        agentInventory,
+        policy: { workspaceRootRequired: false },
+      },
+    })),
+    allocatePort: vi.fn(async () => 3000),
+    releasePort: vi.fn(),
   };
 });
 
@@ -104,6 +134,14 @@ vi.mock('./agents.js', () => ({
 }));
 vi.mock('./agent-runners.js', () => ({
   dispatchRemoteAgentJob: mocks.dispatchRemoteAgentJob,
+  dispatchRunnerFilesystemRequest: mocks.dispatchRunnerFilesystemRequest,
+  getAvailableRemoteAgentRunnerCapabilities: vi.fn(() => ({
+    supportedProviders: ['codex'],
+    workspaceRoot: '/tmp/openwork-runner',
+    agentInventory: mocks.getAvailableRemoteAgentRunnerSelection().capabilities.agentInventory,
+    policy: { workspaceRootRequired: false },
+  })),
+  getAvailableRemoteAgentRunnerSelection: mocks.getAvailableRemoteAgentRunnerSelection,
   getRemoteAgentRunnerUnavailableMessage: vi.fn(
     () => 'No remote agent runner is connected. Start or pair an OpenWork runner, then try again.',
   ),
@@ -121,8 +159,8 @@ vi.mock('./runner-devices.js', () => ({
   workspaceIdsForAgentGroup: vi.fn(() => ['workspace-1']),
 }));
 vi.mock('../lib/port-allocator.js', () => ({
-  allocatePort: vi.fn(async () => 3000),
-  releasePort: vi.fn(),
+  allocatePort: mocks.allocatePort,
+  releasePort: mocks.releasePort,
 }));
 
 import {
@@ -130,6 +168,7 @@ import {
   deleteQueueItem,
   editMessageAndBranch,
   enqueueAgentPrompt,
+  getAgentConversation,
   initializeAgentChatQueue,
   recoverCompletedChatRunsOnStartup,
   reorderQueueItems,
@@ -198,6 +237,19 @@ describe('agent chat turn write paths', () => {
     mocks.hasAvailableRemoteAgentRunner.mockReset();
     mocks.cancelRemoteAgentRun.mockReset();
     mocks.dispatchRemoteAgentJob.mockReset();
+    mocks.dispatchRunnerFilesystemRequest.mockReset();
+    mocks.dispatchRunnerFilesystemRequest.mockResolvedValue({
+      runnerId: 'runner-1',
+      result: {
+        action: 'prepare_workspace',
+        path: '/tmp/openwork-runner/.openwork/no-repository-agents/agent-1/workspace',
+        workspaceRoot: '/tmp/openwork-runner',
+        status: 'ready',
+        preparedAt: '2026-05-16T12:00:00.000Z',
+      },
+    });
+    mocks.allocatePort.mockClear();
+    mocks.releasePort.mockClear();
     mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
     mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
     seedConversation();
@@ -253,7 +305,7 @@ describe('agent chat turn write paths', () => {
     );
   });
 
-  it('keeps branch switching working after editing a message that was initially queued', () => {
+  it('keeps branch switching working after editing a message that was initially queued', async () => {
     seedMessage('message-1', {
       content: 'First',
       createdAt: '2026-05-16T12:00:00.000Z',
@@ -284,7 +336,7 @@ describe('agent chat turn write paths', () => {
         newMessageId: 'message-2-edit',
       },
     );
-    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited queued follow-up', {
+    const edit = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited queued follow-up', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       createdById: 'test-user',
@@ -310,6 +362,50 @@ describe('agent chat turn write paths', () => {
     expect(
       getAgentConversationChatView('agent-1', 'conversation-1').entries.map((entry) => entry.id),
     ).toEqual(['turn-1', String(edit.queueItem.turnId)]);
+  });
+
+  it('edits non-text legacy message types and keeps their attachments', () => {
+    seedMessage('message-document', {
+      type: 'document',
+      content: 'Original document note',
+      attachments: [
+        {
+          storagePath: '/chat-uploads/spec.pdf',
+          fileName: 'spec.pdf',
+          type: 'file',
+          mimeType: 'application/pdf',
+          fileSize: 123,
+        },
+      ],
+      createdAt: '2026-05-16T12:00:00.000Z',
+    });
+    seedTurn('turn-document', {
+      userMessageId: 'message-document',
+      status: 'superseded',
+      createdAt: '2026-05-16T12:00:01.000Z',
+    });
+
+    const editedMessage = editMessageAndBranch(
+      'conversation-1',
+      'message-document',
+      'Edited document note',
+      {
+        newMessageId: 'message-document-edit',
+      },
+    );
+
+    expect(editedMessage).toMatchObject({
+      id: 'message-document-edit',
+      type: 'file',
+      content: 'Edited document note',
+      attachments: [
+        {
+          storagePath: '/chat-uploads/spec.pdf',
+          fileName: 'spec.pdf',
+          type: 'file',
+        },
+      ],
+    });
   });
 
   it('switches by exact turn when branch siblings share a user message id', () => {
@@ -419,7 +515,7 @@ describe('agent chat turn write paths', () => {
     expect(parsedMetadata.activeBranches).not.toHaveProperty('user:message-1');
   });
 
-  it('persists outbound parent as previous user id when client omits previousUserMessageId on a queued follow-up', () => {
+  it('persists outbound parent as previous user id when client omits previousUserMessageId on a queued follow-up', async () => {
     mocks.store.insert('agent_runs', {
       id: 'active-run',
       agentId: 'agent-1',
@@ -431,11 +527,11 @@ describe('agent chat turn write paths', () => {
       startedAt: '2026-05-16T11:59:00.000Z',
     });
 
-    enqueueAgentPrompt('agent-1', 'conversation-1', 'First queued prompt', {
+    await enqueueAgentPrompt('agent-1', 'conversation-1', 'First queued prompt', {
       queuedMessageId: 'message-1',
       createdById: 'test-user',
     });
-    const second = enqueueAgentPrompt('agent-1', 'conversation-1', 'Second queued prompt', {
+    const second = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Second queued prompt', {
       queuedMessageId: 'message-2',
       createdById: 'test-user',
     });
@@ -458,7 +554,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('infers turn parent from the active assistant leaf when previousUserMessageId is omitted', () => {
+  it('infers turn parent from the active assistant leaf when previousUserMessageId is omitted', async () => {
     seedMessage('message-1', { content: 'Completed prompt' });
     seedMessage('assistant-1', {
       direction: 'inbound',
@@ -471,7 +567,7 @@ describe('agent chat turn write paths', () => {
       status: 'completed',
     });
 
-    const followUp = enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up after response', {
+    const followUp = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up after response', {
       queuedMessageId: 'message-2',
       createdById: 'test-user',
     });
@@ -489,7 +585,7 @@ describe('agent chat turn write paths', () => {
     ).toEqual(['turn-1', String(followUp.queueItem.turnId)]);
   });
 
-  it('persists queued text prompts as messages and turns before execution drains', () => {
+  it('persists queued text prompts as messages and turns before execution drains', async () => {
     mocks.store.insert('agent_runs', {
       id: 'active-run',
       agentId: 'agent-1',
@@ -501,11 +597,11 @@ describe('agent chat turn write paths', () => {
       startedAt: '2026-05-16T11:59:00.000Z',
     });
 
-    const first = enqueueAgentPrompt('agent-1', 'conversation-1', 'First queued prompt', {
+    const first = await enqueueAgentPrompt('agent-1', 'conversation-1', 'First queued prompt', {
       queuedMessageId: 'message-1',
       createdById: 'test-user',
     });
-    const second = enqueueAgentPrompt('agent-1', 'conversation-1', 'Second queued prompt', {
+    const second = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Second queued prompt', {
       queuedMessageId: 'message-2',
       previousUserMessageId: 'message-1',
       createdById: 'test-user',
@@ -573,6 +669,114 @@ describe('agent chat turn write paths', () => {
     expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
       status: 'completed',
       runId: 'run-1',
+    });
+  });
+
+  it('preserves interrupted work as processing while the linked run is still active', async () => {
+    seedMessage('message-1', { content: 'Still running' });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      status: 'running',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'running',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      executor: 'remote',
+      pid: null,
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: null,
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'processing',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: 'run-1',
+      lastRunId: 'run-1',
+      nextAttemptAt: '2026-05-16T12:00:00.000Z',
+      errorMessage: 'Recovered from backend restart',
+    });
+
+    await initializeAgentChatQueue({ preserveActiveProcessing: false });
+
+    expect(mocks.dispatchRemoteAgentJob).not.toHaveBeenCalled();
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'processing',
+      runId: 'run-1',
+      lastRunId: 'run-1',
+      nextAttemptAt: null,
+      errorMessage: null,
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'running',
+      runId: 'run-1',
+    });
+  });
+
+  it('repairs a queued display row that still points at an active run before counting the sidebar queue', () => {
+    seedMessage('message-1', { content: 'Still running' });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      status: 'running',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      triggerType: 'chat',
+      status: 'running',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      executor: 'remote',
+      pid: null,
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: null,
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      queuedMessageId: 'message-1',
+      prompt: 'Still running',
+      attempts: 1,
+      maxAttempts: 4,
+      runId: null,
+      lastRunId: 'run-1',
+      nextAttemptAt: '2026-05-16T12:00:00.000Z',
+      errorMessage: 'Recovered from backend restart',
+    });
+
+    const conversation = getAgentConversation('agent-1', 'conversation-1');
+
+    expect(conversation).toMatchObject({
+      isBusy: true,
+      queuedCount: 0,
+    });
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'processing',
+      runId: 'run-1',
+      lastRunId: 'run-1',
+      nextAttemptAt: null,
+      errorMessage: null,
     });
   });
 
@@ -899,7 +1103,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('keeps stopped turns selectable and allows a follow-up child turn', () => {
+  it('keeps stopped turns selectable and allows a follow-up child turn', async () => {
     seedMessage('message-1', { content: 'Stop this prompt' });
     seedTurn('turn-1', {
       userMessageId: 'message-1',
@@ -931,7 +1135,7 @@ describe('agent chat turn write paths', () => {
     });
 
     expect(cancelProcessingQueueItemForRun('run-1')).toBe(true);
-    const followUp = enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up after stop', {
+    const followUp = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up after stop', {
       queuedMessageId: 'message-2',
       previousUserMessageId: 'message-1',
       createdById: 'test-user',
@@ -959,7 +1163,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('creates an explicit edit replacement turn and chains follow-ups from it', () => {
+  it('creates an explicit edit replacement turn and chains follow-ups from it', async () => {
     seedMessage('message-original', {
       content: 'Original prompt',
       createdAt: '2026-05-16T12:00:00.000Z',
@@ -978,14 +1182,14 @@ describe('agent chat turn write paths', () => {
         newMessageId: 'message-edited',
       },
     );
-    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
+    const edit = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       createdById: 'test-user',
       turnType: 'edit',
       supersedesMessageId: 'message-original',
     });
-    const followUp = enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up to edit', {
+    const followUp = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Follow-up to edit', {
       queuedMessageId: 'message-follow-up',
       previousUserMessageId: String(editedMessage.id),
       createdById: 'test-user',
@@ -1006,7 +1210,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('allows append prompts on separate branches to start independently', () => {
+  it('allows append prompts on separate branches to start independently', async () => {
     seedMessage('message-original', {
       content: 'Original prompt',
       createdAt: '2026-05-16T12:00:00.000Z',
@@ -1025,7 +1229,7 @@ describe('agent chat turn write paths', () => {
         newMessageId: 'message-edited',
       },
     );
-    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
+    const edit = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       createdById: 'test-user',
@@ -1064,7 +1268,7 @@ describe('agent chat turn write paths', () => {
     });
 
     switchBranch('conversation-1', 'message-original');
-    const originalBranchFollowUp = enqueueAgentPrompt(
+    const originalBranchFollowUp = await enqueueAgentPrompt(
       'agent-1',
       'conversation-1',
       'Follow-up on original branch',
@@ -1074,7 +1278,7 @@ describe('agent chat turn write paths', () => {
         createdById: 'test-user',
       },
     );
-    const sameBranchFollowUp = enqueueAgentPrompt(
+    const sameBranchFollowUp = await enqueueAgentPrompt(
       'agent-1',
       'conversation-1',
       'Second follow-up on edited branch',
@@ -1106,7 +1310,7 @@ describe('agent chat turn write paths', () => {
     ).toBe(false);
   });
 
-  it('does not cancel pending execution for a superseded message when queuing its edit', () => {
+  it('does not cancel pending execution for a superseded message when queuing its edit', async () => {
     seedMessage('message-original', {
       content: 'Original prompt',
       createdAt: '2026-05-16T12:00:00.000Z',
@@ -1151,7 +1355,7 @@ describe('agent chat turn write paths', () => {
         newMessageId: 'message-edited',
       },
     );
-    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
+    const edit = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Edited prompt', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       createdById: 'test-user',
@@ -1233,6 +1437,15 @@ describe('agent chat turn write paths', () => {
     await Promise.resolve();
     await Promise.resolve();
     await vi.waitFor(() => expect(mocks.dispatchRemoteAgentJob).toHaveBeenCalledTimes(1));
+    expect(mocks.allocatePort).not.toHaveBeenCalled();
+
+    const dispatchedIntent = mocks.dispatchRemoteAgentJob.mock.calls[0]?.[0]?.intent;
+    expect(dispatchedIntent?.workspace).not.toHaveProperty('materialization');
+    const dispatchedEnvNames =
+      dispatchedIntent?.environment?.variables.map((variable: { name: string }) => variable.name) ??
+      [];
+    expect(dispatchedEnvNames).not.toContain('PROJECT_PORT');
+    expect(dispatchedEnvNames).not.toContain('PROJECTS_DIR');
 
     const runId = String(mocks.store.getAll('agent_runs')[0]?.id);
     expect(runId).toBeTruthy();
@@ -1287,7 +1500,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('keeps a repeated edit on the original branch instead of appending after the previous edit', () => {
+  it('keeps a repeated edit on the original branch instead of appending after the previous edit', async () => {
     seedMessage('message-original', {
       content: 'Original root prompt',
       parentId: null,
@@ -1316,7 +1529,7 @@ describe('agent chat turn write paths', () => {
         newMessageId: 'message-edit-2',
       },
     );
-    const edit = enqueueAgentPrompt('agent-1', 'conversation-1', 'Second edited root prompt', {
+    const edit = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Second edited root prompt', {
       mode: 'respond_to_message',
       targetMessageId: String(editedMessage.id),
       createdById: 'test-user',
@@ -1340,7 +1553,7 @@ describe('agent chat turn write paths', () => {
     ).toEqual([String(edit.queueItem.turnId)]);
   });
 
-  it('selects a newly sent follow-up even when branch metadata points at an older sibling', () => {
+  it('selects a newly sent follow-up even when branch metadata points at an older sibling', async () => {
     seedConversation({
       activeBranches: {
         'user:message-root': 'message-old-child',
@@ -1381,7 +1594,7 @@ describe('agent chat turn write paths', () => {
       createdAt: '2026-05-16T12:02:00.000Z',
     });
 
-    const followUp = enqueueAgentPrompt('agent-1', 'conversation-1', 'Latest follow-up', {
+    const followUp = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Latest follow-up', {
       queuedMessageId: 'message-latest-child',
       previousUserMessageId: 'message-root',
       createdById: 'test-user',
@@ -1400,7 +1613,7 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('rejects continuing a legacy message-only chat until migration creates durable turns', () => {
+  it('rejects continuing a legacy message-only chat until migration creates durable turns', async () => {
     seedMessage('legacy-user-1', {
       content: 'Old prompt',
       createdAt: '2026-05-16T11:00:00.000Z',
@@ -1439,26 +1652,26 @@ describe('agent chat turn write paths', () => {
     const before = getAgentConversationChatView('agent-1', 'conversation-1');
     expect(before.entries.map((turn) => turn.userMessage?.id)).toEqual([]);
 
-    expect(() =>
+    await expect(
       enqueueAgentPrompt('agent-1', 'conversation-1', 'Continue old chat', {
         queuedMessageId: 'legacy-follow-up',
         previousUserMessageId: 'legacy-user-2',
         createdById: 'test-user',
       }),
-    ).toThrow(/parent chat turn is missing/);
+    ).rejects.toThrow(/parent chat turn is missing/);
     expect(mocks.store.getAll('agentChatTurns')).toEqual([]);
   });
 
-  it('marks failed prompt turns when queue insertion cannot proceed', () => {
+  it('marks failed prompt turns when queue insertion cannot proceed', async () => {
     mocks.hasConnectedRemoteAgentRunner.mockReturnValue(false);
     mocks.hasAvailableRemoteAgentRunner.mockReturnValue(false);
 
-    expect(() =>
+    await expect(
       enqueueAgentPrompt('agent-1', 'conversation-1', 'Prompt with no runner', {
         queuedMessageId: 'message-failed',
         createdById: 'test-user',
       }),
-    ).toThrow(/No remote agent runner is connected/i);
+    ).rejects.toThrow(/No remote agent runner is connected/i);
 
     const turn = mocks.store
       .getAll('agentChatTurns')
@@ -1473,8 +1686,8 @@ describe('agent chat turn write paths', () => {
     expect(mocks.store.getAll('agentChatQueue')).toHaveLength(0);
   });
 
-  it('uses the same message-turn-queue path for attachment prompts', () => {
-    const queued = enqueueAgentPrompt('agent-1', 'conversation-1', '', {
+  it('uses the same message-turn-queue path for attachment prompts', async () => {
+    const queued = await enqueueAgentPrompt('agent-1', 'conversation-1', '', {
       queuedMessageId: 'message-attachment',
       createdById: 'test-user',
       attachments: [
@@ -1515,8 +1728,8 @@ describe('agent chat turn write paths', () => {
     });
   });
 
-  it('removes a not-started queued prompt without leaving a visible ghost turn', () => {
-    const queued = enqueueAgentPrompt('agent-1', 'conversation-1', 'Remove me', {
+  it('removes a not-started queued prompt without leaving a visible ghost turn', async () => {
+    const queued = await enqueueAgentPrompt('agent-1', 'conversation-1', 'Remove me', {
       queuedMessageId: 'message-remove',
       createdById: 'test-user',
     });

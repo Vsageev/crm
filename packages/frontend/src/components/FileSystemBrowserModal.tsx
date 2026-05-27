@@ -7,7 +7,7 @@ import styles from './FileSystemBrowserModal.module.css';
 interface FsEntry {
   name: string;
   path: string;
-  type: 'file' | 'folder';
+  type: 'file' | 'folder' | 'directory';
 }
 
 interface FileSystemBrowserModalProps {
@@ -35,7 +35,7 @@ export function FileSystemBrowserModal({
     setSelected(null);
     try {
       const data = await api<{ path: string; entries: FsEntry[] }>(
-        `/storage/browse-fs?path=${encodeURIComponent(dirPath)}`,
+        `/runner-filesystem/browse?path=${encodeURIComponent(dirPath)}&mode=${selectionMode === 'folder' ? 'folder' : 'file'}`,
       );
       setEntries(data.entries);
     } catch (err) {
@@ -72,7 +72,7 @@ export function FileSystemBrowserModal({
       : '/' + currentPath.split('/').filter(Boolean).slice(0, -1).join('/') || '/';
 
   function handleEntryClick(entry: FsEntry) {
-    if (entry.type === 'folder') {
+    if (entry.type === 'folder' || entry.type === 'directory') {
       setCurrentPath(entry.path);
     } else if (selectionMode === 'any') {
       setSelected(entry.path === selected ? null : entry.path);
@@ -85,7 +85,7 @@ export function FileSystemBrowserModal({
       const targetPath = value || currentPath;
       try {
         await api<{ path: string; entries: FsEntry[] }>(
-          `/storage/browse-fs?path=${encodeURIComponent(targetPath)}`,
+          `/runner-filesystem/browse?path=${encodeURIComponent(targetPath)}&mode=folder`,
         );
         onSelect(targetPath);
       } catch (err) {
@@ -108,7 +108,7 @@ export function FileSystemBrowserModal({
     // Try to navigate to it as a directory first
     try {
       const data = await api<{ path: string; entries: FsEntry[] }>(
-        `/storage/browse-fs?path=${encodeURIComponent(value)}`,
+        `/runner-filesystem/browse?path=${encodeURIComponent(value)}&mode=${selectionMode === 'folder' ? 'folder' : 'file'}`,
       );
       // If it returned entries or didn't error, it's a valid directory — navigate
       setEntries(data.entries);
@@ -126,7 +126,7 @@ export function FileSystemBrowserModal({
   }
 
   const visibleEntries = selectionMode === 'folder'
-    ? entries.filter((entry) => entry.type === 'folder')
+    ? entries.filter((entry) => entry.type === 'folder' || entry.type === 'directory')
     : entries;
   const selectDisabledReason = !pathInput.trim()
     ? selectionMode === 'folder'
@@ -202,7 +202,7 @@ export function FileSystemBrowserModal({
                   className={`${styles.row} ${selected === entry.path ? styles.rowSelected : ''}`}
                   onClick={() => handleEntryClick(entry)}
                 >
-                  {entry.type === 'folder' ? (
+                  {entry.type === 'folder' || entry.type === 'directory' ? (
                     <Folder size={16} className={styles.iconFolder} />
                   ) : (
                     <File size={16} className={styles.iconFile} />

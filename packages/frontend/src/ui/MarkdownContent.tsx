@@ -223,7 +223,7 @@ function FileLink(props: ComponentProps<'a'>) {
   async function revealInFileManager() {
     if (!fileInfo) return;
     try {
-      await api('/storage/reveal-local', {
+      await api('/runner-filesystem/reveal', {
         method: 'POST',
         body: JSON.stringify({ path: fileInfo.filePath }),
       });

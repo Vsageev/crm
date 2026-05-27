@@ -240,6 +240,56 @@
   pointer-events: auto;
 }
 
+.workspaceAgentSections {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspaceAgentSection {
+  border-top: 1px solid var(--color-border);
+}
+
+.workspaceAgentSection:first-child {
+  border-top: none;
+}
+
+.workspaceAgentHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 16px;
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.workspaceAgentName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.workspaceAgentCount {
+  flex-shrink: 0;
+  min-width: 22px;
+  padding: 1px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* ── Message search results in sidebar ── */
 .messageSearchSection {
   border-top: 1px solid var(--color-border);
@@ -344,13 +394,6 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
-}
-
-.messageSearchMark {
-  background: rgba(250, 204, 21, 0.35);
-  color: inherit;
-  padding: 0 2px;
-  border-radius: 2px;
 }
 
 /* Highlight a message row after jumping from search results */
@@ -1990,7 +2033,6 @@ button.messageMonitorBtn,
 .agentRunEventResult .agentRunEventLabel {
   color: var(--color-text-secondary);
 }
-
 
 .streamingQueueCount {
   opacity: 0.7;
@@ -4766,6 +4808,23 @@ button.filesColName:hover .filesFileName {
 
   .messageContent {
     max-width: 85%;
+  }
+
+  .provenanceEdgeGrid,
+  .provenanceDetails dl {
+    grid-template-columns: 1fr;
+  }
+
+  .provenanceToolbar {
+    align-items: stretch;
+  }
+
+  .provenanceSegmented {
+    width: 100%;
+  }
+
+  .provenanceSegmented button {
+    flex: 1;
   }
 
   .convItem {

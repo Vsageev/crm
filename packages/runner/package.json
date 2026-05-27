@@ -7,9 +7,10 @@
     "openwork-runner": "dist/index.js"
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "OPENWORK_RUNNER_WORKSPACE_ROOT=${OPENWORK_RUNNER_WORKSPACE_ROOT:-$(cd ../.. && pwd)} tsx src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "prestart": "pnpm --filter shared build && pnpm run build",
+    "start": "OPENWORK_RUNNER_WORKSPACE_ROOT=$PWD node dist/index.js",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
