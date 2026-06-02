@@ -4,6 +4,8 @@ import { describe, it } from 'vitest';
 
 const sourcePath = fileURLToPath(new URL('./AgentsPage.tsx', import.meta.url));
 const source = readFileSync(sourcePath, 'utf8');
+const cssPath = fileURLToPath(new URL('./AgentsPage.module.css', import.meta.url));
+const cssSource = readFileSync(cssPath, 'utf8');
 
 function failContract(options: {
   componentName: string;
@@ -39,6 +41,30 @@ function sourceSlice(startNeedle: string, endNeedle: string): string {
     });
   }
   return source.slice(start, end);
+}
+
+function sourceSliceFromCss(startNeedle: string, endNeedle: string): string {
+  const start = cssSource.indexOf(startNeedle);
+  if (start < 0) {
+    failContract({
+      componentName: 'AgentsPageCss',
+      stateInput: 'css',
+      contractName: startNeedle,
+      expected: 'css marker exists',
+      actual: 'missing',
+    });
+  }
+  const end = cssSource.indexOf(endNeedle, start + startNeedle.length);
+  if (end < 0) {
+    failContract({
+      componentName: 'AgentsPageCss',
+      stateInput: 'css',
+      contractName: endNeedle,
+      expected: 'css marker exists after start marker',
+      actual: 'missing',
+    });
+  }
+  return cssSource.slice(start, end);
 }
 
 function assertContains(options: {
@@ -453,7 +479,8 @@ describe('AgentsPage component contract', () => {
       '<div\n                                  className={`${styles.messageMeta} ${',
     );
     for (const expected of [
-      '<MarkdownContent>{msg.content}</MarkdownContent>',
+      '<MarkdownContent',
+      '{msg.content}',
       'messageRunEventSummary.stats.updates > 0 && (',
       'hideFinalDraft:',
       '<AgentRunActivity',
@@ -478,6 +505,116 @@ describe('AgentsPage component contract', () => {
       contractName: 'history-not-in-meta-row',
       sourceText: messageMeta,
       unexpected: '<AgentRunActivity',
+    });
+  });
+
+  it('uses one floating chat date badge driven by scroll position', () => {
+    const scrollState = sourceSlice(
+      'const updateFloatingChatDate = useCallback(() => {',
+      'const requestAutoScrollToBottom = useCallback(() => {',
+    );
+    for (const expected of [
+      "'[data-chat-date-group-label]'",
+      'dateGroup.getBoundingClientRect().top > probeTop',
+      'visible: element.scrollTop > 8 && activeLabel !== null',
+      'setFloatingChatDate',
+    ]) {
+      assertContains({
+        componentName: 'AgentsPage.chatDateBadge',
+        stateInput: 'messages scrolled across date separators',
+        contractName: 'floating-date-scroll-state',
+        sourceText: scrollState,
+        expected,
+      });
+    }
+
+    const messagesRender = sourceSlice(
+      'data-testid="agents-messages-area"',
+      '{visibleMessages.map((msg, index) => {',
+    );
+    for (const expected of [
+      'styles.chatDateStickyLayer',
+      'styles.chatDateStickyLabel',
+      'floatingChatDate.visible',
+    ]) {
+      assertContains({
+        componentName: 'AgentsPage.chatDateBadge',
+        stateInput: 'active chat transcript',
+        contractName: 'floating-date-rendered-once',
+        sourceText: messagesRender,
+        expected,
+      });
+    }
+
+    const dateSeparatorRender = sourceSlice(
+      'const dateGroupLabel = showDateGroup',
+      '<div\n                              className={`${styles.messageRow}',
+    );
+    assertContains({
+      componentName: 'AgentsPage.chatDateSeparator',
+      stateInput: 'message starts a new local day',
+      contractName: 'date-label-data-source',
+      sourceText: dateSeparatorRender,
+      expected: 'data-chat-date-group-label={dateGroupLabel}',
+    });
+
+    const dateGroupCss = sourceSliceFromCss('.chatDateGroup {', '.chatDateStickyLayer {');
+    assertNotContains({
+      componentName: 'AgentsPage.chatDateSeparator',
+      stateInput: 'message starts a new local day',
+      contractName: 'inline-separator-not-sticky',
+      sourceText: dateGroupCss,
+      unexpected: 'position: sticky',
+    });
+    assertContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'sticky-layer-css',
+      sourceText: cssSource,
+      expected: '.chatDateStickyLayer',
+    });
+    assertContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'sticky-layer-position',
+      sourceText: cssSource,
+      expected: 'position: sticky',
+    });
+    assertContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'sticky-layer-avoids-text-clipping',
+      sourceText: cssSource,
+      expected: 'min-height: 30px',
+    });
+    assertContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'date-label-uses-explicit-line-box',
+      sourceText: cssSource,
+      expected: 'line-height: 16px',
+    });
+    const chatDateCss = sourceSliceFromCss('.chatDateGroup {', '.messageContent {');
+    assertContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'floating-date-flat-surface',
+      sourceText: chatDateCss,
+      expected: 'background: var(--color-card)',
+    });
+    assertNotContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'floating-date-no-shadow',
+      sourceText: chatDateCss,
+      unexpected: 'box-shadow',
+    });
+    assertNotContains({
+      componentName: 'AgentsPage.chatDateBadge',
+      stateInput: 'messages scrolled across date separators',
+      contractName: 'floating-date-no-backdrop-blur',
+      sourceText: chatDateCss,
+      unexpected: 'backdrop-filter',
     });
   });
 

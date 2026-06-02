@@ -11,6 +11,7 @@ import {
   findBatchRunItemsWithStatusNative,
   findBatchRunsEligibleForHistoryPrune,
   findTerminalBatchRuns,
+  getAgentRunByIdNative,
   listAgentBatchRunsMatching,
   listOrderedBatchRunItemsForRun,
 } from '../db/repositories/agent-execution-repository.js';
@@ -26,6 +27,7 @@ const AGENT_BATCH_RETRY_MAX_MS = 30000;
 const AGENT_BATCH_DEFAULT_MAX_ATTEMPTS = 4;
 const AGENT_BATCH_HISTORY_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const AGENT_BATCH_PROCESSING_STALE_MS = 2 * 60 * 1000;
+const AGENT_BATCH_CARD_CONTENTION_RETRY_MS = AGENT_BATCH_PROCESSING_STALE_MS;
 
 export type AgentBatchSourceType = 'board' | 'collection';
 export type AgentBatchRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -436,6 +438,10 @@ function getItemRetryDelayMs(attempt: number): number {
   );
 }
 
+function isCardAlreadyProcessingError(errorMessage: string): boolean {
+  return errorMessage.trim().toLowerCase() === 'agent is already processing this card';
+}
+
 function listItemsForRun(runId: string): Record<string, unknown>[] {
   return listOrderedBatchRunItemsForRun(runId) as Record<string, unknown>[];
 }
@@ -602,17 +608,17 @@ function updateAttemptFromRunRecord(
   );
 }
 
-function syncExecutionJobFromAttempts(jobId: string): Record<string, unknown> | null {
+async function syncExecutionJobFromAttempts(jobId: string): Promise<Record<string, unknown> | null> {
   const job = store.getById(EXECUTION_JOBS_COLLECTION, jobId);
   if (!job) return null;
 
-  const attempts = listAttemptsForJob(jobId).map((attempt) => {
+  const attempts: Record<string, unknown>[] = [];
+  for (const attempt of listAttemptsForJob(jobId)) {
     const runId = typeof attempt.agentRunId === 'string' ? attempt.agentRunId : null;
-    return updateAttemptFromRunRecord(
-      attempt,
-      runId ? store.getById(AGENT_RUNS_COLLECTION, runId) : null,
+    attempts.push(
+      updateAttemptFromRunRecord(attempt, runId ? await getAgentRunByIdNative(runId) : null),
     );
-  });
+  }
 
   if (attempts.some((attempt) => attempt.status === 'succeeded')) {
     return (
@@ -858,6 +864,17 @@ function retryOrFailItem(
   });
 }
 
+function deferContendedItem(item: Record<string, unknown>, errorMessage: string) {
+  store.update(AGENT_BATCH_RUN_ITEMS_COLLECTION, item.id as string, {
+    status: 'queued',
+    completedAt: null,
+    errorMessage,
+    nextAttemptAt: new Date(Date.now() + AGENT_BATCH_CARD_CONTENTION_RETRY_MS).toISOString(),
+    agentRunId: null,
+    executionJobId: null,
+  });
+}
+
 async function reconcileProcessingItems(runId: string) {
   const run = store.getById(AGENT_BATCH_RUNS_COLLECTION, runId);
   if (!run) return;
@@ -890,7 +907,7 @@ async function reconcileProcessingItems(runId: string) {
     }
 
     if (executionJobId) {
-      const job = syncExecutionJobFromAttempts(executionJobId);
+      const job = await syncExecutionJobFromAttempts(executionJobId);
       if (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued') {
         const startedAtMs = parseIsoDateMs(job.startedAt ?? item.startedAt);
         if (!Number.isFinite(startedAtMs) || now - startedAtMs < AGENT_BATCH_PROCESSING_STALE_MS) {
@@ -932,7 +949,7 @@ async function reconcileProcessingItems(runId: string) {
       continue;
     }
 
-    const runRecord = store.getById('agent_runs', agentRunId);
+    const runRecord = await getAgentRunByIdNative(agentRunId);
     if (!runRecord) {
       const startedAtMs = parseIsoDateMs(item.startedAt);
       if (Number.isFinite(startedAtMs) && now - startedAtMs >= AGENT_BATCH_PROCESSING_STALE_MS) {
@@ -1123,6 +1140,12 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
         if (latestExecutionJobId) {
           updateExecutionJobStatus(latestExecutionJobId, 'failed', { errorMessage: err });
         }
+        if (isCardAlreadyProcessingError(err)) {
+          deferContendedItem(latest, err);
+          refreshRunStats(runId);
+          scheduleRunDrain(runId, AGENT_BATCH_CARD_CONTENTION_RETRY_MS);
+          return;
+        }
         retryOrFailItem(latest, err);
         scheduleRunDrain(runId, 0);
       },
@@ -1282,7 +1305,7 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
     const executionJobId =
       typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
     if (executionJobId) {
-      const job = syncExecutionJobFromAttempts(executionJobId);
+      const job = await syncExecutionJobFromAttempts(executionJobId);
       if (
         preserveActiveProcessing &&
         (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued')
@@ -1314,7 +1337,7 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
       continue;
     }
 
-    const runRecord = store.getById('agent_runs', agentRunId);
+    const runRecord = await getAgentRunByIdNative(agentRunId);
     if (!runRecord) {
       retryOrFailItem(item, 'Recovered from backend restart');
       continue;

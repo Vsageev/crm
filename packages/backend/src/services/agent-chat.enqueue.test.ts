@@ -79,6 +79,27 @@ function runnerAgentInventory(workspaceRoot: string, agentId = 'agent-1') {
   };
 }
 
+function repositoryAgentInventory(repositoryRoot: string, agentId = 'agent-1') {
+  return {
+    protocolVersion: 1,
+    revision: `test-repo-${agentId}`,
+    advertisedAt: new Date().toISOString(),
+    ttlMs: 60_000,
+    workspaceRoots: [],
+    fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+    agents: [
+      {
+        agentId,
+        readiness: 'ready',
+        fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+        workspaceRootPath: `${repositoryRoot}/.openwork/agents/repo-agent`,
+        repositoryRootPath: repositoryRoot,
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
 describe('enqueueAgentPrompt runner workspace validation', () => {
   beforeEach(() => {
     const records = new Map<string, Record<string, unknown>>();
@@ -463,6 +484,58 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     );
   });
 
+  it('uses the advertised no-repository inventory workspace instead of synthesizing a backend path', async () => {
+    const advertisedWorkspace = '/runner/catalog/agents/agent-1/current';
+    mocks.getAgent.mockReturnValue({
+      id: 'agent-1',
+      groupId: 'group-1',
+      model: 'codex',
+      workspacePath: path.resolve(env.DATA_DIR, 'agents', 'agent-1'),
+    });
+    mocks.store.getAll.mockImplementation((collection: string) =>
+      collection === 'workspaces'
+        ? [{ id: 'workspace-1', userId: 'user-1', agentGroupIds: ['group-1'] }]
+        : [],
+    );
+    mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
+    mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
+    const inventory = {
+      ...runnerAgentInventory('/runner/catalog'),
+      agents: [
+        {
+          agentId: 'agent-1',
+          readiness: 'ready',
+          fileOperations: ['list_agent_files', 'read_agent_file', 'write_agent_file'],
+          workspaceRootPath: advertisedWorkspace,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
+      workspaceRoot: '/runner/catalog',
+      supportedProviders: ['codex'],
+      agentInventory: inventory,
+      policy: { workspaceRootRequired: true },
+    });
+    mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
+      runnerId: 'runner-1',
+      capabilities: {
+        workspaceRoot: '/runner/catalog',
+        supportedProviders: ['codex'],
+        agentInventory: inventory,
+        policy: { workspaceRootRequired: true },
+      },
+    });
+
+    await expect(
+      enqueueAgentPrompt('agent-1', 'conversation-1', 'hello', {
+        queuedMessageId: 'message-1',
+      }),
+    ).resolves.toMatchObject({
+      queueItem: { agentId: 'agent-1', status: 'queued' },
+    });
+  });
+
   it('allows verified repository cwd outside the advertised runner root before enqueueing', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openwork-preflight-outside-'));
     const outside = path.join(tmp, 'outside');
@@ -487,6 +560,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: path.join(tmp, 'runner-root'),
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(outside),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -494,6 +568,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: path.join(tmp, 'runner-root'),
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(outside),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -502,6 +577,54 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       enqueueAgentPrompt('agent-1', 'conversation-1', 'hello', {
         queuedMessageId: 'message-1',
       })
+    ).resolves.toMatchObject({
+      queueItem: { agentId: 'agent-1', status: 'queued' },
+    });
+  });
+
+  it('matches repository inventory by runner workspace path when the runner advertises a slug id', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openwork-preflight-repo-slug-'));
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo);
+    const inventory = repositoryAgentInventory(repo, 'repo-agent');
+    mocks.getAgent.mockReturnValue({
+      id: 'agent-1',
+      name: 'Repo Agent',
+      groupId: 'group-1',
+      model: 'codex',
+      repositoryRoot: repo,
+      repositoryRootOrigin: 'runner_local',
+      repositoryRootRunnerId: 'runner-1',
+      repositoryRootVerifiedAt: '2026-05-23T10:00:00.000Z',
+      repositoryRootRepairRequired: false,
+    });
+    mocks.store.getAll.mockImplementation((collection: string) =>
+      collection === 'workspaces'
+        ? [{ id: 'workspace-1', userId: 'user-1', agentGroupIds: ['group-1'] }]
+        : [],
+    );
+    mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
+    mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
+    mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
+      workspaceRoot: path.join(tmp, 'runner-root'),
+      supportedProviders: ['codex'],
+      agentInventory: inventory,
+      policy: { workspaceRootRequired: true },
+    });
+    mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
+      runnerId: 'runner-1',
+      capabilities: {
+        workspaceRoot: path.join(tmp, 'runner-root'),
+        supportedProviders: ['codex'],
+        agentInventory: inventory,
+        policy: { workspaceRootRequired: true },
+      },
+    });
+
+    await expect(
+      enqueueAgentPrompt('agent-1', 'conversation-1', 'hello', {
+        queuedMessageId: 'message-1',
+      }),
     ).resolves.toMatchObject({
       queueItem: { agentId: 'agent-1', status: 'queued' },
     });
@@ -533,6 +656,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(outside),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -540,6 +664,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(outside),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -592,6 +717,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(outsideRepo),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -599,6 +725,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(outsideRepo),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -635,6 +762,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(missingWorkspace),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -642,6 +770,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(missingWorkspace),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -676,12 +805,14 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(tmp),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
       runnerId: 'runner-1',
       capabilities: {
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(tmp),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -719,6 +850,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(repo),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -726,6 +858,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(repo),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -804,6 +937,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(repo),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -811,6 +945,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(repo),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -892,6 +1027,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
     mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue({
       workspaceRoot: runnerRoot,
       supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(repo),
       policy: { workspaceRootRequired: true },
     });
     mocks.getAvailableRemoteAgentRunnerSelection.mockReturnValue({
@@ -899,6 +1035,7 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
       capabilities: {
         workspaceRoot: runnerRoot,
         supportedProviders: ['codex'],
+        agentInventory: repositoryAgentInventory(repo),
         policy: { workspaceRootRequired: true },
       },
     });
@@ -1029,6 +1166,77 @@ describe('enqueueAgentPrompt runner workspace validation', () => {
         repositoryRootRepairRequired: false,
       }),
     );
+  });
+
+  it('revalidates an already verified repository root when runner inventory is missing it', async () => {
+    const runnerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'openwork-preflight-reinventory-'));
+    const repo = path.join(runnerRoot, 'repo');
+    fs.mkdirSync(repo);
+    const refreshedCapabilities = {
+      workspaceRoot: runnerRoot,
+      supportedProviders: ['codex'],
+      agentInventory: repositoryAgentInventory(repo),
+      policy: { workspaceRootRequired: true },
+    };
+    mocks.getAgent.mockReturnValue({
+      id: 'agent-1',
+      name: 'Repo Agent',
+      groupId: 'group-1',
+      model: 'codex',
+      repositoryRoot: repo,
+      repositoryRootOrigin: 'runner_local',
+      repositoryRootRunnerId: 'runner-1',
+      repositoryRootVerifiedAt: '2026-05-23T10:00:00.000Z',
+      repositoryRootRepairRequired: false,
+    });
+    mocks.store.getAll.mockImplementation((collection: string) =>
+      collection === 'workspaces'
+        ? [{ id: 'workspace-1', userId: 'user-1', agentGroupIds: ['group-1'] }]
+        : [],
+    );
+    mocks.hasConnectedRemoteAgentRunner.mockReturnValue(true);
+    mocks.hasAvailableRemoteAgentRunner.mockReturnValue(true);
+    mocks.getAvailableRemoteAgentRunnerCapabilities.mockReturnValue(refreshedCapabilities);
+    mocks.getAvailableRemoteAgentRunnerSelection
+      .mockReturnValueOnce({
+        runnerId: 'runner-1',
+        capabilities: {
+          workspaceRoot: runnerRoot,
+          supportedProviders: ['codex'],
+          agentInventory: {
+            ...repositoryAgentInventory(repo),
+            agents: [],
+          },
+          policy: { workspaceRootRequired: true },
+        },
+      })
+      .mockReturnValue({
+        runnerId: 'runner-1',
+        capabilities: refreshedCapabilities,
+      });
+    mocks.dispatchRunnerFilesystemRequest.mockResolvedValue({
+      runnerId: 'runner-1',
+      result: {
+        action: 'validate_repository_root',
+        path: repo,
+        repositoryRootOrigin: 'runner_local',
+        repositoryRootVerifiedAt: '2026-05-23T12:00:00.000Z',
+      },
+    });
+
+    await expect(
+      enqueueAgentPrompt('agent-1', 'conversation-1', 'hello', {
+        queuedMessageId: 'message-1',
+      }),
+    ).resolves.toMatchObject({
+      queueItem: { agentId: 'agent-1', status: 'queued' },
+    });
+    expect(mocks.dispatchRunnerFilesystemRequest).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workspaceId: 'workspace-1',
+      runnerId: 'runner-1',
+      request: { action: 'validate_repository_root', path: repo },
+    });
   });
 });
 

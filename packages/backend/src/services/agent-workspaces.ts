@@ -65,6 +65,14 @@ export function resolveAgentWorkspacePathFromRecord(
   const pathMetadata = getAgentWorkspacePathMetadataFromRecord(agent);
   if (pathMetadata) return pathMetadata;
 
+  const repositoryRoot =
+    typeof agent?.repositoryRoot === 'string' && agent.repositoryRoot.trim()
+      ? normalizeRepositoryRoot(agent.repositoryRoot)
+      : null;
+  if (repositoryRoot && fallbackAgentId) {
+    return deriveAgentWorkspacePath(repositoryRoot, fallbackAgentId);
+  }
+
   const agentId =
     fallbackAgentId ??
     (typeof agent?.id === 'string' && agent.id.trim() ? agent.id.trim() : null);
@@ -93,11 +101,6 @@ export function resolveAgentExecutionRootFromRecord(
   agent: Record<string, unknown> | null | undefined,
   fallbackAgentId?: string,
 ): string {
-  const repositoryRoot =
-    typeof agent?.repositoryRoot === 'string' && agent.repositoryRoot.trim()
-      ? normalizeRepositoryRoot(agent.repositoryRoot)
-      : null;
-  if (repositoryRoot) return repositoryRoot;
   return resolveAgentWorkspacePathFromRecord(agent, fallbackAgentId);
 }
 

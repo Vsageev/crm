@@ -55,6 +55,7 @@ interface RunnerConfig {
   credential?: string;
   runnerVersion?: string;
   pairedAt?: string;
+  validatedRepositoryRoots?: string[];
 }
 
 if (!serverUrl) {
@@ -164,6 +165,7 @@ type DiscoveredRunnerAgentInventoryEntry = RunnerAgentInventoryEntry & {
 function discoverRunnerAgentInventory(advertisedAt: string): DiscoveredRunnerAgentInventoryEntry[] {
   const entries: DiscoveredRunnerAgentInventoryEntry[] = [];
   const seen = new Set<string>();
+  const config = readConfig();
 
   const addEntry = (entry: DiscoveredRunnerAgentInventoryEntry) => {
     const key = `${entry.agentId}:${entry.workspaceRootPath ?? ''}:${entry.repositoryRootPath ?? ''}`;
@@ -212,6 +214,11 @@ function discoverRunnerAgentInventory(advertisedAt: string): DiscoveredRunnerAge
   };
 
   scanRepositoryRoot(workspaceRoot, 'repository_workspace');
+
+  for (const repositoryRoot of config.validatedRepositoryRoots ?? []) {
+    if (typeof repositoryRoot !== 'string' || !path.isAbsolute(repositoryRoot)) continue;
+    scanRepositoryRoot(path.resolve(repositoryRoot), 'repository_scan');
+  }
 
   const scanForRepositories = (dirPath: string, depthRemaining: number) => {
     if (depthRemaining <= 0) return;
@@ -371,9 +378,11 @@ async function handleFilesystemRequest(
     request.action === 'reveal_agent_path' ||
     request.action === 'import_agent_files'
   ) {
-    return handleAgentWorkspaceFileRequest(request, workspaceRoot, {
+    const result = await handleAgentWorkspaceFileRequest(request, workspaceRoot, {
       revealPath: revealPathInFileManager,
     });
+    if (request.action === 'import_agent_files') advertiseRunnerCapabilities();
+    return result;
   }
   if (request.action === 'browse') {
     const dirPath = path.resolve(request.path);
@@ -407,6 +416,8 @@ async function handleFilesystemRequest(
     return { action: 'reveal' };
   }
   const validated = validateRepositoryRoot(request.path, workspaceRoot);
+  rememberValidatedRepositoryRoot(validated.path);
+  advertiseRunnerCapabilities();
   return {
     action: 'validate_repository_root',
     ...validated,
@@ -424,6 +435,31 @@ function readConfig(): RunnerConfig {
 function writeConfig(config: RunnerConfig) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
+
+function rememberValidatedRepositoryRoot(repositoryRoot: string) {
+  const resolvedRepositoryRoot = path.resolve(repositoryRoot);
+  const config = readConfig();
+  const roots = Array.isArray(config.validatedRepositoryRoots)
+    ? config.validatedRepositoryRoots.filter(
+        (root): root is string => typeof root === 'string' && path.isAbsolute(root),
+      )
+    : [];
+  if (roots.some((root) => path.resolve(root) === resolvedRepositoryRoot)) return;
+  roots.push(resolvedRepositoryRoot);
+  writeConfig({ ...config, validatedRepositoryRoots: roots });
+}
+
+function advertiseRunnerCapabilities(type: 'runner_hello' | 'runner_heartbeat' = 'runner_heartbeat') {
+  const config = readConfig();
+  const runnerId = process.env.OPENWORK_RUNNER_ID || config.runnerId || '';
+  sendToServer({
+    type,
+    protocolVersion: RUNNER_PROTOCOL_VERSION,
+    runnerId,
+    name: runnerName,
+    capabilities: buildRunnerCapabilities(),
+  });
 }
 
 async function pairWithCode(code: string): Promise<RunnerConfig> {

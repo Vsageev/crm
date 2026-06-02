@@ -120,7 +120,14 @@ describe('runner filesystem routes', () => {
   });
 
   it('persists validated repository-root metadata and recomputes workspace path', async () => {
-    mocks.getAgent.mockReturnValue({ id: 'agent-1', name: 'Runner Fix' });
+    mocks.getAgent.mockReturnValue({ id: 'agent-1', name: 'Runner Fix', groupId: 'group-1' });
+    mocks.runnerRoutingScopesForAgentGroup.mockReturnValue([
+      { userId: 'user-1', workspaceId: '22222222-2222-4222-8222-222222222222' },
+    ]);
+    mocks.getRunnerFilesystemSelection.mockReturnValue({
+      runnerId: 'runner-1',
+      capabilities: { workspaceRoot: '/runner/root' },
+    });
     mocks.dispatchRunnerFilesystemRequest.mockResolvedValue({
       runnerId: 'runner-1',
       result: {
@@ -156,6 +163,58 @@ describe('runner filesystem routes', () => {
         workspacePath: null,
       }),
     );
+    expect(mocks.dispatchRunnerFilesystemRequest).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workspaceId: '22222222-2222-4222-8222-222222222222',
+      activationActorId: 'user-1',
+      request: { action: 'validate_repository_root', path: '/runner/repo' },
+    });
+    expect(mocks.storeUpdate).toHaveBeenCalledWith(
+      'agents',
+      '11111111-1111-4111-8111-111111111111',
+      expect.objectContaining({
+        runnerInventoryWorkspaceId: '22222222-2222-4222-8222-222222222222',
+        runnerInventoryCapabilityRefs: expect.objectContaining({
+          workspaceId: '22222222-2222-4222-8222-222222222222',
+        }),
+      }),
+    );
+  });
+
+  it('reveals an agent-scoped runner path after resolving the workspace from the agent', async () => {
+    mocks.getAgent.mockReturnValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Runner Fix',
+      groupId: 'group-1',
+    });
+    mocks.runnerRoutingScopesForAgentGroup.mockReturnValue([
+      { userId: 'user-1', workspaceId: '22222222-2222-4222-8222-222222222222' },
+    ]);
+    mocks.dispatchRunnerFilesystemRequest.mockResolvedValue({
+      runnerId: 'runner-1',
+      result: { action: 'reveal' },
+    });
+    const app = await buildRouteApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/runner-filesystem/reveal',
+      payload: {
+        path: '/runner/root/.openwork/no-repository-agents/11111111-1111-4111-8111-111111111111/workspace/conversations/33333333-3333-4333-8333-333333333333',
+        agentId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(mocks.dispatchRunnerFilesystemRequest).toHaveBeenCalledWith({
+      userId: 'user-1',
+      workspaceId: '22222222-2222-4222-8222-222222222222',
+      activationActorId: 'user-1',
+      request: {
+        action: 'reveal',
+        path: '/runner/root/.openwork/no-repository-agents/11111111-1111-4111-8111-111111111111/workspace/conversations/33333333-3333-4333-8333-333333333333',
+      },
+    });
   });
 
   it('prepares a no-repository agent workspace through the selected runner root', async () => {

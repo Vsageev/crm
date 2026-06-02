@@ -1863,7 +1863,7 @@ describe('runner-split QA backend smoke', () => {
       agentId: 'qa-smoke-agent-incomplete-claude-stream',
       agentName: '[qa-smoke] incomplete Claude stream agent',
       model: 'claude',
-      modelId: 'claude-opus-4-7',
+      modelId: 'claude-opus-4-8',
       triggerType: 'chat',
       conversationId: 'qa-smoke-conversation-incomplete-claude-stream',
       executor: 'remote',

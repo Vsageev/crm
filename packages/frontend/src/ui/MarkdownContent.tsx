@@ -15,6 +15,8 @@ interface MarkdownContentProps {
   /** Use compact sizing for comments and tight spaces */
   compact?: boolean;
   className?: string;
+  fileRevealAgentId?: string | null;
+  fileRevealWorkspaceId?: string | null;
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -182,8 +184,13 @@ function getRevealLabel() {
  * Detects links that point to local file paths (e.g. /Users/vlad/file.ts:61)
  * and offers local actions instead of navigating in the browser.
  */
-function FileLink(props: ComponentProps<'a'>) {
-  const { href, children, ...rest } = props;
+type FileLinkProps = ComponentProps<'a'> & {
+  fileRevealAgentId?: string | null;
+  fileRevealWorkspaceId?: string | null;
+};
+
+function FileLink(props: FileLinkProps) {
+  const { href, children, fileRevealAgentId, fileRevealWorkspaceId, ...rest } = props;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLSpanElement>(null);
 
@@ -225,7 +232,11 @@ function FileLink(props: ComponentProps<'a'>) {
     try {
       await api('/runner-filesystem/reveal', {
         method: 'POST',
-        body: JSON.stringify({ path: fileInfo.filePath }),
+        body: JSON.stringify({
+          path: fileInfo.filePath,
+          agentId: fileRevealAgentId || undefined,
+          workspaceId: fileRevealWorkspaceId || undefined,
+        }),
       });
       setMenuOpen(false);
     } catch (err) {
@@ -284,11 +295,30 @@ function FileLink(props: ComponentProps<'a'>) {
   );
 }
 
-export function MarkdownContent({ children, compact, className }: MarkdownContentProps) {
+export function MarkdownContent({
+  children,
+  compact,
+  className,
+  fileRevealAgentId,
+  fileRevealWorkspaceId,
+}: MarkdownContentProps) {
   const cls = [styles.markdown, compact && styles.compact, className].filter(Boolean).join(' ');
   return (
     <div className={cls}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, img: MarkdownImage, a: FileLink }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: CodeBlock,
+          img: MarkdownImage,
+          a: (props) => (
+            <FileLink
+              {...props}
+              fileRevealAgentId={fileRevealAgentId}
+              fileRevealWorkspaceId={fileRevealWorkspaceId}
+            />
+          ),
+        }}
+      >
         {children}
       </ReactMarkdown>
     </div>

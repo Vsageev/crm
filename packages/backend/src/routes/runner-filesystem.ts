@@ -97,6 +97,26 @@ function resolveSingleRunnerScopeForAgent(params: {
   return matchingScopes[0];
 }
 
+function resolveFilesystemDispatchScope(params: {
+  agentId?: string;
+  requestUserId: string;
+  workspaceId?: string;
+}): { agent: ReturnType<typeof getAgent> | null; userId: string; workspaceId?: string } {
+  if (!params.agentId) {
+    return { agent: null, userId: params.requestUserId, workspaceId: params.workspaceId };
+  }
+  const agent = getAgent(params.agentId);
+  if (!agent) {
+    throw new Error('not_found: Agent not found');
+  }
+  const scope = resolveSingleRunnerScopeForAgent({
+    agent,
+    requestUserId: params.requestUserId,
+    workspaceId: params.workspaceId,
+  });
+  return { agent, userId: scope.userId, workspaceId: scope.workspaceId };
+}
+
 function noRepositoryAgentWorkspacePath(workspaceRoot: string, agentId: string): string {
   return path.join(workspaceRoot, '.openwork', 'no-repository-agents', agentId, 'workspace');
 }
@@ -347,9 +367,15 @@ export async function runnerFilesystemRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const { result } = await dispatchRunnerFilesystemRequest({
-          userId: request.user.sub,
+        const scope = resolveFilesystemDispatchScope({
+          agentId: request.body.agentId,
+          requestUserId: request.user.sub,
           workspaceId: request.body.workspaceId,
+        });
+        const { result } = await dispatchRunnerFilesystemRequest({
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          activationActorId: request.user.sub,
           request: { action: 'reveal', path: request.body.path },
         });
         if (result.action !== 'reveal') return reply.badRequest('Unexpected runner response');
@@ -760,16 +786,24 @@ export async function runnerFilesystemRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const { runnerId, result } = await dispatchRunnerFilesystemRequest({
-          userId: request.user.sub,
+        const scope = resolveFilesystemDispatchScope({
+          agentId: request.body.agentId,
+          requestUserId: request.user.sub,
           workspaceId: request.body.workspaceId,
+        });
+        const { runnerId, result } = await dispatchRunnerFilesystemRequest({
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          activationActorId: request.user.sub,
           request: { action: 'validate_repository_root', path: request.body.path },
         });
         if (result.action !== 'validate_repository_root') return reply.badRequest('Unexpected runner response');
-        const selection = getRunnerFilesystemSelection(request.user.sub, request.body.workspaceId);
-        if (request.body.agentId) {
-          const agent = getAgent(request.body.agentId);
-          if (!agent) return reply.notFound('Agent not found');
+        const selection = getRunnerFilesystemSelection(
+          scope.userId,
+          scope.workspaceId,
+          request.user.sub,
+        );
+        if (request.body.agentId && scope.agent) {
           store.update('agents', request.body.agentId, {
             repositoryRoot: result.path,
             repositoryRootOrigin: result.repositoryRootOrigin,
@@ -777,11 +811,11 @@ export async function runnerFilesystemRoutes(app: FastifyInstance) {
             repositoryRootVerifiedAt: result.repositoryRootVerifiedAt,
             repositoryRootRepairRequired: false,
             runnerInventoryRunnerId: runnerId,
-            runnerInventoryWorkspaceId: request.body.workspaceId ?? null,
+            runnerInventoryWorkspaceId: scope.workspaceId ?? null,
             runnerInventoryVersion: 1,
             runnerInventoryCapabilityRefs: runnerCapabilityRefs({
               runnerId,
-              workspaceId: request.body.workspaceId ?? null,
+              workspaceId: scope.workspaceId ?? null,
               capabilities: selection?.capabilities as Record<string, unknown> | null,
             }),
             runnerInventoryWorkspaceRootOrigin: 'repository_root',

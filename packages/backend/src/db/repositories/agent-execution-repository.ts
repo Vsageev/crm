@@ -37,6 +37,18 @@ export function findRunningAgentRuns(): StoreRecord[] {
   return store.getAll(AGENT_RUNS_COLLECTION).filter((r) => r.status === 'running');
 }
 
+export async function getAgentRunByIdNative(runId: string): Promise<StoreRecord | null> {
+  const db = await getFlushedNativeDb();
+  if (!db) return store.getById(AGENT_RUNS_COLLECTION, runId);
+
+  const rows = await db
+    .select()
+    .from(schema.agentRuns)
+    .where(eq(schema.agentRuns.id, runId))
+    .limit(1);
+  return rows[0] ? recordsFromLegacyRows(rows)[0] : null;
+}
+
 export type AgentRunListFilter = {
   status?: string;
   agentId?: string;

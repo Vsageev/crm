@@ -345,6 +345,29 @@ describe('agent batch queue', () => {
     expect(String(item?.errorMessage ?? '')).toContain('forced card failure');
   });
 
+  it('backs off card contention without failing the batch item', async () => {
+    mocks.executeCardTask.mockImplementation((_agentId, _card, callbacks) => {
+      callbacks.onError('Agent is already processing this card');
+    });
+    const { runId } = enqueueAgentBatchRun({
+      sourceType: 'board',
+      sourceId: 'board-contention',
+      agentId: 'agent-1',
+      maxParallel: 1,
+      cards: [{ id: 'card-busy', name: 'Busy', description: null, collectionId: 'col-1' }],
+    });
+    expect(runId).toBeTruthy();
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(mocks.executeCardTask).toHaveBeenCalledTimes(1);
+    const item = listAgentBatchRunItems(runId!).entries[0];
+    expect(item?.status).toBe('queued');
+    expect(item?.attempts).toBe(1);
+    expect(item?.nextAttemptAt).toBeTruthy();
+    expect(getAgentBatchRun(runId!)?.status).toBe('queued');
+  });
+
   it('reconciles a processing batch item from persistence when the linked agent run already finished', async () => {
     const runId = 'batch-recover-run';
     const itemId = 'batch-recover-item';

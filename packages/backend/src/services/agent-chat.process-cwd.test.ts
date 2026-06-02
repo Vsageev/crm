@@ -65,15 +65,15 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     mockUpdate.mockReset();
   });
 
-  it('uses repository root when conversationId is omitted for repo-backed agents', () => {
+  it('uses repository-local agent folder when conversationId is omitted for repo-backed agents', () => {
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, undefined);
-    expect(cwd).toBe(path.resolve(repositoryRoot));
+    expect(cwd).toBe(path.resolve(agentRoot));
   });
 
-  it('uses repository root for shared-mode conversation metadata when the toggle is disabled', () => {
+  it('uses repository-local agent folder for shared-mode conversation metadata when the toggle is disabled', () => {
     conversationMetadata = { workspaceMode: 'shared' };
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, CONV_ID);
-    expect(cwd).toBe(path.resolve(repositoryRoot));
+    expect(cwd).toBe(path.resolve(agentRoot));
   });
 
   it('materializes an explicitly shared conversation into subfolder mode when the agent toggle is enabled', () => {
@@ -82,7 +82,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
 
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, CONV_ID);
 
-    expect(cwd).toBe(path.resolve(repositoryRoot, 'conversations', CONV_ID));
+    expect(cwd).toBe(path.resolve(agentRoot, 'conversations', CONV_ID));
     const updatePatch = mockUpdate.mock.calls[0]?.[2] as { metadata?: string };
     expect(JSON.parse(updatePatch.metadata ?? '{}')).toMatchObject({
       agentId: AGENT_ID,
@@ -107,10 +107,10 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     };
 
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, CONV_ID);
-    const expected = path.resolve(repositoryRoot, 'conversations', CONV_ID);
+    const expected = path.resolve(agentRoot, 'conversations', CONV_ID);
     expect(cwd).toBe(expected);
     expect(cwd.startsWith(path.resolve(repositoryRoot))).toBe(true);
-    expect(cwd.startsWith(path.resolve(agentRoot))).toBe(false);
+    expect(cwd.startsWith(path.resolve(agentRoot))).toBe(true);
     expect(cwd).not.toBe(path.resolve(agentRoot));
 
     expect(fs.existsSync(cwd)).toBe(false);
@@ -120,7 +120,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     conversationMetadata = { workspaceMode: 'subfolder' };
 
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, CONV_ID);
-    expect(cwd).toBe(path.resolve(repositoryRoot, 'conversations', CONV_ID));
+    expect(cwd).toBe(path.resolve(agentRoot, 'conversations', CONV_ID));
   });
 
   it('materializes a legacy conversation into subfolder mode when the agent toggle is enabled', () => {
@@ -129,7 +129,7 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
 
     const cwd = resolveAgentChatProcessWorkingDirectory(AGENT_ID, CONV_ID);
 
-    expect(cwd).toBe(path.resolve(repositoryRoot, 'conversations', CONV_ID));
+    expect(cwd).toBe(path.resolve(agentRoot, 'conversations', CONV_ID));
     expect(mockUpdate).toHaveBeenCalledWith(
       'conversations',
       CONV_ID,
@@ -185,7 +185,9 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
       conversationId: CONV_ID,
     });
 
-    expect(result.workDir).toBe(path.join(runnerRepo, 'conversations', CONV_ID));
+    expect(result.workDir).toBe(
+      path.join(runnerRepo, '.openwork', 'agents', 'test', 'conversations', CONV_ID),
+    );
     expect(result).not.toHaveProperty('materialization');
     expect(fs.existsSync(backendConversationDir)).toBe(false);
     expect(mockUpdate).toHaveBeenCalledWith(
@@ -221,6 +223,71 @@ describe('resolveAgentChatProcessWorkingDirectory', () => {
     expect(() => resolveAgentChatProcessWorkingDirectory(AGENT_ID, undefined)).toThrow(
       'runner workspace readiness is required',
     );
+  });
+
+  it('uses runner inventory workspaceRootPath as repository-backed remote job cwd', () => {
+    const runnerRepo = path.join(tmp, 'runner-root', 'repo');
+    const runnerAgentRoot = path.join(runnerRepo, '.openwork', 'agents', 'test');
+
+    const result = __agentChatTestUtils.resolveRunnerOwnedAgentWorkspace({
+      agentId: AGENT_ID,
+      agent: {
+        id: AGENT_ID,
+        name: 'Test',
+        repositoryRoot: runnerRepo,
+      },
+      capabilities: {
+        agentInventory: {
+          advertisedAt: new Date().toISOString(),
+          ttlMs: 60_000,
+          agents: [
+            {
+              agentId: AGENT_ID,
+              readiness: 'ready',
+              workspaceRootPath: runnerAgentRoot,
+              repositoryRootPath: runnerRepo,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.executionRoot).toBe(runnerAgentRoot);
+    expect(result.workDir).toBe(runnerAgentRoot);
+  });
+
+  it('uses runner inventory workspaceRootPath as repository-backed conversation cwd', () => {
+    const runnerRepo = path.join(tmp, 'runner-root', 'repo');
+    const runnerAgentRoot = path.join(runnerRepo, '.openwork', 'agents', 'test');
+
+    const result = __agentChatTestUtils.resolveRunnerOwnedAgentWorkspace({
+      agentId: AGENT_ID,
+      agent: {
+        id: AGENT_ID,
+        name: 'Test',
+        repositoryRoot: runnerRepo,
+      },
+      capabilities: {
+        agentInventory: {
+          advertisedAt: new Date().toISOString(),
+          ttlMs: 60_000,
+          agents: [
+            {
+              agentId: AGENT_ID,
+              readiness: 'ready',
+              workspaceRootPath: runnerAgentRoot,
+              repositoryRootPath: runnerRepo,
+            },
+          ],
+        },
+      },
+      conversationId: CONV_ID,
+      conversationWorkspaceMode: 'subfolder',
+      conversationWorkspaceRelativePath: `conversations/${CONV_ID}`,
+    });
+
+    expect(result.executionRoot).toBe(runnerAgentRoot);
+    expect(result.workDir).toBe(path.join(runnerAgentRoot, 'conversations', CONV_ID));
   });
 });
 

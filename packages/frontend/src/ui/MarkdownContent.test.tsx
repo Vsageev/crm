@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownContent } from './MarkdownContent';
@@ -27,6 +27,7 @@ vi.mock('../stores/toast', () => ({
 
 describe('MarkdownContent local file links', () => {
   beforeEach(() => {
+    cleanup();
     vi.mocked(api).mockReset();
     vi.mocked(showToast).mockReset();
   });
@@ -46,7 +47,38 @@ describe('MarkdownContent local file links', () => {
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith('/runner-filesystem/reveal', {
         method: 'POST',
-        body: JSON.stringify({ path: '/Users/vladislav/project/src/app.ts' }),
+        body: JSON.stringify({
+          path: '/Users/vladislav/project/src/app.ts',
+          agentId: undefined,
+          workspaceId: undefined,
+        }),
+      });
+    });
+  });
+
+  it('includes agent and workspace scope when revealing a chat file link', async () => {
+    vi.mocked(api).mockResolvedValue(undefined);
+
+    render(
+      <MarkdownContent
+        fileRevealAgentId="agent-1"
+        fileRevealWorkspaceId="workspace-1"
+      >
+        {'[file](/Users/vladislav/project/src/app.ts:12)'}
+      </MarkdownContent>,
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: 'file' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reveal in/ }));
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith('/runner-filesystem/reveal', {
+        method: 'POST',
+        body: JSON.stringify({
+          path: '/Users/vladislav/project/src/app.ts',
+          agentId: 'agent-1',
+          workspaceId: 'workspace-1',
+        }),
       });
     });
   });

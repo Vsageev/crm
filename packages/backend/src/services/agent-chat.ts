@@ -40,6 +40,7 @@ import {
 import { getAgent, isAgentArchived, listAgents, prepareAgentWorkspaceAccess } from './agents.js';
 import { runnerRoutingScopesForAgentGroup } from './runner-devices.js';
 import {
+  deriveAgentWorkspacePath,
   isRepositoryRootRunnerVerified,
   normalizeRepositoryRoot,
   normalizeRepositoryRootOrigin,
@@ -3179,10 +3180,10 @@ async function withQueueDrainTransaction<T>(operation: () => Promise<T>): Promis
 // ---------------------------------------------------------------------------
 
 /**
- * Working directory for an agent CLI process: repo-backed agents execute from the repository
- * root, while the agent folder remains the source of AGENTS/skills context. Hosted runner jobs
- * treat subfolder-mode chat directories as runner-owned paths; ordinary chat send/edit computes
- * the path only and prepares it through the runner before dispatch.
+ * Working directory for an agent CLI process: repo-backed agents execute from their
+ * repository-local agent folder (`repositoryRoot/.openwork/agents/<agent-slug>`). Hosted runner
+ * jobs treat subfolder-mode chat directories as runner-owned paths; ordinary chat send/edit
+ * computes the path only and prepares it through the runner before dispatch.
  */
 export function resolveAgentChatProcessWorkingDirectory(
   agentId: string,
@@ -3460,7 +3461,7 @@ async function reconcileRepositoryRootForRunnerQueue(params: {
   provider: RunnerProvider;
 }): Promise<void> {
   const agent = loadAgentRecordForRunnerPreflight(params.agentId);
-  if (!agentUsesRepositoryRoot(agent) || isRepositoryRootRunnerVerified(agent)) return;
+  if (!agentUsesRepositoryRoot(agent)) return;
 
   const repositoryRoot = normalizeRepositoryRoot(
     typeof agent?.repositoryRoot === 'string' ? agent.repositoryRoot : null,
@@ -3473,6 +3474,17 @@ async function reconcileRepositoryRootForRunnerQueue(params: {
     params.workspaceId,
     params.provider,
   );
+  const repositoryWorkspacePath =
+    typeof agent?.name === 'string' && agent.name.trim()
+      ? deriveAgentWorkspacePath(repositoryRoot, agent.name)
+      : null;
+  const inventoryEntry = findRunnerInventoryAgentEntry({
+    capabilities: runnerSelection?.capabilities as Record<string, unknown> | null,
+    agentId: params.agentId,
+    repositoryRoot,
+    repositoryWorkspacePath,
+  });
+  if (isRepositoryRootRunnerVerified(agent) && inventoryEntry) return;
 
   if (
     env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM === true &&
@@ -3560,30 +3572,80 @@ function findRunnerInventoryAgentEntry(params: {
   capabilities: Record<string, unknown> | null | undefined;
   agentId: string;
   baseWorkDir?: string | null;
+  repositoryRoot?: string | null;
+  repositoryWorkspacePath?: string | null;
 }) {
   const inventory = getRunnerAgentInventory(params.capabilities);
   if (!inventory) return null;
   return (
     (inventory.agents as Record<string, unknown>[]).find((entry) => {
+      if (params.repositoryRoot) {
+        if (typeof entry.repositoryRootPath !== 'string') return false;
+        if (path.resolve(entry.repositoryRootPath) !== path.resolve(params.repositoryRoot)) {
+          return false;
+        }
+        if (
+          params.repositoryWorkspacePath &&
+          typeof entry.workspaceRootPath === 'string' &&
+          path.resolve(entry.workspaceRootPath) === path.resolve(params.repositoryWorkspacePath)
+        ) {
+          return true;
+        }
+        return entry.agentId === params.agentId;
+      }
       if (entry.agentId !== params.agentId) return false;
       if (params.baseWorkDir && typeof entry.workspaceRootPath === 'string') {
-        return path.resolve(entry.workspaceRootPath) === path.resolve(params.baseWorkDir);
+        if (path.resolve(entry.workspaceRootPath) === path.resolve(params.baseWorkDir)) return true;
       }
       return true;
     }) ?? null
   );
 }
 
-function assertNoRepositoryAgentInventoryReady(params: {
+function resolveRunnerOwnedAgentWorkspace(params: {
   agentId: string;
-  baseWorkDir: string;
+  agent: Record<string, unknown> | null;
   capabilities: Record<string, unknown> | null | undefined;
-}) {
-  const entry = findRunnerInventoryAgentEntry(params);
+  conversationId?: string;
+  conversationWorkspaceMode?: ConversationWorkspaceMode;
+  conversationWorkspaceRelativePath?: string;
+}): { baseWorkDir: string; executionRoot: string; workDir: string; entry: Record<string, unknown> } {
+  const repositoryRoot = normalizeRepositoryRoot(
+    typeof params.agent?.repositoryRoot === 'string' ? params.agent.repositoryRoot : null,
+  );
+  const repositoryWorkspacePath =
+    repositoryRoot && typeof params.agent?.name === 'string' && params.agent.name.trim()
+      ? deriveAgentWorkspacePath(repositoryRoot, params.agent.name)
+      : null;
+  const legacyNoRepositoryBase =
+    repositoryRoot === null &&
+    typeof params.capabilities?.workspaceRoot === 'string' &&
+    params.capabilities.workspaceRoot.trim()
+      ? path.join(
+          params.capabilities.workspaceRoot.trim(),
+          '.openwork',
+          'no-repository-agents',
+          params.agentId,
+          'workspace',
+        )
+      : null;
+  const entry = findRunnerInventoryAgentEntry({
+    capabilities: params.capabilities,
+    agentId: params.agentId,
+    baseWorkDir: legacyNoRepositoryBase,
+    repositoryRoot,
+    repositoryWorkspacePath,
+  });
   if (!entry) {
+    const code = repositoryRoot
+      ? 'agent_repository_inventory_missing'
+      : 'agent_runner_inventory_missing';
+    const message = repositoryRoot
+      ? 'The selected runner does not advertise this repository agent in its runner-owned inventory.'
+      : 'The selected runner does not advertise this no-repository agent workspace in its runner-owned inventory.';
     throw AgentChatError.conflict(
-      'agent_runner_inventory_missing',
-      'The selected runner does not advertise this no-repository agent workspace in its runner-owned inventory.',
+      code,
+      message,
       'Prepare or repair the agent workspace through the runner file/setup interface before queueing jobs.',
     );
   }
@@ -3594,6 +3656,35 @@ function assertNoRepositoryAgentInventoryReady(params: {
       'Repair the agent workspace through the runner file/setup interface before queueing jobs.',
     );
   }
+  const baseWorkDir =
+    typeof entry.workspaceRootPath === 'string' && entry.workspaceRootPath.trim()
+      ? entry.workspaceRootPath.trim()
+      : null;
+  if (!baseWorkDir || !path.isAbsolute(baseWorkDir)) {
+    throw AgentChatError.conflict(
+      'agent_runner_inventory_workspace_invalid',
+      'The selected runner advertised this agent without an absolute workspace path.',
+      'Upgrade or restart the runner, then repair the agent workspace.',
+    );
+  }
+  const executionRoot = baseWorkDir;
+  if (!path.isAbsolute(executionRoot)) {
+    throw AgentChatError.conflict(
+      'agent_runner_inventory_workspace_invalid',
+      'The selected runner advertised this agent without an absolute execution root.',
+      'Upgrade or restart the runner, then repair the agent workspace.',
+    );
+  }
+  const workDir =
+    params.conversationId && params.conversationWorkspaceMode === 'subfolder'
+      ? resolveSubfolderProcessCwd(
+          executionRoot,
+          params.conversationId,
+          params.conversationWorkspaceMode,
+          params.conversationWorkspaceRelativePath,
+        )
+      : executionRoot;
+  return { baseWorkDir, executionRoot, workDir, entry };
 }
 
 function buildConversationWorkspace(params: {
@@ -3661,14 +3752,19 @@ function assertRemoteRunnerWorkspacePreflight(params: {
           store.getById('conversations', params.conversationId),
         )
       : null;
-  const noRepositoryWorkspace = buildNoRepositoryRunnerWorkspace({
-    agentId: params.agentId,
-    agent,
-    workspaceRoot,
-    conversationId: params.conversationId,
-    conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
-    conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
-  });
+  const runnerInventory = getRunnerAgentInventory(capabilities as Record<string, unknown> | null);
+  const useLocalDevPathFallback =
+    env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM === true && !runnerInventory;
+  const noRepositoryWorkspace = useLocalDevPathFallback
+    ? buildNoRepositoryRunnerWorkspace({
+        agentId: params.agentId,
+        agent,
+        workspaceRoot,
+        conversationId: params.conversationId,
+        conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
+        conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
+      })
+    : null;
   const requiredWorkspaceMode = conversationWorkspace?.workspaceMode ?? 'shared';
   if (
     Array.isArray(capabilities?.workspaceModes) &&
@@ -3709,12 +3805,21 @@ function assertRemoteRunnerWorkspacePreflight(params: {
     }
   }
   const workDir =
-    noRepositoryWorkspace?.workDir ??
-    buildConversationWorkspace({
-      agentId: params.agentId,
-      agent,
-      conversationId: params.conversationId,
-    }).workDir;
+    useLocalDevPathFallback
+      ? (noRepositoryWorkspace?.workDir ??
+          buildConversationWorkspace({
+            agentId: params.agentId,
+            agent,
+            conversationId: params.conversationId,
+          }).workDir)
+      : resolveRunnerOwnedAgentWorkspace({
+          agentId: params.agentId,
+          agent,
+          capabilities: capabilities as Record<string, unknown> | null,
+          conversationId: params.conversationId,
+          conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
+          conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
+        }).workDir;
   if (!path.isAbsolute(workDir)) {
     throw AgentChatError.conflict(
       'agent_runner_workspace_relative',
@@ -3743,7 +3848,7 @@ function assertRemoteRunnerWorkspacePreflight(params: {
       'Choose a runner-local repository/workspace path or run the backend and runner in an explicit same-machine development setup.',
     );
   }
-  if (noRepositoryWorkspace) {
+  if (!agentUsesRepositoryRoot(agent)) {
     if (!workspaceRoot) return;
     if (!pathInsideRoot(workDir, workspaceRoot)) {
       throw AgentChatError.conflict(
@@ -3752,11 +3857,6 @@ function assertRemoteRunnerWorkspacePreflight(params: {
         'Restart the paired runner with OPENWORK_RUNNER_WORKSPACE_ROOT set to a directory that contains this agent workspace, or recreate the agent after widening the runner workspace root.',
       );
     }
-    assertNoRepositoryAgentInventoryReady({
-      agentId: params.agentId,
-      baseWorkDir: noRepositoryWorkspace.baseWorkDir,
-      capabilities: capabilities as Record<string, unknown> | null,
-    });
   }
 }
 
@@ -3824,34 +3924,36 @@ async function runAgentProcess(options: AgentProcessOptions): Promise<string> {
       typeof runnerCapabilities?.workspaceRoot === 'string' && runnerCapabilities.workspaceRoot.trim()
         ? runnerCapabilities.workspaceRoot.trim()
         : null;
-    const noRepositoryWorkspace = buildNoRepositoryRunnerWorkspace({
-      agentId: options.agentId,
-      agent: refreshedAgentRecord,
-      workspaceRoot: runnerWorkspaceRoot,
-      conversationId: options.triggerRef?.conversationId,
-      ...(options.triggerRef?.conversationId
-        ? (() => {
-            const conversationId = options.triggerRef.conversationId;
-            const conversationWorkspace = ensureConversationWorkspaceMetadata(
-              options.agentId,
-              store.getById('conversations', conversationId),
-            );
-            return {
-              conversationWorkspaceMode: conversationWorkspace.workspaceMode,
-              conversationWorkspaceRelativePath: conversationWorkspace.workspaceRelativePath,
-            };
-          })()
-        : {}),
-    });
-    const repositoryConversationWorkspace =
-      noRepositoryWorkspace === null
-        ? buildConversationWorkspace({
+    const conversationWorkspace = options.triggerRef?.conversationId
+      ? ensureConversationWorkspaceMetadata(
+          options.agentId,
+          store.getById('conversations', options.triggerRef.conversationId),
+        )
+      : null;
+    const workDir =
+      env.OPENWORK_LOCAL_DEV_SAME_HOST_FILESYSTEM === true &&
+      !getRunnerAgentInventory(runnerCapabilities as Record<string, unknown> | null)
+        ? (buildNoRepositoryRunnerWorkspace({
+            agentId: options.agentId,
+            agent: refreshedAgentRecord,
+            workspaceRoot: runnerWorkspaceRoot,
+            conversationId: options.triggerRef?.conversationId,
+            conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
+            conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
+          })?.workDir ??
+          buildConversationWorkspace({
             agentId: options.agentId,
             agent: refreshedAgentRecord,
             conversationId: options.triggerRef?.conversationId,
-          })
-        : null;
-    const workDir = noRepositoryWorkspace?.workDir ?? repositoryConversationWorkspace?.workDir;
+          }).workDir)
+        : resolveRunnerOwnedAgentWorkspace({
+            agentId: options.agentId,
+            agent: refreshedAgentRecord,
+            capabilities: runnerCapabilities as Record<string, unknown> | null,
+            conversationId: options.triggerRef?.conversationId,
+            conversationWorkspaceMode: conversationWorkspace?.workspaceMode,
+            conversationWorkspaceRelativePath: conversationWorkspace?.workspaceRelativePath,
+          }).workDir;
     if (!workDir) {
       throw new Error('Runner workspace path could not be resolved');
     }
@@ -4324,6 +4426,7 @@ export const __agentChatTestUtils = {
   drainConversationQueue,
   buildNoRepositoryRunnerWorkspace,
   buildConversationWorkspace,
+  resolveRunnerOwnedAgentWorkspace,
 };
 
 /**

@@ -1844,6 +1844,36 @@ function relativeTime(dateStr: string | null): string {
   return `${days}d`;
 }
 
+function formatAgentChatDateGroup(dateStr: string): string {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const messageDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.floor((today.getTime() - messageDate.getTime()) / 86400000);
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays > 1 && diffDays < 7) {
+    return date.toLocaleDateString(undefined, { weekday: 'long' });
+  }
+  return date.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  });
+}
+
+function getAgentChatDateGroupKey(dateStr: string): string {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function getRevealInFileManagerLabel(): string {
   if (typeof navigator === 'undefined') return 'Reveal in file manager';
   const platform = navigator.platform.toLowerCase();
@@ -3006,6 +3036,10 @@ export function AgentsPage() {
   const pendingConversationCountRef = useRef<Map<string, number>>(new Map());
   const runHandoffTimersRef = useRef<Map<string, number>>(new Map());
   const runHandoffStartedAtRef = useRef<Map<string, number>>(new Map());
+  const [floatingChatDate, setFloatingChatDate] = useState<{
+    label: string | null;
+    visible: boolean;
+  }>({ label: null, visible: false });
   // ── Conversation indicators ──
   const messagesRef = useRef<HTMLDivElement>(null);
 
@@ -3055,6 +3089,8 @@ export function AgentsPage() {
   // ── Header menu ──
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const headerMenuRef = useRef<HTMLDivElement>(null);
+  const [chatExportMenuOpen, setChatExportMenuOpen] = useState(false);
+  const chatExportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!headerMenuOpen) return;
@@ -3066,6 +3102,17 @@ export function AgentsPage() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [headerMenuOpen]);
+
+  useEffect(() => {
+    if (!chatExportMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (chatExportMenuRef.current && !chatExportMenuRef.current.contains(e.target as Node)) {
+        setChatExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [chatExportMenuOpen]);
 
   // ── Page settings ──
   const [pageSettingsOpen, setPageSettingsOpen] = useState(false);
@@ -3575,6 +3622,36 @@ export function AgentsPage() {
   }, []);
   const shouldStickToBottomRef = useRef(true);
   const forceScrollToBottomRef = useRef(false);
+  const updateFloatingChatDate = useCallback(() => {
+    const element = messagesRef.current;
+    const dateGroups = element
+      ? Array.from(element.querySelectorAll<HTMLElement>('[data-chat-date-group-label]'))
+      : [];
+
+    if (!element || dateGroups.length === 0) {
+      setFloatingChatDate((prev) =>
+        prev.label === null && !prev.visible ? prev : { label: null, visible: false },
+      );
+      return;
+    }
+
+    const containerTop = element.getBoundingClientRect().top;
+    const probeTop = containerTop + 16;
+    let activeLabel = dateGroups[0]?.dataset.chatDateGroupLabel ?? null;
+
+    for (const dateGroup of dateGroups) {
+      if (dateGroup.getBoundingClientRect().top > probeTop) break;
+      activeLabel = dateGroup.dataset.chatDateGroupLabel ?? activeLabel;
+    }
+
+    const next = {
+      label: activeLabel,
+      visible: element.scrollTop > 8 && activeLabel !== null,
+    };
+    setFloatingChatDate((prev) =>
+      prev.label === next.label && prev.visible === next.visible ? prev : next,
+    );
+  }, []);
   const requestAutoScrollToBottom = useCallback(() => {
     forceScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
@@ -3583,7 +3660,8 @@ export function AgentsPage() {
     const element = messagesRef.current;
     if (!element) return;
     shouldStickToBottomRef.current = isNearMessagesBottom(element);
-  }, [isNearMessagesBottom]);
+    updateFloatingChatDate();
+  }, [isNearMessagesBottom, updateFloatingChatDate]);
 
   const isActiveConversation = useCallback(
     (agentId: string, conversationId: string) =>
@@ -4369,6 +4447,13 @@ export function AgentsPage() {
     };
   }, [messages, queueItems, scrollToBottom, streaming]);
 
+  useEffect(() => {
+    const rafId = window.requestAnimationFrame(updateFloatingChatDate);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [visibleMessages, activeConversationKey, updateFloatingChatDate]);
+
   const scrollToMessage = useCallback((messageId: string) => {
     setHighlightedMessageId(messageId);
     const container = messagesRef.current;
@@ -4700,6 +4785,7 @@ export function AgentsPage() {
         method: 'POST',
         body: JSON.stringify({
           path: prepared.path,
+          agentId,
           workspaceId: activeWorkspaceId || undefined,
         }),
       });
@@ -4708,11 +4794,11 @@ export function AgentsPage() {
     }
   }, [activeWorkspaceId, agents]);
 
-  const revealLocalPathInFileManager = useCallback(async (diskPath: string) => {
+  const revealLocalPathInFileManager = useCallback(async (diskPath: string, agentId?: string) => {
     try {
       await api('/runner-filesystem/reveal', {
         method: 'POST',
-        body: JSON.stringify({ path: diskPath, workspaceId: activeWorkspaceId || undefined }),
+        body: JSON.stringify({ path: diskPath, agentId, workspaceId: activeWorkspaceId || undefined }),
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to open folder');
@@ -4735,7 +4821,11 @@ export function AgentsPage() {
         });
         await api('/runner-filesystem/reveal', {
           method: 'POST',
-          body: JSON.stringify({ path: prepared.path, workspaceId: activeWorkspaceId || undefined }),
+          body: JSON.stringify({
+            path: prepared.path,
+            agentId: agent.id,
+            workspaceId: activeWorkspaceId || undefined,
+          }),
         });
         return;
       }
@@ -4750,6 +4840,7 @@ export function AgentsPage() {
         method: 'POST',
         body: JSON.stringify({
           path: workspacePath,
+          agentId: agent.id,
           workspaceId: activeWorkspaceId || undefined,
         }),
       });
@@ -6193,17 +6284,22 @@ export function AgentsPage() {
     setSettingsAgent(agent);
   }, []);
 
-  const handleExportAgentChatMarkdown = useCallback(async () => {
+  const handleExportAgentChatMarkdown = useCallback(async (scope: 'current' | 'all') => {
     if (!activeAgentId || !activeConvId || !activeAgent) return;
     if (visibleMessages.length === 0) {
       toast.error('Nothing to export yet');
       return;
     }
     try {
-      const data = await api<{ entries: ChatMessage[] }>(
-        `/agents/${activeAgentId}/chat/messages?conversationId=${activeConvId}&scope=all&limit=2000`,
-      );
-      if (data.entries.length === 0) {
+      const exportMessages =
+        scope === 'all'
+          ? (
+              await api<{ entries: ChatMessage[] }>(
+                `/agents/${activeAgentId}/chat/messages?conversationId=${activeConvId}&scope=all&limit=2000`,
+              )
+            ).entries
+          : visibleMessages;
+      if (exportMessages.length === 0) {
         toast.error('Nothing to export yet');
         return;
       }
@@ -6211,16 +6307,21 @@ export function AgentsPage() {
       const md = buildAgentChatMarkdownExport({
         agentName: activeAgent.name,
         conversationSubject: conv?.subject ?? null,
-        messages: data.entries,
-        includeAllBranches: true,
+        messages: exportMessages,
+        includeAllBranches: scope === 'all',
       });
       const base = buildAgentChatExportBasename(conv?.subject ?? null);
-      downloadTextFile(`${base}.md`, md, 'text/markdown;charset=utf-8');
-      toast.success('Exported chat as Markdown (all branches)');
+      const suffix = scope === 'current' ? '-current-branch' : '';
+      downloadTextFile(`${base}${suffix}.md`, md, 'text/markdown;charset=utf-8');
+      toast.success(
+        scope === 'current'
+          ? 'Exported current branch as Markdown'
+          : 'Exported chat as Markdown (all branches)',
+      );
     } catch {
       toast.error('Failed to export chat');
     }
-  }, [activeAgent, activeAgentId, activeConvId, convsByAgent, visibleMessages.length]);
+  }, [activeAgent, activeAgentId, activeConvId, convsByAgent, visibleMessages]);
 
   /* ── Skills manager helpers ── */
 
@@ -6909,26 +7010,58 @@ export function AgentsPage() {
                       Files
                     </button>
                   </div>
-                  <ActionTooltip
-                    label={
-                      visibleMessages.length === 0
-                        ? 'Send or receive a message before exporting'
-                        : 'Export full conversation as Markdown (all branches)'
-                    }
-                    disabled={visibleMessages.length === 0}
-                    focusable={visibleMessages.length === 0}
-                    triggerLabel="Export full conversation as Markdown"
-                  >
-                    <button
-                      type="button"
-                      className={styles.iconBtn}
-                      onClick={handleExportAgentChatMarkdown}
-                      aria-label="Export full conversation as Markdown (all branches)"
+                  <div className={styles.headerMenuWrap} ref={chatExportMenuRef}>
+                    <ActionTooltip
+                      label={
+                        visibleMessages.length === 0
+                          ? 'Send or receive a message before exporting'
+                          : 'Download chat'
+                      }
                       disabled={visibleMessages.length === 0}
+                      focusable={visibleMessages.length === 0}
+                      triggerLabel="Download chat"
                     >
-                      <Download size={15} />
-                    </button>
-                  </ActionTooltip>
+                      <button
+                        type="button"
+                        className={styles.iconBtn}
+                        onClick={() => setChatExportMenuOpen((open) => !open)}
+                        aria-label="Download chat"
+                        aria-haspopup="menu"
+                        aria-expanded={chatExportMenuOpen}
+                        disabled={visibleMessages.length === 0}
+                      >
+                        <Download size={15} />
+                      </button>
+                    </ActionTooltip>
+                    {chatExportMenuOpen && visibleMessages.length > 0 && (
+                      <div className={styles.headerMenu} role="menu">
+                        <button
+                          type="button"
+                          className={styles.headerMenuItem}
+                          role="menuitem"
+                          onClick={() => {
+                            setChatExportMenuOpen(false);
+                            void handleExportAgentChatMarkdown('current');
+                          }}
+                        >
+                          <Download size={14} />
+                          Current branch
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.headerMenuItem}
+                          role="menuitem"
+                          onClick={() => {
+                            setChatExportMenuOpen(false);
+                            void handleExportAgentChatMarkdown('all');
+                          }}
+                        >
+                          <Layers size={14} />
+                          All branches
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <Tooltip label="Agent settings">
                     <button
                       className={styles.iconBtn}
@@ -6990,7 +7123,16 @@ export function AgentsPage() {
                       onScroll={handleMessagesScroll}
                       data-testid="agents-messages-area"
                     >
-                      {visibleMessages.map((msg) => {
+                      <div className={styles.chatDateStickyLayer} aria-hidden="true">
+                        <span
+                          className={`${styles.chatDateLabel} ${styles.chatDateStickyLabel} ${
+                            floatingChatDate.visible ? '' : styles.chatDateStickyLabelHidden
+                          }`}
+                        >
+                          {floatingChatDate.label ?? '\u00a0'}
+                        </span>
+                      </div>
+                      {visibleMessages.map((msg, index) => {
                         const messageMeta = parseAgentMessageMetadata(msg.metadata);
                         const monitorRunId =
                           msg.direction === 'inbound'
@@ -7032,9 +7174,28 @@ export function AgentsPage() {
                           deletingQueueItemIds.has(transcriptExecutionItemId);
                         const isTranscriptExecutionBusy =
                           isSavingTranscriptExecutionItem || isDeletingTranscriptExecutionItem;
+                        const dateGroupKey = getAgentChatDateGroupKey(msg.createdAt);
+                        const previousMessage = index > 0 ? visibleMessages[index - 1] : null;
+                        const previousDateGroupKey = previousMessage
+                          ? getAgentChatDateGroupKey(previousMessage.createdAt)
+                          : null;
+                        const showDateGroup = dateGroupKey !== previousDateGroupKey;
+                        const dateGroupLabel = showDateGroup
+                          ? formatAgentChatDateGroup(msg.createdAt)
+                          : null;
 
                         return (
                           <Fragment key={msg.id}>
+                            {showDateGroup && (
+                              <div
+                                className={styles.chatDateGroup}
+                                data-chat-date-group-label={dateGroupLabel}
+                              >
+                                <span className={styles.chatDateLine} />
+                                <span className={styles.chatDateLabel}>{dateGroupLabel}</span>
+                                <span className={styles.chatDateLine} />
+                              </div>
+                            )}
                             <div
                               className={`${styles.messageRow} ${
                                 msg.direction === 'outbound'
@@ -7141,7 +7302,12 @@ export function AgentsPage() {
                                   )}
                                   {msg.content &&
                                     (msg.direction === 'inbound' ? (
-                                      <MarkdownContent>{msg.content}</MarkdownContent>
+                                      <MarkdownContent
+                                        fileRevealAgentId={activeAgentId}
+                                        fileRevealWorkspaceId={activeWorkspaceId}
+                                      >
+                                        {msg.content}
+                                      </MarkdownContent>
                                     ) : (
                                       <div className={styles.messagePlainText}>{msg.content}</div>
                                     ))}
@@ -8460,7 +8626,7 @@ export function AgentsPage() {
                       <div className={styles.settingsGridValue}>
                         <AgentSettingsPathRow
                           path={settingsAgent.repositoryRoot}
-                          onReveal={() => revealLocalPathInFileManager(settingsAgent.repositoryRoot!)}
+                          onReveal={() => revealLocalPathInFileManager(settingsAgent.repositoryRoot!, settingsAgent.id)}
                           disabledReason={getRepositoryRootRevealDisabledReason(
                             settingsAgent,
                             runnerFilesystemDisabledReason,
