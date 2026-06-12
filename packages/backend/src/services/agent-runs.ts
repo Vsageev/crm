@@ -613,6 +613,7 @@ export async function listAgentRuns(params: ListAgentRunsParams = {}) {
 }
 
 export async function getActiveRuns() {
+  await reconcileTimedOutRemoteRuns();
   const running = await findRunningAgentRunsAsync();
   return running
     .map(toAgentRunSummary)
@@ -706,6 +707,45 @@ async function finalizeInterruptedRun(
   return updated;
 }
 
+function isUnclaimedRemoteRun(run: Record<string, unknown>): run is Record<string, unknown> & { id: string } {
+  const id = typeof run.id === 'string' && run.id ? run.id : null;
+  const executor = typeof run.executor === 'string' ? run.executor : 'local';
+  const pid = run.pid as number | null;
+  return Boolean(id && executor === 'remote' && !pid && !isRemoteAgentRunPending(id));
+}
+
+export async function reconcileTimedOutRemoteRuns(): Promise<number> {
+  const timeoutMs = env.REMOTE_AGENT_RUN_TIMEOUT_MS;
+  if (timeoutMs <= 0) return 0;
+
+  const running = await findRunningAgentRunsAsync();
+  const queued = await findQueuedAgentRunsAsync();
+  const now = Date.now();
+  let finalized = 0;
+
+  for (const run of [...running, ...queued]) {
+    if (!isUnclaimedRemoteRun(run)) continue;
+    const startedAtMs = new Date(run.startedAt as string).getTime();
+    if (!Number.isFinite(startedAtMs) || now - startedAtMs < timeoutMs) continue;
+
+    appendAgentRunLifecycleEvent(run.id, {
+      event: 'backend_remote_run_timeout_reconciled',
+      message: `Remote run exceeded timeout after backend lost the pending runner job`,
+    });
+    const updated = await completeAgentRun(
+      run.id,
+      `Remote agent run timed out after ${timeoutMs}ms without a terminal runner message`,
+    );
+    if (updated) finalized++;
+  }
+
+  if (finalized > 0) {
+    console.log(`[agent-runs] Finalized ${finalized} timed-out remote run${finalized === 1 ? '' : 's'}`);
+  }
+
+  return finalized;
+}
+
 /**
  * On startup, check all 'running' agent runs.
  * - If a legacy local PID is alive and a reattach callback is available, re-monitor it
@@ -744,6 +784,7 @@ export async function reconcileRunsOnStartup(
 }
 
 export async function reconcileUnrecoveredRemoteRuns(): Promise<number> {
+  const timedOut = await reconcileTimedOutRemoteRuns();
   const running = await findRunningAgentRunsAsync();
   const queued = await findQueuedAgentRunsAsync();
   let finalized = 0;
@@ -751,11 +792,7 @@ export async function reconcileUnrecoveredRemoteRuns(): Promise<number> {
   const minAgeMs = env.REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS;
 
   for (const run of [...running, ...queued]) {
-    const id = typeof run.id === 'string' ? run.id : null;
-    const executor = typeof run.executor === 'string' ? run.executor : 'local';
-    const pid = run.pid as number | null;
-    if (!id || executor !== 'remote' || pid) continue;
-    if (isRemoteAgentRunPending(id)) continue;
+    if (!isUnclaimedRemoteRun(run)) continue;
     const startedAtMs = new Date(run.startedAt as string).getTime();
     if (Number.isFinite(startedAtMs) && now - startedAtMs < minAgeMs) continue;
 
@@ -767,7 +804,7 @@ export async function reconcileUnrecoveredRemoteRuns(): Promise<number> {
     console.log(`[agent-runs] Finalized ${finalized} unrecovered remote run${finalized === 1 ? '' : 's'}`);
   }
 
-  return finalized;
+  return timedOut + finalized;
 }
 
 /**

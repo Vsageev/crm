@@ -11,7 +11,13 @@ import {
   migrateLegacyAgentRunTriggerTypes,
 } from '../services/agent-runs.js';
 import { cancelProcessingQueueItemForRun } from '../services/agent-chat.js';
-import { listAgentBatchRuns, cancelAgentBatchRun, cleanupFinishedBatchRuns, type AgentBatchRunFilterStatus } from '../services/agent-batch-queue.js';
+import {
+  listAgentBatchRuns,
+  cancelAgentBatchRun,
+  cleanupFinishedBatchRuns,
+  initializeAgentBatchQueue,
+  type AgentBatchRunFilterStatus,
+} from '../services/agent-batch-queue.js';
 
 export async function agentRunRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
@@ -139,6 +145,9 @@ export async function agentRunRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const { status, agentId, limit, offset } = request.query;
+      if (status === 'active') {
+        await initializeAgentBatchQueue({ preserveActiveProcessing: true });
+      }
       const { entries, total } = listAgentBatchRuns({
         status: status as AgentBatchRunFilterStatus | undefined,
         agentId,

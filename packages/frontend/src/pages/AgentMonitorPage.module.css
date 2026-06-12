@@ -721,7 +721,8 @@
   line-height: 1.5;
   color: var(--color-text-secondary);
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: break-word;
   overflow: auto;
   position: relative;
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
@@ -1024,7 +1025,8 @@
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--color-text-secondary);
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: break-word;
   overflow: hidden;
 }
 

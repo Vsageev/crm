@@ -75,7 +75,7 @@ const envSchema = z.object({
   MAX_CONCURRENT_AGENTS: z.coerce.number().int().nonnegative().default(0),
   AGENT_RUNNER_WORKSPACE_ID: z.string().min(1).optional(),
   AGENT_RUNNER_ID: z.string().min(1).optional(),
-  REMOTE_AGENT_RUN_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(0),
+  REMOTE_AGENT_RUN_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(60 * 60 * 1000),
   /** When a runner WebSocket drops, keep in-flight jobs pending this long for reconnect (0 = fail immediately). */
   REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS: z.coerce.number().int().nonnegative().default(120_000),
   /** Explicit same-host development compatibility for legacy backend-local repository roots. */

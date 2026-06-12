@@ -1,7 +1,6 @@
 import {
   type ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
-  type CSSProperties,
   type Dispatch,
   type DragEvent as ReactDragEvent,
   Fragment,
@@ -61,9 +60,9 @@ import {
   RotateCcw,
   OctagonX,
   Cpu,
-  Monitor,
   Brain,
   Wrench,
+  GitBranch,
 } from 'lucide-react';
 import { formatDate, parseAgentOutputBlocks, type OutputBlock } from 'shared';
 import {
@@ -114,12 +113,14 @@ import {
   type RunnerConnection,
 } from '../lib/runner-connections';
 import { MessageSearchSnippet } from '../lib/message-search-snippet';
+import { useFeatureFlags } from '../devtools/feature-flags';
 import { useAuth } from '../stores/useAuth';
 import { useWorkspace } from '../stores/WorkspaceContext';
 import styles from './AgentsPage.module.css';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   buildAgentChatMarkdownExport,
+  buildAgentChatGraphLayout,
   buildAgentChatRunEventSummary,
   buildAgentConversationViewModel,
   getBranchTargetIdByOffset,
@@ -131,9 +132,10 @@ import {
   toQueueCount,
   RUN_EVENT_DETAIL_PREVIEW_MAX,
   type AgentChatRunEventSummary,
-  type AgentConversationRunSummary,
+  type AgentChatGraphLayoutNode,
   type AgentConversationChatView,
 } from './agent-chat-view-model';
+import { AgentChatGraphView } from './agent-chat-graph-view';
 
 /* ── Types ── */
 
@@ -1120,7 +1122,6 @@ export const ReplyComposer = memo(function ReplyComposer({
     onSendAttachments,
     onSendText,
     retainedEditAttachments,
-    streaming,
     uploading,
   ]);
 
@@ -3060,6 +3061,8 @@ export function AgentsPage() {
 
   // ── Chat / Files tab ──
   const [chatTab, setChatTab] = useState<'chat' | 'files'>('chat');
+  const [chatViewMode, setChatViewMode] = useState<'transcript' | 'graph'>('transcript');
+  const { flags: featureFlags } = useFeatureFlags();
 
   // ── Queued chat items ──
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
@@ -3423,6 +3426,16 @@ export function AgentsPage() {
         activeConvId,
       }),
     [activeAgentId, activeConvId, canonicalChatView],
+  );
+  const chatGraphLayout = useMemo(
+    () =>
+      buildAgentChatGraphLayout({
+        canonicalView: canonicalChatView,
+        activeAgentId,
+        activeConvId,
+        style: featureFlags['agentChat.graphViewStyle'],
+      }),
+    [activeAgentId, activeConvId, canonicalChatView, featureFlags],
   );
   const activeMessageIds = useMemo(
     () => new Set(visibleMessages.map((message) => message.id)),
@@ -4454,19 +4467,6 @@ export function AgentsPage() {
     };
   }, [visibleMessages, activeConversationKey, updateFloatingChatDate]);
 
-  const scrollToMessage = useCallback((messageId: string) => {
-    setHighlightedMessageId(messageId);
-    const container = messagesRef.current;
-    if (!container) return;
-    const escapedMessageId =
-      typeof window.CSS?.escape === 'function' ? window.CSS.escape(messageId) : messageId;
-    const target = container.querySelector<HTMLElement>(`[data-message-id="${escapedMessageId}"]`);
-    if (!target) return;
-    forceScrollToBottomRef.current = false;
-    shouldStickToBottomRef.current = false;
-    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, []);
-
   useEffect(() => {
     if (!activeAgentId || !activeConvId) return;
     void markConversationRead(activeAgentId, activeConvId);
@@ -5346,6 +5346,19 @@ export function AgentsPage() {
     }
   }
 
+  const handleGraphNodeSelect = useCallback(
+    async (node: AgentChatGraphLayoutNode) => {
+      setChatViewMode('transcript');
+      if (!node.isSelected) {
+        await handleSwitchBranch(node.id, 'turn');
+      }
+      if (node.userMessageId) {
+        setHighlightedMessageId(node.userMessageId);
+      }
+    },
+    [activeAgentId, activeConvId],
+  );
+
   function startEditingMessage(msg: ChatMessage) {
     if (editingMessage?.isSubmitting) return;
     if (!isEditableChatMessage(msg) || !activeAgentId || !activeConvId) return;
@@ -5840,6 +5853,7 @@ export function AgentsPage() {
     value: string,
   ) {
     const body: Record<string, unknown> = { [field]: value || null };
+    if (activeWorkspaceId) body.workspaceId = activeWorkspaceId;
     // Clear modelId when switching provider; clear thinkingLevel for CLIs that don't support it.
     if (field === 'model') {
       body.modelId = getAgentModelDefaultId(value) || null;
@@ -7010,6 +7024,28 @@ export function AgentsPage() {
                       Files
                     </button>
                   </div>
+                  <Tooltip
+                    label={
+                      chatViewMode === 'graph' ? 'Show chat transcript' : 'Show chat graph'
+                    }
+                  >
+                    <button
+                      type="button"
+                      className={`${styles.iconBtn} ${
+                        chatViewMode === 'graph' ? styles.iconBtnActive : ''
+                      }`}
+                      onClick={() => {
+                        setChatTab('chat');
+                        setChatViewMode((mode) => (mode === 'graph' ? 'transcript' : 'graph'));
+                      }}
+                      aria-label={
+                        chatViewMode === 'graph' ? 'Show chat transcript' : 'Show chat graph'
+                      }
+                      aria-pressed={chatViewMode === 'graph'}
+                    >
+                      <GitBranch size={15} />
+                    </button>
+                  </Tooltip>
                   <div className={styles.headerMenuWrap} ref={chatExportMenuRef}>
                     <ActionTooltip
                       label={
@@ -7098,31 +7134,38 @@ export function AgentsPage() {
                   {/* Error banner */}
                   {chatError && <div className={styles.errorBanner}>{chatError}</div>}
 
-                  {/* Messages */}
-                  {showChatLoading && visibleMessages.length === 0 ? (
-                    <div className={styles.emptyPanel}>
-                      <Loader size={20} className={styles.chatSpinner} />
-                      <div className={styles.emptyText}>Loading messages…</div>
-                    </div>
-                  ) : visibleMessages.length === 0 &&
-                    queuedMessages.length === 0 &&
-                    !streaming &&
-                    !chatLoading &&
-                    orphanErrorItems.length === 0 ? (
-                    <div className={styles.emptyPanel}>
-                      <MessageSquare size={36} strokeWidth={1.5} className={styles.emptyIcon} />
-                      <div className={styles.emptyTitle}>Start a conversation</div>
-                      <div className={styles.emptyText}>
-                        Send a message to begin chatting with {activeAgent.name}
-                      </div>
-                    </div>
+                  {chatViewMode === 'graph' ? (
+                    <AgentChatGraphView
+                      layout={chatGraphLayout}
+                      onNodeSelect={handleGraphNodeSelect}
+                    />
                   ) : (
-                    <div
-                      className={styles.messagesArea}
-                      ref={messagesRef}
-                      onScroll={handleMessagesScroll}
-                      data-testid="agents-messages-area"
-                    >
+                    <>
+                      {/* Messages */}
+                      {showChatLoading && visibleMessages.length === 0 ? (
+                        <div className={styles.emptyPanel}>
+                          <Loader size={20} className={styles.chatSpinner} />
+                          <div className={styles.emptyText}>Loading messages…</div>
+                        </div>
+                      ) : visibleMessages.length === 0 &&
+                        queuedMessages.length === 0 &&
+                        !streaming &&
+                        !chatLoading &&
+                        orphanErrorItems.length === 0 ? (
+                        <div className={styles.emptyPanel}>
+                          <MessageSquare size={36} strokeWidth={1.5} className={styles.emptyIcon} />
+                          <div className={styles.emptyTitle}>Start a conversation</div>
+                          <div className={styles.emptyText}>
+                            Send a message to begin chatting with {activeAgent.name}
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={styles.messagesArea}
+                          ref={messagesRef}
+                          onScroll={handleMessagesScroll}
+                          data-testid="agents-messages-area"
+                        >
                       <div className={styles.chatDateStickyLayer} aria-hidden="true">
                         <span
                           className={`${styles.chatDateLabel} ${styles.chatDateStickyLabel} ${
@@ -7822,41 +7865,43 @@ export function AgentsPage() {
                         </>
                       )}
 
-                    </div>
-                  )}
+                        </div>
+                      )}
 
-                  <ReplyComposer
-                    streaming={streaming}
-                    editingMessage={
-                      editingMessage
-                        ? editingMessage.kind === 'message'
-                          ? {
-                              ...editingMessage,
-                              onChange: (value: string) =>
-                                setEditingMessage((prev) =>
-                                  prev?.kind === 'message' ? { ...prev, value } : prev,
-                                ),
-                              onCancel: cancelEditingMessage,
-                              onSubmit: submitEditedMessage,
-                            }
-                          : {
-                              ...editingMessage,
-                              onChange: (value: string) =>
-                                setEditingMessage((prev) =>
-                                  prev?.kind === 'queue' ? { ...prev, value } : prev,
-                                ),
-                              onCancel: cancelEditingMessage,
-                              onSubmit: submitEditedQueueItem,
-                            }
-                        : null
-                    }
-                    autoAttachOversizedPasteAsTextFile={autoAttachOversizedPasteAsTextFile}
-                    activeAgentId={activeAgentId}
-                    activeConversationId={activeConvId}
-                    disabledReason={runnerDisabledReason}
-                    onSendAttachments={sendAttachmentMessage}
-                    onSendText={sendTextMessage}
-                  />
+                      <ReplyComposer
+                        streaming={streaming}
+                        editingMessage={
+                          editingMessage
+                            ? editingMessage.kind === 'message'
+                              ? {
+                                  ...editingMessage,
+                                  onChange: (value: string) =>
+                                    setEditingMessage((prev) =>
+                                      prev?.kind === 'message' ? { ...prev, value } : prev,
+                                    ),
+                                  onCancel: cancelEditingMessage,
+                                  onSubmit: submitEditedMessage,
+                                }
+                              : {
+                                  ...editingMessage,
+                                  onChange: (value: string) =>
+                                    setEditingMessage((prev) =>
+                                      prev?.kind === 'queue' ? { ...prev, value } : prev,
+                                    ),
+                                  onCancel: cancelEditingMessage,
+                                  onSubmit: submitEditedQueueItem,
+                                }
+                            : null
+                        }
+                        autoAttachOversizedPasteAsTextFile={autoAttachOversizedPasteAsTextFile}
+                        activeAgentId={activeAgentId}
+                        activeConversationId={activeConvId}
+                        disabledReason={runnerDisabledReason}
+                        onSendAttachments={sendAttachmentMessage}
+                        onSendText={sendTextMessage}
+                      />
+                    </>
+                  )}
                 </>
               )}
             </>

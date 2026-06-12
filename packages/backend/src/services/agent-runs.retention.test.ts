@@ -44,12 +44,15 @@ const mocks = vi.hoisted(() => {
     lockAgentRunRowForUpdate: vi.fn(async () => {}),
   };
 
-  return { records, store };
+  const isRemoteAgentRunPending = vi.fn(() => false);
+
+  return { records, store, isRemoteAgentRunPending };
 });
 
 vi.mock('../config/env.js', () => ({
   env: {
     DATA_DIR: '/tmp/openwork-agent-runs-retention-test',
+    REMOTE_AGENT_RUN_TIMEOUT_MS: 60 * 60 * 1000,
     REMOTE_AGENT_RUNNER_RECONNECT_GRACE_MS: 0,
   },
 }));
@@ -57,7 +60,7 @@ vi.mock('../db/index.js', () => ({ store: mocks.store }));
 vi.mock('../db/connection.js', () => ({ store: mocks.store }));
 vi.mock('./agent-runners.js', () => ({
   cancelRemoteAgentRun: vi.fn(),
-  isRemoteAgentRunPending: vi.fn(() => false),
+  isRemoteAgentRunPending: mocks.isRemoteAgentRunPending,
 }));
 vi.mock('./agent-chat-turns.js', () => ({
   markAgentChatTurnCompleted: vi.fn(),
@@ -69,6 +72,7 @@ import {
   appendAgentRunOutput,
   cleanupOldRunRecords,
   completeAgentRun,
+  getActiveRuns,
   getAgentRun,
   reconcileUnrecoveredRemoteRuns,
 } from './agent-runs.js';
@@ -79,6 +83,7 @@ describe('cleanupOldRunRecords', () => {
       delete mocks.records[collection];
     }
     vi.clearAllMocks();
+    mocks.isRemoteAgentRunPending.mockReturnValue(false);
     mocks.store.transaction.mockImplementation(async <T>(operation: () => Promise<T> | T) =>
       operation(),
     );
@@ -163,6 +168,70 @@ describe('cleanupOldRunRecords', () => {
     expect(mocks.store.getById('agent_runs', 'run-queued-remote')).toMatchObject({
       status: 'error',
       errorMessage: 'Remote runner job was not recovered after backend restart',
+    });
+  });
+
+  it('finalizes timed-out remote runs before returning active monitor entries', async () => {
+    const staleDate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const freshDate = new Date(Date.now() - 5_000).toISOString();
+    mocks.store.insert('agent_runs', {
+      id: 'run-stale-remote',
+      agentId: 'agent-1',
+      agentName: 'Agent',
+      triggerType: 'chat',
+      status: 'running',
+      executor: 'remote',
+      pid: null,
+      startedAt: staleDate,
+      finishedAt: null,
+      stdout: '',
+      stderr: '',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-fresh-remote',
+      agentId: 'agent-1',
+      agentName: 'Agent',
+      triggerType: 'chat',
+      status: 'running',
+      executor: 'remote',
+      pid: null,
+      startedAt: freshDate,
+      finishedAt: null,
+      stdout: '',
+      stderr: '',
+    });
+
+    const active = await getActiveRuns();
+
+    expect(active.map((run) => run.id)).toEqual(['run-fresh-remote']);
+    expect(mocks.store.getById('agent_runs', 'run-stale-remote')).toMatchObject({
+      status: 'error',
+      errorMessage: 'Remote agent run timed out after 3600000ms without a terminal runner message',
+    });
+  });
+
+  it('keeps timed-out remote runs active while this backend still owns the pending job', async () => {
+    const staleDate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    mocks.isRemoteAgentRunPending.mockReturnValue(true);
+    mocks.store.insert('agent_runs', {
+      id: 'run-owned-remote',
+      agentId: 'agent-1',
+      agentName: 'Agent',
+      triggerType: 'chat',
+      status: 'running',
+      executor: 'remote',
+      pid: null,
+      startedAt: staleDate,
+      finishedAt: null,
+      stdout: '',
+      stderr: '',
+    });
+
+    const active = await getActiveRuns();
+
+    expect(active.map((run) => run.id)).toEqual(['run-owned-remote']);
+    expect(mocks.store.getById('agent_runs', 'run-owned-remote')).toMatchObject({
+      status: 'running',
     });
   });
 

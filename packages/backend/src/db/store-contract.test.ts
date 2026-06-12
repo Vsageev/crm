@@ -122,6 +122,55 @@ describe('store contract', () => {
       updatedAt: '2024-01-02T00:00:00.000Z',
     });
   });
+
+  it('does not retain agent run output in cache when log paths are available', async () => {
+    const client = writableTablesClient(['agent_runs']);
+    const store = new SqlStoreAdapter(baseConfig(), client);
+    await store.init();
+
+    const inserted = await store.insert('agent_runs', {
+      id: 'run-with-logs',
+      agentId: 'agent-1',
+      agentName: 'Agent',
+      triggerType: 'chat',
+      status: 'running',
+      stdoutPath: '/tmp/openwork/stdout.log',
+      stderrPath: '/tmp/openwork/stderr.log',
+      stdout: 'large stdout',
+      stderr: 'large stderr',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      finishedAt: null,
+      durationMs: null,
+    });
+
+    expect(inserted.stdout).toBeUndefined();
+    expect(inserted.stderr).toBeUndefined();
+    expect(store.getById('agent_runs', 'run-with-logs')).toMatchObject({
+      id: 'run-with-logs',
+      stdoutPath: '/tmp/openwork/stdout.log',
+      stderrPath: '/tmp/openwork/stderr.log',
+    });
+    expect(store.getById('agent_runs', 'run-with-logs')?.stdout).toBeUndefined();
+    expect(store.getById('agent_runs', 'run-with-logs')?.stderr).toBeUndefined();
+
+    const persistedSql = client.writes.join('\n');
+    expect(persistedSql).toContain('"stdout"');
+    expect(persistedSql).toContain('"stderr"');
+
+    const updated = await store.update('agent_runs', 'run-with-logs', {
+      stdout: 'larger stdout',
+      stderr: 'larger stderr',
+      responseText: 'done',
+    });
+
+    expect(updated?.stdout).toBeUndefined();
+    expect(updated?.stderr).toBeUndefined();
+    expect(store.getById('agent_runs', 'run-with-logs')).toMatchObject({
+      responseText: 'done',
+    });
+    expect(store.getById('agent_runs', 'run-with-logs')?.stdout).toBeUndefined();
+    expect(store.getById('agent_runs', 'run-with-logs')?.stderr).toBeUndefined();
+  });
 });
 
 async function exerciseStoreContract(store: Store) {
@@ -315,10 +364,28 @@ function staticRowsClient(table: string, rows: StoreRecord[]) {
       if (query.includes('information_schema.tables')) {
         return [{ table_name: table }];
       }
-      if (query.startsWith(`select * from "${table}"`)) {
+      if (query.startsWith('select ') && query.includes(` from "${table}"`)) {
         return rows;
       }
       return [];
+    },
+  };
+}
+
+function writableTablesClient(tables: string[]) {
+  const writes: string[] = [];
+  return {
+    writes,
+    async unsafe(query: string): Promise<StoreRecord[]> {
+      if (query.includes('information_schema.tables')) {
+        return tables.map((table_name) => ({ table_name }));
+      }
+      if (query.startsWith('select ')) return [];
+      writes.push(query);
+      return [];
+    },
+    async begin<T>(operation: (client: { unsafe: (query: string) => Promise<StoreRecord[]> }) => Promise<T>) {
+      return operation(this);
     },
   };
 }

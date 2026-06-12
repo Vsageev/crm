@@ -43,6 +43,10 @@ export type AgentBatchBlockingMode = 'all_success' | 'all_settled';
 type ExecutionJobStatus = 'queued' | 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type ExecutionAttemptStatus = 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
+function isInFlightExecutionJobStatus(status: ExecutionJobStatus | undefined): boolean {
+  return status === 'running' || status === 'dispatching' || status === 'queued';
+}
+
 interface QueueDrainTimer {
   timer: ReturnType<typeof setTimeout>;
   dueAt: number;
@@ -381,6 +385,16 @@ function buildResolvedBatchDependencies(
 
 const runProcessors = new Set<string>();
 const runDrainTimers = new Map<string, QueueDrainTimer>();
+/** Batch item IDs with a live executeCardTask dispatch in this process. */
+const activeBatchItemDispatches = new Set<string>();
+
+function hasActiveBatchItemDispatch(itemId: string): boolean {
+  return activeBatchItemDispatches.has(itemId);
+}
+
+function releaseBatchItemDispatch(itemId: string) {
+  activeBatchItemDispatches.delete(itemId);
+}
 
 function parseIsoDateMs(value: unknown): number {
   if (typeof value !== 'string') return Number.NaN;
@@ -902,25 +916,33 @@ async function reconcileProcessingItems(runId: string) {
       if (executionJobId) {
         updateExecutionJobStatus(executionJobId, 'cancelled', { errorMessage: 'Cancelled by user' });
       }
+      releaseBatchItemDispatch(itemId);
       markItemCancelled(itemId);
       continue;
     }
 
     if (executionJobId) {
       const job = await syncExecutionJobFromAttempts(executionJobId);
-      if (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued') {
+      if (
+        job?.status === 'dispatching' ||
+        job?.status === 'queued' ||
+        (job?.status === 'running' && listAttemptsForJob(executionJobId).length === 0)
+      ) {
+        // executeCardTask may still be waiting on concurrency or the runner.
+        continue;
+      }
+      if (job?.status === 'running') {
         const startedAtMs = parseIsoDateMs(job.startedAt ?? item.startedAt);
         if (!Number.isFinite(startedAtMs) || now - startedAtMs < AGENT_BATCH_PROCESSING_STALE_MS) {
           continue;
         }
         const attempts = listAttemptsForJob(executionJobId);
-        if (attempts.length === 0) {
-          updateExecutionJobStatus(executionJobId, 'failed', {
-            errorMessage: 'Batch item dispatch did not create an agent run',
-          });
-        } else {
+        if (attempts.length > 0) {
           continue;
         }
+        updateExecutionJobStatus(executionJobId, 'failed', {
+          errorMessage: 'Batch item dispatch did not create an agent run',
+        });
       }
       const syncedJob = store.getById(EXECUTION_JOBS_COLLECTION, executionJobId);
       if (syncedJob?.status === 'succeeded') {
@@ -942,6 +964,9 @@ async function reconcileProcessingItems(runId: string) {
     }
 
     if (!agentRunId) {
+      if (hasActiveBatchItemDispatch(itemId)) {
+        continue;
+      }
       const startedAtMs = parseIsoDateMs(item.startedAt);
       if (Number.isFinite(startedAtMs) && now - startedAtMs >= AGENT_BATCH_PROCESSING_STALE_MS) {
         retryOrFailItem(item, 'Batch item lost run reference after restart');
@@ -1077,6 +1102,8 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
   const executionJobId =
     typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
 
+  activeBatchItemDispatches.add(itemId);
+
   executeCardTask(
     agentId,
     {
@@ -1102,6 +1129,7 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
         });
       },
       onDone: () => {
+        releaseBatchItemDispatch(itemId);
         const latest = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
         if (!latest || latest.status !== 'processing') {
           scheduleRunDrain(runId, 0);
@@ -1116,6 +1144,7 @@ function dispatchBatchCardTaskFromItem(runId: string, itemId: string) {
         scheduleRunDrain(runId, 0);
       },
       onError: (err) => {
+        releaseBatchItemDispatch(itemId);
         const latest = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
         if (!latest || latest.status !== 'processing') {
           scheduleRunDrain(runId, 0);
@@ -1292,13 +1321,15 @@ function pruneBatchHistory() {
   }
 }
 
-export async function initializeAgentBatchQueue(options: { preserveActiveProcessing?: boolean } = {}) {
-  const { preserveActiveProcessing = false } = options;
+export async function initializeAgentBatchQueue(
+  _options: { preserveActiveProcessing?: boolean } = {},
+) {
   pruneBatchHistory();
 
   const processingItems = await findBatchRunItemsWithStatusNative('processing');
 
   for (const item of processingItems) {
+    const itemId = item.id as string;
     const runId = typeof item.runId === 'string' ? item.runId : null;
     if (!runId) continue;
 
@@ -1306,17 +1337,16 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
       typeof item.executionJobId === 'string' && item.executionJobId ? item.executionJobId : null;
     if (executionJobId) {
       const job = await syncExecutionJobFromAttempts(executionJobId);
-      if (
-        preserveActiveProcessing &&
-        (job?.status === 'running' || job?.status === 'dispatching' || job?.status === 'queued')
-      ) {
+      if (isInFlightExecutionJobStatus(job?.status as ExecutionJobStatus | undefined)) {
         continue;
       }
       if (job?.status === 'succeeded') {
+        releaseBatchItemDispatch(itemId);
         markItemCompleted(item.id as string);
         continue;
       }
       if (job?.status === 'cancelled') {
+        releaseBatchItemDispatch(itemId);
         markItemCancelled(item.id as string);
         continue;
       }
@@ -1333,6 +1363,17 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
     const agentRunId =
       typeof item.agentRunId === 'string' && item.agentRunId ? item.agentRunId : null;
     if (!agentRunId) {
+      if (
+        hasActiveBatchItemDispatch(itemId) ||
+        (executionJobId &&
+          isInFlightExecutionJobStatus(
+            store.getById(EXECUTION_JOBS_COLLECTION, executionJobId)?.status as
+              | ExecutionJobStatus
+              | undefined,
+          ))
+      ) {
+        continue;
+      }
       retryOrFailItem(item, 'Recovered from backend restart');
       continue;
     }
@@ -1343,10 +1384,11 @@ export async function initializeAgentBatchQueue(options: { preserveActiveProcess
       continue;
     }
 
-    if (runRecord.status === 'running' && preserveActiveProcessing) {
+    if (runRecord.status === 'running') {
       continue;
     }
     if (runRecord.status === 'completed') {
+      releaseBatchItemDispatch(itemId);
       markItemCompleted(item.id as string);
       continue;
     }
@@ -1581,18 +1623,26 @@ export async function cancelAgentBatchRun(
           .filter((value): value is string => typeof value === 'string' && Boolean(value))
       : [];
     const runIdsToKill = new Set([...attemptRunIds, ...(agentRunId ? [agentRunId] : [])]);
-    if (runIdsToKill.size > 0) {
-      for (const runToKill of runIdsToKill) {
-        await killAgentRun(runToKill);
-      }
-      if (executionJobId) {
-        updateExecutionJobStatus(executionJobId, 'cancelled', { errorMessage: reason });
-      }
-    } else {
-      markItemCancelled(item.id as string, reason);
+    for (const runToKill of runIdsToKill) {
+      await killAgentRun(runToKill);
     }
+    if (executionJobId) {
+      updateExecutionJobStatus(executionJobId, 'cancelled', { errorMessage: reason });
+    }
+    releaseBatchItemDispatch(item.id as string);
+    markItemCancelled(item.id as string, reason);
   }
 
   scheduleRunDrain(runId, 0);
   return refreshRunStats(runId) ?? store.getById(AGENT_BATCH_RUNS_COLLECTION, runId);
+}
+
+/** @internal Test-only reset for module-level dispatch tracking. */
+export function resetAgentBatchQueueInternalsForTests() {
+  activeBatchItemDispatches.clear();
+  runProcessors.clear();
+  for (const { timer } of runDrainTimers.values()) {
+    clearTimeout(timer);
+  }
+  runDrainTimers.clear();
 }

@@ -1113,6 +1113,12 @@
   color: var(--color-text);
 }
 
+.iconBtnActive {
+  border-color: var(--color-text-secondary);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
 .iconBtn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -4769,18 +4775,22 @@ button.filesColName:hover .filesFileName {
 
 /* ── Scrollbar ── */
 .agentList::-webkit-scrollbar,
-.messagesArea::-webkit-scrollbar {
+.messagesArea::-webkit-scrollbar,
+.chatGraphViewport::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 .agentList::-webkit-scrollbar-thumb,
-.messagesArea::-webkit-scrollbar-thumb {
+.messagesArea::-webkit-scrollbar-thumb,
+.chatGraphViewport::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 3px;
 }
 
 .agentList::-webkit-scrollbar-thumb:hover,
-.messagesArea::-webkit-scrollbar-thumb:hover {
+.messagesArea::-webkit-scrollbar-thumb:hover,
+.chatGraphViewport::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
 
@@ -4873,6 +4883,10 @@ button.filesColName:hover .filesFileName {
 
   .messagesArea {
     padding: var(--space-3);
+  }
+
+  .chatGraphViewport {
+    padding: var(--space-4);
   }
 
   .replyBox {

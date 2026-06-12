@@ -639,7 +639,12 @@ export async function agentRoutes(app: FastifyInstance) {
           );
         }
         delete patch.workspaceId;
-        updated = await updateAgent(request.params.id, patch);
+        updated = await updateAgent(request.params.id, patch, {
+          instructionFileMigration: {
+            requestUserId: request.user.sub,
+            workspaceId: request.body.workspaceId,
+          },
+        });
       } catch (err) {
         return reply.badRequest((err as Error).message);
       }

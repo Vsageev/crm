@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
+import { readFileSync } from 'node:fs';
 import {
   RUNNER_PROTOCOL_VERSION,
   type RunnerCapabilities,
@@ -99,6 +100,9 @@ function addRunner(
 afterEach(() => {
   for (const runnerId of [...__runnerTestUtils.runnerReconnectGraceTimers.keys()]) {
     __runnerTestUtils.clearRunnerReconnectGrace(runnerId);
+  }
+  for (const pending of __runnerTestUtils.jobsById.values()) {
+    if (pending.timeout) clearTimeout(pending.timeout);
   }
   __runnerTestUtils.runners.clear();
   __runnerTestUtils.jobsById.clear();
@@ -641,6 +645,12 @@ describe('agent runner routing scope', () => {
 });
 
 describe('agent runner resilience', () => {
+  it('recovers chat final messages after unknown recovered runner completions', () => {
+    const source = readFileSync(new URL('./agent-runners.ts', import.meta.url), 'utf8');
+    expect(source).toContain("await import('./agent-chat.js')");
+    expect(source).toContain('recoverCompletedChatRun(message.runId)');
+  });
+
   it('keeps an in-flight job pending and reattaches it to a reconnecting runner', async () => {
     const firstSocket = makeOpenSocket();
     const firstRunner = addRunner('runner-1', firstSocket);
@@ -868,6 +878,51 @@ describe('agent runner resilience', () => {
         );
       });
       expect(__runnerTestUtils.jobIdByRunId.has('recovered-run')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out remote agent jobs by default so accepted jobs cannot stay active forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = addRunner('runner-timeout');
+      const result = dispatchRemoteAgentJob({
+        userId: 'user-1',
+        workspaceId: 'workspace-1',
+        intent: {
+          runId: 'run-timeout',
+          agentId: 'agent-1',
+          provider: 'codex',
+          modelPreference: { displayName: 'Codex' },
+          prompt: 'hello',
+          workspace: { type: 'local_path', path: '/tmp', workspaceId: 'workspace-1' },
+          allowedOperations: {
+            tools: ['codex'],
+            approvalMode: 'dangerous',
+            env: true,
+            secrets: true,
+            network: true,
+            shell: true,
+          },
+        },
+      });
+      const offer = runner.ws.send.mock.calls[0]?.[0] as string;
+      const message = JSON.parse(offer) as { jobId: string };
+      const rejection = expect(result).rejects.toThrow(
+        /Remote agent run timed out after 3600000ms/,
+      );
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000 - 1);
+      expect(__runnerTestUtils.jobsById.has(message.jobId)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      await rejection;
+      expect(__runnerTestUtils.jobsById.has(message.jobId)).toBe(false);
+      expect(__runnerTestUtils.jobIdByRunId.has('run-timeout')).toBe(false);
+      expect(runner.activeJobIds.has(message.jobId)).toBe(false);
+      expect(runner.ws.send).toHaveBeenCalledWith(expect.stringContaining('"type":"cancel"'));
     } finally {
       vi.useRealTimers();
     }

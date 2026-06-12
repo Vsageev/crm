@@ -172,6 +172,31 @@ const chatViewTurnSchema = z
     completedAt: z.string().nullable(),
   })
   .strict();
+const chatViewGraphNodeSchema = z
+  .object({
+    id: z.string(),
+    parentTurnId: z.string().nullable(),
+    status: chatViewStatusSchema,
+    turnType: z.string(),
+    isSelected: z.boolean(),
+    siblingIndex: z.number(),
+    siblingCount: z.number(),
+    supersedesTurnId: z.string().nullable(),
+    supersededByTurnId: z.string().nullable(),
+    userMessageId: z.string().nullable(),
+    preview: z.string().nullable(),
+    createdAt: z.string().nullable(),
+    updatedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+  })
+  .strict();
+const chatViewGraphEdgeSchema = z
+  .object({
+    id: z.string(),
+    fromTurnId: z.string().nullable(),
+    toTurnId: z.string(),
+  })
+  .strict();
 const agentConversationChatViewResponseSchema = z
   .object({
     conversationId: z.string(),
@@ -187,6 +212,12 @@ const agentConversationChatViewResponseSchema = z
         })
         .strict(),
     ),
+    graph: z
+      .object({
+        nodes: z.array(chatViewGraphNodeSchema),
+        edges: z.array(chatViewGraphEdgeSchema),
+      })
+      .strict(),
   })
   .strict();
 

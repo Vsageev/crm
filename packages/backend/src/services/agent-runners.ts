@@ -590,10 +590,14 @@ async function completeUnknownRunnerTerminalMessage(
       stdoutBytes: message.stdout.length,
       stderrBytes: message.stderr.length,
     });
-    await completeAgentRun(message.runId, errorMessage, {
+    const completedRun = await completeAgentRun(message.runId, errorMessage, {
       stdout: message.stdout,
       stderr: message.stderr,
     });
+    if (completedRun?.triggerType === 'chat' && completedRun.status === 'completed') {
+      const { recoverCompletedChatRun } = await import('./agent-chat.js');
+      recoverCompletedChatRun(message.runId);
+    }
   } catch (err) {
     console.error(`[runners] Failed to finalize unknown runner terminal message for run ${message.runId}:`, err);
   }

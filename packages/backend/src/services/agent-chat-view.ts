@@ -95,6 +95,29 @@ interface ChatViewTurn {
   completedAt: string | null;
 }
 
+interface ChatViewGraphNode {
+  id: string;
+  parentTurnId: string | null;
+  status: ChatViewStatus;
+  turnType: string;
+  isSelected: boolean;
+  siblingIndex: number;
+  siblingCount: number;
+  supersedesTurnId: string | null;
+  supersededByTurnId: string | null;
+  userMessageId: string | null;
+  preview: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+}
+
+interface ChatViewGraphEdge {
+  id: string;
+  fromTurnId: string | null;
+  toTurnId: string;
+}
+
 export interface AgentConversationChatView {
   conversationId: string;
   agentId: string;
@@ -105,6 +128,10 @@ export interface AgentConversationChatView {
     selectedTurnId: string | null;
     turnIds: string[];
   }>;
+  graph: {
+    nodes: ChatViewGraphNode[];
+    edges: ChatViewGraphEdge[];
+  };
 }
 
 export function getAgentConversationChatView(
@@ -184,6 +211,14 @@ export function getAgentConversationChatView(
       turnIds: siblings.map((turn) => String(turn.id)),
     };
   });
+  const graph = buildChatViewGraph({
+    groups,
+    selectedTurnIds,
+    queueItems,
+    runs,
+    supersededByTurnId,
+    messagesById,
+  });
 
   return {
     conversationId,
@@ -191,7 +226,82 @@ export function getAgentConversationChatView(
     total: entries.length,
     entries,
     branches,
+    graph,
   };
+}
+
+const GRAPH_NODE_PREVIEW_MAX = 120;
+
+function summarizeGraphNodePreview(value: string | null | undefined): string | null {
+  const text = value?.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length <= GRAPH_NODE_PREVIEW_MAX) return text;
+  return `${text.slice(0, Math.max(0, GRAPH_NODE_PREVIEW_MAX - 3)).trimEnd()}...`;
+}
+
+function buildChatViewGraphNodePreview(
+  turn: StoreRecord,
+  queue: StoreRecord | null,
+  messagesById: Map<string, StoreRecord>,
+): { userMessageId: string | null; preview: string | null } {
+  const userMessageId = asString(turn.userMessageId);
+  const userMessage = userMessageId ? (messagesById.get(userMessageId) ?? null) : null;
+  const messageContent = typeof userMessage?.content === 'string' ? userMessage.content : null;
+  const preview =
+    summarizeGraphNodePreview(messageContent) ??
+    summarizeGraphNodePreview(asString(queue?.prompt)) ??
+    null;
+  return { userMessageId, preview };
+}
+
+function buildChatViewGraph(options: {
+  groups: Map<string, StoreRecord[]>;
+  selectedTurnIds: Set<string>;
+  queueItems: StoreRecord[];
+  runs: StoreRecord[];
+  supersededByTurnId: Map<string, string>;
+  messagesById: Map<string, StoreRecord>;
+}): AgentConversationChatView['graph'] {
+  const { groups, selectedTurnIds, queueItems, runs, supersededByTurnId, messagesById } = options;
+  const nodes: ChatViewGraphNode[] = [];
+  const edges: ChatViewGraphEdge[] = [];
+
+  for (const siblings of groups.values()) {
+    const siblingCount = siblings.length;
+    siblings.forEach((turn, siblingIndex) => {
+      const id = String(turn.id);
+      const parentTurnId = asString(turn.parentTurnId);
+      const queue = findQueueForTurn(turn, queueItems);
+      const run = findRunForTurn(turn, queue, runs);
+      const { userMessageId, preview } = buildChatViewGraphNodePreview(turn, queue, messagesById);
+      nodes.push({
+        id,
+        parentTurnId,
+        status: resolveChatViewStatus(turn, queue, run),
+        turnType: asString(turn.turnType) ?? 'follow_up',
+        isSelected: selectedTurnIds.has(id),
+        siblingIndex,
+        siblingCount,
+        supersedesTurnId: asString(turn.supersedesTurnId),
+        supersededByTurnId: supersededByTurnId.get(id) ?? null,
+        userMessageId,
+        preview,
+        createdAt: asString(turn.createdAt),
+        updatedAt: asString(turn.updatedAt),
+        completedAt: asString(turn.completedAt),
+      });
+      edges.push({
+        id: `${parentTurnId ?? ROOT_BRANCH_KEY}->${id}`,
+        fromTurnId: parentTurnId,
+        toTurnId: id,
+      });
+    });
+  }
+
+  nodes.sort(compareGraphNodes);
+  edges.sort((a, b) => a.id.localeCompare(b.id));
+
+  return { nodes, edges };
 }
 
 function buildChatViewTurn(options: {
@@ -481,6 +591,12 @@ function branchGroupKey(parentTurnId: string | null): string {
 
 function compareCreated(a: StoreRecord, b: StoreRecord): number {
   return parseIsoDateMs(a.createdAt) - parseIsoDateMs(b.createdAt);
+}
+
+function compareGraphNodes(a: ChatViewGraphNode, b: ChatViewGraphNode): number {
+  const createdAtDelta = parseIsoDateMs(a.createdAt) - parseIsoDateMs(b.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return a.id.localeCompare(b.id);
 }
 
 function compareRunStarted(a: StoreRecord, b: StoreRecord): number {

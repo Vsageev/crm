@@ -170,6 +170,7 @@ import {
   enqueueAgentPrompt,
   getAgentConversation,
   initializeAgentChatQueue,
+  recoverCompletedChatRun,
   recoverCompletedChatRunsOnStartup,
   reorderQueueItems,
   retryQueueItem,
@@ -1036,6 +1037,76 @@ describe('agent chat turn write paths', () => {
       assistantMessage: {
         id: assistantMessage?.id,
         content: 'Recovered final answer',
+      },
+    });
+  });
+
+  it('creates and links a recovered responseText-only answer for a queued turn', () => {
+    seedMessage('message-1', { content: 'Queued prompt' });
+    seedTurn('turn-1', {
+      userMessageId: 'message-1',
+      assistantMessageId: null,
+      status: 'queued',
+      runId: 'run-1',
+    });
+    mocks.store.insert('agent_runs', {
+      id: 'run-1',
+      agentId: 'agent-1',
+      agentName: 'Test Agent',
+      model: 'codex',
+      modelId: 'gpt-5.5',
+      triggerType: 'chat',
+      status: 'completed',
+      conversationId: 'conversation-1',
+      responseParentId: 'message-1',
+      turnId: 'turn-1',
+      startedAt: '2026-05-16T12:00:00.000Z',
+      finishedAt: '2026-05-16T12:01:00.000Z',
+      stdout: '',
+      responseText: 'Recovered answer from response text',
+    });
+    mocks.store.insert('agentChatQueue', {
+      id: 'queue-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      mode: 'append_prompt',
+      status: 'queued',
+      turnId: 'turn-1',
+      runId: null,
+      lastRunId: 'run-1',
+      responseMessageId: null,
+      queuedMessageId: 'message-1',
+      attempts: 1,
+      maxAttempts: 4,
+      errorMessage: 'Recovered run completed without a response',
+    });
+
+    expect(recoverCompletedChatRun('run-1')).toBe(true);
+
+    const assistantMessage = mocks.store
+      .getAll('messages')
+      .find((message) => message.direction === 'inbound' && message.parentId === 'message-1');
+    expect(assistantMessage).toMatchObject({
+      content: 'Recovered answer from response text',
+      metadata: JSON.stringify({ runId: 'run-1', model: 'codex', modelId: 'gpt-5.5' }),
+    });
+    expect(mocks.store.getById('agentChatTurns', 'turn-1')).toMatchObject({
+      status: 'completed',
+      assistantMessageId: assistantMessage?.id,
+      runId: 'run-1',
+    });
+    expect(mocks.store.getById('agentChatQueue', 'queue-1')).toMatchObject({
+      status: 'completed',
+      responseMessageId: assistantMessage?.id,
+      runId: null,
+      lastRunId: 'run-1',
+      errorMessage: null,
+    });
+    expect(getAgentConversationChatView('agent-1', 'conversation-1').entries[0]).toMatchObject({
+      status: 'completed',
+      assistantMessage: {
+        id: assistantMessage?.id,
+        content: 'Recovered answer from response text',
       },
     });
   });

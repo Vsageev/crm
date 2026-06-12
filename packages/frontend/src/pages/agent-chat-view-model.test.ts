@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAgentChatGraphLayout,
+  buildAgentChatGraphNodeHoverLabel,
+  buildAgentChatGraphLaneEdgePath,
+  getAgentChatGraphNodeColor,
   buildAgentChatRunEventSummary,
   isRunEventDetailExpandable,
   shouldTruncateRunEventDetail,
@@ -539,6 +543,249 @@ describe('buildAgentConversationViewModel', () => {
       siblingTurnIds: ['turn-1', 'turn-2', 'turn-3'],
     });
   });
+});
+
+describe('buildAgentChatGraphLayout', () => {
+  it('lays out all canonical graph nodes and ranks newer nodes warmer', () => {
+    const layout = buildAgentChatGraphLayout({
+      activeAgentId: 'agent-1',
+      activeConvId: 'conversation-1',
+      canonicalView: {
+        ...canonicalView([canonicalTurn({ id: 'turn-root' })]),
+        graph: {
+          nodes: [
+            {
+              id: 'turn-root',
+              parentTurnId: null,
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: true,
+              siblingIndex: 0,
+              siblingCount: 1,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: null,
+              preview: 'root prompt',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+            {
+              id: 'turn-hidden',
+              parentTurnId: 'turn-root',
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: false,
+              siblingIndex: 0,
+              siblingCount: 2,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: 'message-hidden',
+              preview: 'hidden branch',
+              createdAt: '2026-01-01T00:01:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+            {
+              id: 'turn-selected',
+              parentTurnId: 'turn-root',
+              status: 'processing',
+              turnType: 'edit',
+              isSelected: true,
+              siblingIndex: 1,
+              siblingCount: 2,
+              supersedesTurnId: 'turn-hidden',
+              supersededByTurnId: null,
+              userMessageId: 'message-selected',
+              preview: 'selected branch',
+              createdAt: '2026-01-01T00:02:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+          ],
+          edges: [
+            { id: 'root->turn-root', fromTurnId: null, toTurnId: 'turn-root' },
+            { id: 'turn-root->turn-hidden', fromTurnId: 'turn-root', toTurnId: 'turn-hidden' },
+            {
+              id: 'turn-root->turn-selected',
+              fromTurnId: 'turn-root',
+              toTurnId: 'turn-selected',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(layout.nodes.map((node) => node.id)).toEqual([
+      'turn-root',
+      'turn-hidden',
+      'turn-selected',
+    ]);
+    expect(layout.nodes.find((node) => node.id === 'turn-root')?.depth).toBe(0);
+    expect(layout.nodes.find((node) => node.id === 'turn-hidden')?.depth).toBe(1);
+    expect(layout.nodes.find((node) => node.id === 'turn-selected')?.newness).toBe(1);
+    expect(layout.nodes.find((node) => node.id === 'turn-hidden')?.isSelected).toBe(false);
+    expect(layout.nodes.find((node) => node.id === 'turn-selected')?.hoverLabel).toBe(
+      'selected branch · 2/2',
+    );
+    expect(layout.edges).toHaveLength(3);
+  });
+
+  it('builds hover labels from previews and branch position', () => {
+    expect(
+      buildAgentChatGraphNodeHoverLabel({
+        preview: 'hello world',
+        status: 'completed',
+        turnType: 'follow_up',
+        siblingIndex: 1,
+        siblingCount: 3,
+      }),
+    ).toBe('hello world · 2/3');
+  });
+
+  it('builds orthogonal lane edge paths without curves', () => {
+    const layout = buildAgentChatGraphLayout({
+      activeAgentId: 'agent-1',
+      activeConvId: 'conversation-1',
+      style: 'native',
+      canonicalView: {
+        ...canonicalView([canonicalTurn({ id: 'turn-root' })]),
+        graph: {
+          nodes: [
+            {
+              id: 'turn-root',
+              parentTurnId: null,
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: true,
+              siblingIndex: 0,
+              siblingCount: 1,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: null,
+              preview: 'root prompt',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+            {
+              id: 'turn-child',
+              parentTurnId: 'turn-root',
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: true,
+              siblingIndex: 0,
+              siblingCount: 1,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: 'message-child',
+              preview: 'child prompt',
+              createdAt: '2026-01-01T00:01:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+          ],
+          edges: [
+            { id: 'root->turn-root', fromTurnId: null, toTurnId: 'turn-root' },
+            { id: 'turn-root->turn-child', fromTurnId: 'turn-root', toTurnId: 'turn-child' },
+          ],
+        },
+      },
+    });
+
+    expect(layout.kind).toBe('lanes');
+    const path = buildAgentChatGraphLaneEdgePath(layout.edges[1]);
+    expect(path).toMatch(/^M /);
+    expect(path).not.toMatch(/ C /);
+  });
+
+  it('keeps the selected branch on the main lane and forks siblings to side lanes', () => {
+    const layout = buildAgentChatGraphLayout({
+      activeAgentId: 'agent-1',
+      activeConvId: 'conversation-1',
+      style: 'native',
+      canonicalView: {
+        ...canonicalView([canonicalTurn({ id: 'turn-root' })]),
+        graph: {
+          nodes: [
+            {
+              id: 'turn-root',
+              parentTurnId: null,
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: true,
+              siblingIndex: 0,
+              siblingCount: 1,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: null,
+              preview: 'root prompt',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+            {
+              id: 'turn-hidden',
+              parentTurnId: 'turn-root',
+              status: 'completed',
+              turnType: 'follow_up',
+              isSelected: false,
+              siblingIndex: 0,
+              siblingCount: 2,
+              supersedesTurnId: null,
+              supersededByTurnId: null,
+              userMessageId: 'message-hidden',
+              preview: 'hidden branch',
+              createdAt: '2026-01-01T00:01:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+            {
+              id: 'turn-selected',
+              parentTurnId: 'turn-root',
+              status: 'processing',
+              turnType: 'edit',
+              isSelected: true,
+              siblingIndex: 1,
+              siblingCount: 2,
+              supersedesTurnId: 'turn-hidden',
+              supersededByTurnId: null,
+              userMessageId: 'message-selected',
+              preview: 'selected branch',
+              createdAt: '2026-01-01T00:02:00.000Z',
+              updatedAt: null,
+              completedAt: null,
+            },
+          ],
+          edges: [
+            { id: 'root->turn-root', fromTurnId: null, toTurnId: 'turn-root' },
+            { id: 'turn-root->turn-hidden', fromTurnId: 'turn-root', toTurnId: 'turn-hidden' },
+            {
+              id: 'turn-root->turn-selected',
+              fromTurnId: 'turn-root',
+              toTurnId: 'turn-selected',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(layout.nodes.find((node) => node.id === 'turn-root')?.lane).toBe(0);
+    expect(layout.nodes.find((node) => node.id === 'turn-selected')?.lane).toBe(0);
+    expect(layout.nodes.find((node) => node.id === 'turn-hidden')?.lane).toBeGreaterThan(0);
+    expect(layout.nodes.find((node) => node.id === 'turn-root')?.y).toBeLessThan(
+      layout.nodes.find((node) => node.id === 'turn-selected')?.y ?? 0,
+    );
+  });
+
+  it('maps older nodes to cool hues and newer nodes to warm hues', () => {
+    const oldest = getAgentChatGraphNodeColor(0);
+    const newest = getAgentChatGraphNodeColor(1);
+
+    expect(oldest).toMatch(/hsl\(\s*22\d/);
+    expect(newest).toMatch(/hsl\(\s*2\d/);
+  });
+
 });
 
 describe('buildAgentChatRunEventSummary', () => {

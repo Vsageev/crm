@@ -25,6 +25,7 @@ import {
   normalizeRepositoryRoot,
   normalizeRepositoryRootOrigin,
 } from './agent-workspaces.js';
+import { dispatchAgentFileRequest } from './runner-agent-files.js';
 import type { RunnerAgentWorkspaceImportFile } from 'shared';
 
 // ---------------------------------------------------------------------------
@@ -634,6 +635,16 @@ function normalizeModelValue(model: string): string {
   const normalized = model.trim().toLowerCase();
   if (!normalized) return '';
   return MODEL_ID_BY_ALIAS.get(normalized) ?? normalized;
+}
+
+function instructionFileNameForModel(model: string): 'CLAUDE.MD' | 'AGENTS.md' {
+  return normalizeModelValue(model) === 'claude' ? 'CLAUDE.MD' : 'AGENTS.md';
+}
+
+function instructionFileCandidatesForModel(model: string): string[] {
+  return instructionFileNameForModel(model) === 'CLAUDE.MD'
+    ? ['CLAUDE.MD', 'CLAUDE.md']
+    : ['AGENTS.md'];
 }
 
 function getPresetApplicableFiles(preset: PresetDef, model: string): PresetFileDef[] {
@@ -1255,6 +1266,98 @@ export function getAgent(id: string): AgentRecord | null {
   return rec ? asAgent(rec) : null;
 }
 
+interface AgentInstructionFileMigrationContext {
+  requestUserId: string;
+  workspaceId?: string;
+}
+
+async function readAgentInstructionFileIfExists(params: {
+  agent: AgentRecord;
+  context: AgentInstructionFileMigrationContext;
+  path: string;
+}): Promise<string | null> {
+  try {
+    const { result } = await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.context.requestUserId,
+      workspaceId: params.context.workspaceId,
+      request: { action: 'read_agent_file', path: params.path, encoding: 'utf8' },
+    });
+    if (result.action !== 'read_agent_file') throw new Error('Unexpected runner response');
+    return result.content;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('not_found:')) return null;
+    throw error;
+  }
+}
+
+async function migrateInstructionFileForModelChange(params: {
+  agent: AgentRecord;
+  nextModel: string;
+  context: AgentInstructionFileMigrationContext;
+}): Promise<void> {
+  const targetPath = instructionFileNameForModel(params.nextModel);
+  const sourceCandidates = instructionFileCandidatesForModel(params.agent.model).filter(
+    (candidate) => candidate !== targetPath,
+  );
+  if (sourceCandidates.length === 0) return;
+
+  const existingSources: Array<{ path: string; content: string }> = [];
+  for (const candidate of sourceCandidates) {
+    const content = await readAgentInstructionFileIfExists({
+      agent: params.agent,
+      context: params.context,
+      path: candidate,
+    });
+    if (content !== null) existingSources.push({ path: candidate, content });
+  }
+  if (existingSources.length === 0) return;
+
+  const source = existingSources[0];
+  const conflictingSource = existingSources.find((entry) => entry.content !== source.content);
+  if (conflictingSource) {
+    throw new Error(
+      `instruction_file_conflict: Cannot rename agent instructions because ${source.path} and ${conflictingSource.path} both exist with different content.`,
+    );
+  }
+
+  const targetContent = await readAgentInstructionFileIfExists({
+    agent: params.agent,
+    context: params.context,
+    path: targetPath,
+  });
+  if (targetContent !== null && targetContent !== source.content) {
+    throw new Error(
+      `instruction_file_conflict: Cannot rename ${source.path} to ${targetPath} because ${targetPath} already exists with different content.`,
+    );
+  }
+
+  if (targetContent === null) {
+    const written = await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.context.requestUserId,
+      workspaceId: params.context.workspaceId,
+      request: {
+        action: 'write_agent_file',
+        path: targetPath,
+        content: source.content,
+        encoding: 'utf8',
+      },
+    });
+    if (written.result.action !== 'write_agent_file') throw new Error('Unexpected runner response');
+  }
+
+  for (const entry of existingSources) {
+    const deleted = await dispatchAgentFileRequest({
+      agent: params.agent,
+      requestUserId: params.context.requestUserId,
+      workspaceId: params.context.workspaceId,
+      request: { action: 'delete_agent_path', path: entry.path },
+    });
+    if (deleted.result.action !== 'delete_agent_path') throw new Error('Unexpected runner response');
+  }
+}
+
 export async function updateAgent(
   id: string,
   data: Partial<
@@ -1276,6 +1379,7 @@ export async function updateAgent(
       | 'apiKeyId'
     >
   >,
+  options: { instructionFileMigration?: AgentInstructionFileMigrationContext } = {},
 ): Promise<AgentRecord | null> {
   const current = store.getById('agents', id);
   if (!current) return null;
@@ -1312,6 +1416,18 @@ export async function updateAgent(
     patch.apiKeyName = apiKey.name as string;
     patch.apiKeyPrefix = apiKey.keyPrefix as string;
     patch.capabilities = normalizePermissionList(apiKey.permissions);
+  }
+
+  if (
+    data.model !== undefined &&
+    options.instructionFileMigration &&
+    instructionFileNameForModel(currentAgent.model) !== instructionFileNameForModel(data.model)
+  ) {
+    await migrateInstructionFileForModelChange({
+      agent: currentAgent,
+      nextModel: data.model,
+      context: options.instructionFileMigration,
+    });
   }
 
   const updated = await store.update('agents', id, patch);

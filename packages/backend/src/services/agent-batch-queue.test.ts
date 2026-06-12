@@ -111,11 +111,13 @@ import {
   getAgentBatchRun,
   initializeAgentBatchQueue,
   listAgentBatchRunItems,
+  resetAgentBatchQueueInternalsForTests,
 } from './agent-batch-queue.js';
 
 describe('agent batch queue', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetAgentBatchQueueInternalsForTests();
     for (const collection of Object.keys(mocks.records)) {
       delete mocks.records[collection];
     }
@@ -140,6 +142,7 @@ describe('agent batch queue', () => {
   });
 
   afterEach(() => {
+    resetAgentBatchQueueInternalsForTests();
     vi.useRealTimers();
   });
 
@@ -433,6 +436,36 @@ describe('agent batch queue', () => {
     const item = store.getById(AGENT_BATCH_RUN_ITEMS_COLLECTION, itemId);
     expect(item?.status).toBe('completed');
     expect(getAgentBatchRun(runId)?.status).toBe('completed');
+  });
+
+  it('does not double-dispatch in-flight batch items during queue recovery', async () => {
+    mocks.executeCardTask.mockImplementation(() => {
+      // Hang: simulates waiting on concurrency or runner dispatch.
+    });
+
+    const cards = Array.from({ length: 5 }, (_value, index) => ({
+      id: `card-recover-${index}`,
+      name: `Recover ${index}`,
+      description: null,
+      collectionId: 'col-1',
+    }));
+
+    enqueueAgentBatchRun({
+      sourceType: 'board',
+      sourceId: 'board-recover-dup',
+      agentId: 'agent-1',
+      maxParallel: 5,
+      cards,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    expect(mocks.executeCardTask).toHaveBeenCalledTimes(5);
+
+    await initializeAgentBatchQueue({ preserveActiveProcessing: false });
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(mocks.executeCardTask).toHaveBeenCalledTimes(5);
   });
 
   it('does not retry a batch item when its logical execution job is still running without a legacy agentRunId', async () => {

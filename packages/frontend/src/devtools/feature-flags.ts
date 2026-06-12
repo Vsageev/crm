@@ -11,6 +11,7 @@ const MESSAGE_SEARCH_SENDER_STYLES = [
   'accent-bar',
   'role-dot',
 ] as const;
+const AGENT_CHAT_GRAPH_VIEW_STYLES = ['dots', 'native'] as const;
 
 export type FeatureFlagOption = {
   value: string;
@@ -35,6 +36,14 @@ export type FeatureFlagDefinition =
       options: FeatureFlagOption[];
     }
   | {
+      key: 'agentChat.graphViewStyle';
+      label: string;
+      description: string;
+      type: 'select';
+      defaultValue: AgentChatGraphViewStyle;
+      options: FeatureFlagOption[];
+    }
+  | {
       key:
         | 'executionPlans.boardDragIn'
         | 'executionPlans.selectionToolbar'
@@ -52,10 +61,12 @@ export type FeatureFlagDefinition =
 
 export type DevtoolsDesignVariant = (typeof DEVTOOLS_DESIGN_VARIANTS)[number];
 export type MessageSearchSenderStyle = (typeof MESSAGE_SEARCH_SENDER_STYLES)[number];
+export type AgentChatGraphViewStyle = (typeof AGENT_CHAT_GRAPH_VIEW_STYLES)[number];
 
 export type FeatureFlagValues = {
   'devtools.designVariant': DevtoolsDesignVariant;
   'agentChat.messageSearchSenderStyle': MessageSearchSenderStyle;
+  'agentChat.graphViewStyle': AgentChatGraphViewStyle;
   'executionPlans.boardDragIn': boolean;
   'executionPlans.selectionToolbar': boolean;
   'executionPlans.columnToLayer': boolean;
@@ -69,6 +80,7 @@ export type FeatureFlagValues = {
 export const defaultFeatureFlags: FeatureFlagValues = {
   'devtools.designVariant': 'floating',
   'agentChat.messageSearchSenderStyle': 'inline-text',
+  'agentChat.graphViewStyle': 'dots',
   'executionPlans.boardDragIn': false,
   'executionPlans.selectionToolbar': false,
   'executionPlans.columnToLayer': false,
@@ -103,6 +115,18 @@ export const featureFlagDefinitions: FeatureFlagDefinition[] = [
       { value: 'badge', label: 'Badge pill' },
       { value: 'accent-bar', label: 'Accent bar' },
       { value: 'role-dot', label: 'Role dot' },
+    ],
+  },
+  {
+    key: 'agentChat.graphViewStyle',
+    label: 'Chat graph view style',
+    description:
+      'Compare graph layouts: horizontal dots with curved edges vs vertical branch lanes with rail connectors (both use cold→warm newness).',
+    type: 'select',
+    defaultValue: 'dots',
+    options: [
+      { value: 'dots', label: 'Dots & curves' },
+      { value: 'native', label: 'Branch lanes' },
     ],
   },
   {
@@ -203,6 +227,11 @@ function readStoredFlags(): Partial<FeatureFlagValues> {
     const messageSearchSenderStyle = parsed['agentChat.messageSearchSenderStyle'];
     if (isOneOf(messageSearchSenderStyle, MESSAGE_SEARCH_SENDER_STYLES)) {
       flags['agentChat.messageSearchSenderStyle'] = messageSearchSenderStyle;
+    }
+
+    const graphViewStyle = parsed['agentChat.graphViewStyle'];
+    if (isOneOf(graphViewStyle, AGENT_CHAT_GRAPH_VIEW_STYLES)) {
+      flags['agentChat.graphViewStyle'] = graphViewStyle;
     }
 
     const booleanKeys = [

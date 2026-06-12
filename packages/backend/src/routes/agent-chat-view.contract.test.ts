@@ -724,6 +724,60 @@ describe('agent chat canonical view endpoint', () => {
         expect.objectContaining({ turnId: 'turn-edit', isSelected: true }),
       ]),
     );
+    expect(body.graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'turn-root',
+          parentTurnId: null,
+          isSelected: true,
+          siblingCount: 1,
+        }),
+        expect.objectContaining({
+          id: 'turn-original',
+          parentTurnId: 'turn-root',
+          status: 'superseded',
+          isSelected: false,
+          supersededByTurnId: 'turn-edit',
+        }),
+        expect.objectContaining({
+          id: 'turn-edit',
+          parentTurnId: 'turn-root',
+          turnType: 'edit',
+          isSelected: true,
+          siblingCount: 3,
+          supersedesTurnId: 'turn-original',
+        }),
+        expect.objectContaining({
+          id: 'turn-alt',
+          parentTurnId: 'turn-root',
+          isSelected: false,
+        }),
+      ]),
+    );
+    expect(body.graph.edges).toEqual(
+      expect.arrayContaining([
+        { id: '__root__->turn-root', fromTurnId: null, toTurnId: 'turn-root' },
+        { id: 'turn-root->turn-original', fromTurnId: 'turn-root', toTurnId: 'turn-original' },
+        { id: 'turn-root->turn-edit', fromTurnId: 'turn-root', toTurnId: 'turn-edit' },
+        { id: 'turn-root->turn-alt', fromTurnId: 'turn-root', toTurnId: 'turn-alt' },
+      ]),
+    );
+    expect(body.graph.nodes[0]).not.toHaveProperty('userMessage');
+    expect(body.graph.nodes[0]).not.toHaveProperty('assistantMessage');
+    expect(body.graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'turn-original',
+          preview: 'original branch',
+          userMessageId: 'user-original',
+        }),
+        expect.objectContaining({
+          id: 'turn-edit',
+          preview: 'edited branch',
+          userMessageId: 'user-edit',
+        }),
+      ]),
+    );
     expect(body.entries[1]).not.toHaveProperty('metadata');
     expect(body.entries[1].execution.queue).toBeNull();
 

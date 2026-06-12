@@ -193,6 +193,29 @@ export interface AgentConversationChatTurn {
   completedAt: string | null;
 }
 
+export interface AgentConversationChatGraphNode {
+  id: string;
+  parentTurnId: string | null;
+  status: AgentConversationChatTurnStatus;
+  turnType: string;
+  isSelected: boolean;
+  siblingIndex: number;
+  siblingCount: number;
+  supersedesTurnId: string | null;
+  supersededByTurnId: string | null;
+  userMessageId: string | null;
+  preview: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface AgentConversationChatGraphEdge {
+  id: string;
+  fromTurnId: string | null;
+  toTurnId: string;
+}
+
 export interface AgentConversationChatView {
   conversationId: string;
   agentId: string;
@@ -203,6 +226,10 @@ export interface AgentConversationChatView {
     selectedTurnId: string | null;
     turnIds: string[];
   }>;
+  graph?: {
+    nodes: AgentConversationChatGraphNode[];
+    edges: AgentConversationChatGraphEdge[];
+  };
 }
 
 export interface AgentChatRunEvent {
@@ -238,6 +265,440 @@ export function toQueueCount(value: unknown): number {
   const parsed = Number(value ?? 0);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
   return Math.floor(parsed);
+}
+
+export interface AgentChatGraphLayoutNode extends AgentConversationChatGraphNode {
+  depth: number;
+  row: number;
+  lane: number;
+  x: number;
+  y: number;
+  newness: number;
+  hoverLabel: string;
+}
+
+export interface AgentChatGraphLayoutEdge extends AgentConversationChatGraphEdge {
+  from: AgentChatGraphLayoutNode | null;
+  to: AgentChatGraphLayoutNode;
+}
+
+export type AgentChatGraphLayoutKind = 'spatial' | 'lanes';
+
+export interface AgentChatGraphLayout {
+  kind: AgentChatGraphLayoutKind;
+  nodes: AgentChatGraphLayoutNode[];
+  edges: AgentChatGraphLayoutEdge[];
+  width: number;
+  height: number;
+}
+
+export const AGENT_CHAT_GRAPH_NODE_RADIUS = 6;
+
+const GRAPH_COLUMN_GAP = 128;
+const GRAPH_ROW_GAP = 80;
+const GRAPH_MARGIN = 48;
+const GRAPH_NODE_DIAMETER = AGENT_CHAT_GRAPH_NODE_RADIUS * 2;
+
+const LANE_WIDTH = 56;
+const LANE_ROW_HEIGHT = 72;
+const LANE_MARGIN = 40;
+
+export function buildAgentChatGraphLayout(options: {
+  canonicalView?: AgentConversationChatView | null;
+  activeAgentId: string | null;
+  activeConvId: string | null;
+  style?: 'dots' | 'native';
+}): AgentChatGraphLayout {
+  const graphContext = resolveAgentChatGraphContext(options);
+  if (!graphContext) return emptyAgentChatGraphLayout('spatial');
+
+  if (options.style === 'native') {
+    return buildAgentChatGraphLaneLayout(graphContext);
+  }
+
+  return buildAgentChatGraphSpatialLayout(graphContext);
+}
+
+function resolveAgentChatGraphContext(options: {
+  canonicalView?: AgentConversationChatView | null;
+  activeAgentId: string | null;
+  activeConvId: string | null;
+}):
+  | {
+      canonicalView: AgentConversationChatView;
+      baseNodes: AgentConversationChatGraphNode[];
+      depthById: Map<string, number>;
+      newnessById: Map<string, number>;
+    }
+  | null {
+  const { canonicalView } = options;
+  if (!canonicalView) return null;
+  if (
+    (options.activeAgentId && canonicalView.agentId !== options.activeAgentId) ||
+    (options.activeConvId && canonicalView.conversationId !== options.activeConvId)
+  ) {
+    return null;
+  }
+
+  const baseNodes = getCanonicalGraphNodes(canonicalView);
+  if (baseNodes.length === 0) return null;
+
+  const byId = new Map(baseNodes.map((node) => [node.id, node]));
+  const depthById = new Map<string, number>();
+  const getDepth = (node: AgentConversationChatGraphNode, visiting = new Set<string>()): number => {
+    const cached = depthById.get(node.id);
+    if (cached !== undefined) return cached;
+    if (!node.parentTurnId || !byId.has(node.parentTurnId) || visiting.has(node.id)) {
+      depthById.set(node.id, 0);
+      return 0;
+    }
+    visiting.add(node.id);
+    const parent = byId.get(node.parentTurnId);
+    const depth = parent ? getDepth(parent, visiting) + 1 : 0;
+    visiting.delete(node.id);
+    depthById.set(node.id, depth);
+    return depth;
+  };
+
+  for (const node of baseNodes) {
+    getDepth(node);
+  }
+
+  const sortedByAge = [...baseNodes].sort(compareGraphNodeAge);
+  const newnessById = new Map<string, number>();
+  sortedByAge.forEach((node, index) => {
+    newnessById.set(node.id, sortedByAge.length <= 1 ? 1 : index / (sortedByAge.length - 1));
+  });
+
+  return { canonicalView, baseNodes, depthById, newnessById };
+}
+
+function buildAgentChatGraphSpatialLayout(graphContext: {
+  canonicalView: AgentConversationChatView;
+  baseNodes: AgentConversationChatGraphNode[];
+  depthById: Map<string, number>;
+  newnessById: Map<string, number>;
+}): AgentChatGraphLayout {
+  const { canonicalView, baseNodes, depthById, newnessById } = graphContext;
+  const nodesByDepth = new Map<number, AgentConversationChatGraphNode[]>();
+  for (const node of baseNodes) {
+    const depth = depthById.get(node.id) ?? 0;
+    nodesByDepth.set(depth, [...(nodesByDepth.get(depth) ?? []), node]);
+  }
+
+  const layoutNodes: AgentChatGraphLayoutNode[] = [];
+  for (const [depth, nodesAtDepth] of [...nodesByDepth.entries()].sort((a, b) => a[0] - b[0])) {
+    nodesAtDepth.sort(compareGraphNodeWithinDepth);
+    nodesAtDepth.forEach((node, row) => {
+      layoutNodes.push({
+        ...node,
+        depth,
+        row,
+        lane: 0,
+        x: GRAPH_MARGIN + depth * GRAPH_COLUMN_GAP,
+        y: GRAPH_MARGIN + row * GRAPH_ROW_GAP,
+        newness: newnessById.get(node.id) ?? 0,
+        userMessageId: node.userMessageId ?? null,
+        preview: node.preview ?? null,
+        hoverLabel: buildAgentChatGraphNodeHoverLabel(node),
+      });
+    });
+  }
+
+  const layoutById = new Map(layoutNodes.map((node) => [node.id, node]));
+  const baseEdges = getCanonicalGraphEdges(canonicalView, baseNodes);
+  const edges = baseEdges
+    .map((edge): AgentChatGraphLayoutEdge | null => {
+      const to = layoutById.get(edge.toTurnId);
+      if (!to) return null;
+      return {
+        ...edge,
+        from: edge.fromTurnId ? (layoutById.get(edge.fromTurnId) ?? null) : null,
+        to,
+      };
+    })
+    .filter((edge): edge is AgentChatGraphLayoutEdge => edge !== null);
+
+  const maxDepth = Math.max(...layoutNodes.map((node) => node.depth));
+  const maxRows = Math.max(
+    ...[...nodesByDepth.values()].map((nodesAtDepth) => nodesAtDepth.length),
+  );
+
+  return {
+    kind: 'spatial',
+    nodes: layoutNodes.sort(compareGraphNodePosition),
+    edges,
+    width: Math.max(280, GRAPH_MARGIN * 2 + maxDepth * GRAPH_COLUMN_GAP + GRAPH_NODE_DIAMETER),
+    height: Math.max(
+      200,
+      GRAPH_MARGIN * 2 + (maxRows - 1) * GRAPH_ROW_GAP + GRAPH_NODE_DIAMETER,
+    ),
+  };
+}
+
+function buildAgentChatGraphLaneLayout(graphContext: {
+  canonicalView: AgentConversationChatView;
+  baseNodes: AgentConversationChatGraphNode[];
+  depthById: Map<string, number>;
+  newnessById: Map<string, number>;
+}): AgentChatGraphLayout {
+  const { canonicalView, baseNodes, depthById, newnessById } = graphContext;
+  const childrenByParent = new Map<string, AgentConversationChatGraphNode[]>();
+  for (const node of baseNodes) {
+    if (!node.parentTurnId) continue;
+    childrenByParent.set(node.parentTurnId, [
+      ...(childrenByParent.get(node.parentTurnId) ?? []),
+      node,
+    ]);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort(compareGraphNodeWithinDepth);
+  }
+
+  const laneById = new Map<string, number>();
+  let maxLane = 0;
+
+  const assignLane = (nodeId: string, lane: number) => {
+    laneById.set(nodeId, lane);
+    maxLane = Math.max(maxLane, lane);
+    const children = childrenByParent.get(nodeId) ?? [];
+    const selectedChild = children.find((child) => child.isSelected);
+    const offPathChildren = children.filter((child) => !child.isSelected);
+
+    if (selectedChild) {
+      assignLane(selectedChild.id, lane);
+    }
+
+    let nextLane = maxLane + 1;
+    for (const child of offPathChildren) {
+      assignLane(child.id, nextLane);
+      nextLane = maxLane + 1;
+    }
+  };
+
+  const roots = baseNodes
+    .filter((node) => (depthById.get(node.id) ?? 0) === 0)
+    .sort(compareGraphNodeWithinDepth);
+  roots.forEach((root, index) => {
+    assignLane(root.id, index === 0 ? 0 : maxLane + 1);
+  });
+
+  const layoutNodes: AgentChatGraphLayoutNode[] = baseNodes.map((node) => {
+    const depth = depthById.get(node.id) ?? 0;
+    const lane = laneById.get(node.id) ?? 0;
+    return {
+      ...node,
+      depth,
+      row: 0,
+      lane,
+      x: LANE_MARGIN + lane * LANE_WIDTH + LANE_WIDTH / 2,
+      y: LANE_MARGIN + depth * LANE_ROW_HEIGHT,
+      newness: newnessById.get(node.id) ?? 0,
+      userMessageId: node.userMessageId ?? null,
+      preview: node.preview ?? null,
+      hoverLabel: buildAgentChatGraphNodeHoverLabel(node),
+    };
+  });
+
+  const layoutById = new Map(layoutNodes.map((node) => [node.id, node]));
+  const baseEdges = getCanonicalGraphEdges(canonicalView, baseNodes);
+  const edges = baseEdges
+    .map((edge): AgentChatGraphLayoutEdge | null => {
+      const to = layoutById.get(edge.toTurnId);
+      if (!to) return null;
+      return {
+        ...edge,
+        from: edge.fromTurnId ? (layoutById.get(edge.fromTurnId) ?? null) : null,
+        to,
+      };
+    })
+    .filter((edge): edge is AgentChatGraphLayoutEdge => edge !== null);
+
+  const maxDepth = Math.max(...layoutNodes.map((node) => node.depth));
+
+  return {
+    kind: 'lanes',
+    nodes: layoutNodes.sort(compareGraphNodeLanePosition),
+    edges,
+    width: Math.max(220, LANE_MARGIN * 2 + maxLane * LANE_WIDTH + LANE_WIDTH / 2),
+    height: Math.max(160, LANE_MARGIN * 2 + maxDepth * LANE_ROW_HEIGHT + 12),
+  };
+}
+
+function emptyAgentChatGraphLayout(kind: AgentChatGraphLayoutKind): AgentChatGraphLayout {
+  return { kind, nodes: [], edges: [], width: 280, height: 200 };
+}
+
+export function buildAgentChatGraphNodePreviewLabel(
+  node: Pick<AgentConversationChatGraphNode, 'preview' | 'status' | 'turnType'>,
+): string {
+  if (node.preview) return node.preview;
+  if (node.status === 'queued') return 'Queued';
+  if (node.status === 'processing') return 'Processing';
+  if (node.turnType === 'edit') return 'Edited branch';
+  return 'Message';
+}
+
+export function buildAgentChatGraphNodeHoverLabel(
+  node: Pick<
+    AgentConversationChatGraphNode,
+    'preview' | 'status' | 'turnType' | 'siblingIndex' | 'siblingCount'
+  >,
+): string {
+  const branchHint =
+    node.siblingCount > 1 ? ` · ${node.siblingIndex + 1}/${node.siblingCount}` : '';
+  return `${buildAgentChatGraphNodePreviewLabel(node)}${branchHint}`;
+}
+
+/** Older nodes are cooler (blue); newer nodes are warmer (orange). */
+export function getAgentChatGraphNodeColor(newness: number): string {
+  const t = Math.max(0, Math.min(1, newness));
+  const hue = 220 - t * 196;
+  const saturation = 48 + t * 40;
+  const lightness = 66 - t * 14;
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
+
+export function buildAgentChatGraphCurvePath(options: {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  nodeRadius: number;
+}): string {
+  const { fromX, fromY, toX, toY, nodeRadius } = options;
+  const x1 = fromX + nodeRadius;
+  const y1 = fromY;
+  const x2 = toX - nodeRadius;
+  const y2 = toY;
+  const midX = Math.max(x1 + 16, (x1 + x2) / 2);
+  return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+}
+
+export function buildAgentChatGraphEdgePath(edge: AgentChatGraphLayoutEdge): string {
+  const nodeRadius = AGENT_CHAT_GRAPH_NODE_RADIUS;
+  const fromX = edge.from ? edge.from.x : edge.to.x - nodeRadius * 3;
+  const fromY = edge.from ? edge.from.y : edge.to.y;
+  return buildAgentChatGraphCurvePath({
+    fromX,
+    fromY,
+    toX: edge.to.x,
+    toY: edge.to.y,
+    nodeRadius,
+  });
+}
+
+export function buildAgentChatGraphLaneEdgePath(edge: AgentChatGraphLayoutEdge): string {
+  const toX = edge.to.x;
+  const toY = edge.to.y;
+  const fromX = edge.from?.x ?? toX;
+  const fromY = edge.from?.y ?? toY - LANE_ROW_HEIGHT * 0.45;
+  const fromLane = edge.from?.lane ?? edge.to.lane;
+  const toLane = edge.to.lane;
+
+  if (fromLane === toLane) {
+    return `M ${fromX} ${fromY} L ${toX} ${toY}`;
+  }
+
+  const forkY = fromY + Math.max(18, (toY - fromY) * 0.45);
+  return `M ${fromX} ${fromY} L ${fromX} ${forkY} L ${toX} ${forkY} L ${toX} ${toY}`;
+}
+
+function getCanonicalGraphNodes(
+  view: AgentConversationChatView,
+): AgentConversationChatGraphNode[] {
+  if (view.graph?.nodes?.length) return view.graph.nodes;
+  const nodes = new Map<string, AgentConversationChatGraphNode>();
+  for (const turn of view.entries) {
+    nodes.set(turn.id, {
+      id: turn.id,
+      parentTurnId: turn.parentTurnId,
+      status: turn.status,
+      turnType: turn.turnType,
+      isSelected: true,
+      siblingIndex: turn.branch.siblingIndex,
+      siblingCount: turn.branch.siblingCount,
+      supersedesTurnId: turn.edit.supersedesTurnId,
+      supersededByTurnId: turn.edit.supersededByTurnId,
+      userMessageId: turn.userMessage?.id ?? null,
+      preview: summarizeRunEventPreview(turn.userMessage?.content ?? null),
+      createdAt: turn.createdAt,
+      updatedAt: turn.updatedAt,
+      completedAt: turn.completedAt,
+    });
+    for (const sibling of turn.branch.siblings) {
+      if (nodes.has(sibling.turnId)) continue;
+      nodes.set(sibling.turnId, {
+        id: sibling.turnId,
+        parentTurnId: turn.branch.parentTurnId,
+        status: sibling.status,
+        turnType: sibling.turnType,
+        isSelected: sibling.isSelected,
+        siblingIndex: turn.branch.siblingIds.indexOf(sibling.turnId),
+        siblingCount: turn.branch.siblingCount,
+        supersedesTurnId: sibling.supersedesTurnId,
+        supersededByTurnId: null,
+        userMessageId: null,
+        preview: null,
+        createdAt: sibling.createdAt,
+        updatedAt: null,
+        completedAt: null,
+      });
+    }
+  }
+  return [...nodes.values()];
+}
+
+function getCanonicalGraphEdges(
+  view: AgentConversationChatView,
+  nodes: AgentConversationChatGraphNode[],
+): AgentConversationChatGraphEdge[] {
+  if (view.graph?.edges?.length) return view.graph.edges;
+  return nodes.map((node) => ({
+    id: `${node.parentTurnId ?? 'root'}->${node.id}`,
+    fromTurnId: node.parentTurnId,
+    toTurnId: node.id,
+  }));
+}
+
+function compareGraphNodeAge(
+  a: Pick<AgentConversationChatGraphNode, 'createdAt' | 'id'>,
+  b: Pick<AgentConversationChatGraphNode, 'createdAt' | 'id'>,
+): number {
+  const createdAtDelta = parseDateMs(a.createdAt) - parseDateMs(b.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return a.id.localeCompare(b.id);
+}
+
+function compareGraphNodePosition(
+  a: Pick<AgentChatGraphLayoutNode, 'depth' | 'createdAt' | 'siblingIndex' | 'id'>,
+  b: Pick<AgentChatGraphLayoutNode, 'depth' | 'createdAt' | 'siblingIndex' | 'id'>,
+): number {
+  if (a.depth !== b.depth) return a.depth - b.depth;
+  return compareGraphNodeWithinDepth(a, b);
+}
+
+function compareGraphNodeLanePosition(
+  a: Pick<AgentChatGraphLayoutNode, 'depth' | 'lane' | 'createdAt' | 'siblingIndex' | 'id'>,
+  b: Pick<AgentChatGraphLayoutNode, 'depth' | 'lane' | 'createdAt' | 'siblingIndex' | 'id'>,
+): number {
+  if (a.depth !== b.depth) return a.depth - b.depth;
+  if (a.lane !== b.lane) return a.lane - b.lane;
+  return compareGraphNodeWithinDepth(a, b);
+}
+
+function compareGraphNodeWithinDepth(
+  a: Pick<AgentConversationChatGraphNode, 'createdAt' | 'siblingIndex' | 'id'>,
+  b: Pick<AgentConversationChatGraphNode, 'createdAt' | 'siblingIndex' | 'id'>,
+): number {
+  if (a.siblingIndex !== b.siblingIndex) return a.siblingIndex - b.siblingIndex;
+  return compareGraphNodeAge(a, b);
+}
+
+function parseDateMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

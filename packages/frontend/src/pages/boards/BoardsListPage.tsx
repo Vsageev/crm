@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, Kanban, Trash2, X, Star, FileText } from 'lucide-react';
 import { PageHeader } from '../../layout';
 import { ActionTooltip, Button, ReasonedActionButton } from '../../ui';
@@ -71,10 +71,9 @@ function isGeneralBoard(board: Board): boolean {
 
 export function BoardsListPage() {
   useDocumentTitle('Boards');
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const { activeWorkspaceId, workspaces } = useWorkspace();
+  const { activeWorkspaceId, workspaces, refetchWorkspaces } = useWorkspace();
   const { isFavorite, toggleFavorite } = useFavorites();
   const [boards, setBoards] = useState<Board[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,6 +102,7 @@ export function BoardsListPage() {
       const qs = qp.toString();
       const data = await api<BoardsResponse>(`/boards${qs ? `?${qs}` : ''}`);
       setBoards(Array.isArray(data.entries) ? data.entries : []);
+      await refetchWorkspaces();
     } catch (err) {
       setBoards([]);
       if (err instanceof ApiError) setError(err.message);
@@ -110,7 +110,7 @@ export function BoardsListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, activeWorkspaceId]);
+  }, [debouncedSearch, activeWorkspaceId, refetchWorkspaces]);
 
   useEffect(() => {
     fetchBoards();
@@ -177,57 +177,6 @@ export function BoardsListPage() {
       setShowCreate(true);
     }
   }, [searchParams, loading]);
-
-  const autoOpenBoardId = useMemo(() => {
-    const forceList = searchParams.get('list') === '1';
-    const forceCreate = searchParams.get('action') === 'create';
-    if (
-      forceList ||
-      forceCreate ||
-      search ||
-      loading ||
-      provisioningStarter ||
-      error ||
-      boards.length === 0
-    ) {
-      return null;
-    }
-
-    const preferredBoardId = getPreferredBoardId();
-    if (preferredBoardId && boards.some((board) => board.id === preferredBoardId)) {
-      return preferredBoardId;
-    }
-
-    if (activeWorkspaceId) {
-      return boards[0].id;
-    }
-
-    if (workspaces.length === 0) {
-      return null;
-    }
-
-    if (workspaces.length > 1) {
-      return null;
-    }
-
-    return boards[0].id;
-  }, [
-    activeWorkspaceId,
-    searchParams,
-    search,
-    loading,
-    provisioningStarter,
-    error,
-    boards,
-    workspaces.length,
-  ]);
-
-  const willRedirect = Boolean(autoOpenBoardId);
-
-  useEffect(() => {
-    if (!autoOpenBoardId) return;
-    navigate(`/boards/${autoOpenBoardId}`, { replace: true });
-  }, [autoOpenBoardId, navigate]);
 
   async function handleCreate() {
     if (!createName.trim()) return;
@@ -407,7 +356,7 @@ export function BoardsListPage() {
         </select>
       </div>
 
-      {loading || loadingDetails || provisioningStarter || willRedirect ? (
+      {loading || loadingDetails || provisioningStarter ? (
         <div className={styles.loadingState}>
           <div className={styles.skeletonGrid}>
             {[0, 1, 2].map((i) => (

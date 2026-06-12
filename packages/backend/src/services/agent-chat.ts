@@ -2780,17 +2780,18 @@ function resolveFinalMessageForCompletedRun(
   rawStdout: string,
   responseParentId?: string | null,
   runId?: string | null,
-  options?: { updateActiveBranch?: boolean },
+  options?: { updateActiveBranch?: boolean; fallbackText?: string | null },
 ): Record<string, unknown> | null {
   const updatesFromApi = listAgentApiUpdates(conversationId, runStartedAt);
   const finalApiMessage = findFinalAgentApiMessage(updatesFromApi);
   if (finalApiMessage) return attachRunIdToMessage(finalApiMessage, runId ?? null);
 
   const stdoutText = extractFinalResponseText(rawStdout);
+  const responseText = stdoutText || nonEmptyString(options?.fallbackText);
   const existingFinal = findExistingFinalMessageFromRun(
     conversationId,
     runStartedAt,
-    stdoutText || null,
+    responseText || null,
     {
       responseParentId: responseParentId ?? null,
       runId: runId ?? null,
@@ -2798,10 +2799,10 @@ function resolveFinalMessageForCompletedRun(
   );
   if (existingFinal) return attachRunIdToMessage(existingFinal, runId ?? null);
 
-  if (stdoutText) {
+  if (responseText) {
     return saveAgentRunResponse(
       conversationId,
-      stdoutText,
+      responseText,
       responseParentId,
       {
         runId: runId ?? null,
@@ -4138,6 +4139,49 @@ function linkRecoveredCompletedRunMessage(
   return true;
 }
 
+export function recoverCompletedChatRun(runId: string): boolean {
+  const run = store.getById('agent_runs', runId);
+  const conversationId = typeof run?.conversationId === 'string' ? run.conversationId : null;
+  if (
+    !run ||
+    run.triggerType !== 'chat' ||
+    run.status !== 'completed' ||
+    !conversationId ||
+    isRunMarkedKilledByUser(runId)
+  ) {
+    return false;
+  }
+
+  const runStartedAtMs = parseIsoDateMs(run.startedAt);
+  const runStartedAt = Number.isFinite(runStartedAtMs) ? runStartedAtMs : Date.now();
+  const rawStdout = readRunStdout(run);
+  const responseParentId =
+    typeof run.responseParentId === 'string' ? (run.responseParentId as string) : null;
+  const responseText = nonEmptyString(run.responseText);
+
+  const existingFinal = findExistingFinalMessageFromRun(
+    conversationId,
+    runStartedAt,
+    extractFinalResponseText(rawStdout) || responseText,
+    {
+      responseParentId,
+      runId,
+    },
+  );
+  if (existingFinal) return linkRecoveredCompletedRunMessage(run, existingFinal);
+
+  const recoveredMessage = resolveFinalMessageForCompletedRun(
+    conversationId,
+    runStartedAt,
+    rawStdout,
+    responseParentId,
+    runId,
+    { updateActiveBranch: false, fallbackText: responseText },
+  );
+
+  return recoveredMessage ? linkRecoveredCompletedRunMessage(run, recoveredMessage) : false;
+}
+
 export function recoverCompletedChatRunsOnStartup(): number {
   const completedChatRuns = store
     .getAll('agent_runs')
@@ -4157,41 +4201,7 @@ export function recoverCompletedChatRunsOnStartup(): number {
 
   for (const run of completedChatRuns) {
     const runId = typeof run.id === 'string' ? run.id : null;
-    const conversationId = typeof run.conversationId === 'string' ? run.conversationId : null;
-    if (!runId || !conversationId) continue;
-
-    const runStartedAtMs = parseIsoDateMs(run.startedAt);
-    const runStartedAt = Number.isFinite(runStartedAtMs) ? runStartedAtMs : Date.now();
-    const rawStdout = readRunStdout(run);
-    const responseParentId =
-      typeof run.responseParentId === 'string' ? (run.responseParentId as string) : null;
-
-    const existingFinal = findExistingFinalMessageFromRun(
-      conversationId,
-      runStartedAt,
-      extractFinalResponseText(rawStdout) || null,
-      {
-        responseParentId,
-        runId,
-      },
-    );
-    if (existingFinal) {
-      if (linkRecoveredCompletedRunMessage(run, existingFinal)) recoveredCount++;
-      continue;
-    }
-
-    const recoveredMessage = resolveFinalMessageForCompletedRun(
-      conversationId,
-      runStartedAt,
-      rawStdout,
-      responseParentId,
-      runId,
-      { updateActiveBranch: false },
-    );
-
-    if (recoveredMessage) {
-      if (linkRecoveredCompletedRunMessage(run, recoveredMessage)) recoveredCount++;
-    }
+    if (runId && recoverCompletedChatRun(runId)) recoveredCount++;
   }
 
   if (recoveredCount > 0) {
@@ -4225,6 +4235,13 @@ function attachFallbackMetadataToMessage(
     metadata: JSON.stringify(next),
   });
   return updated ?? { ...message, metadata: JSON.stringify(next) };
+}
+
+function prepareChatTurnForFallbackRetry(turnId: string | null | undefined): void {
+  if (!turnId) return;
+  const turn = getAgentChatTurn(turnId);
+  if (!turn || turn.status === 'running' || turn.status === 'queued') return;
+  markAgentChatTurnRunning(turnId);
 }
 
 function wrapChatExecuteCallbacks(callbacks: ExecutePromptCallbacks): ExecutePromptCallbacks {
@@ -4272,6 +4289,10 @@ function spawnChatProcess(
         return;
       }
 
+      if (isFallback) {
+        prepareChatTurnForFallbackRetry(turnId);
+      }
+
       // If this is a fallback retry, override agent model with global fallback settings
       const effectiveAgent = isFallback ? applyFallbackModel(agent, globalFallback) : agent;
       if (isFallback && !effectiveAgent) {
@@ -4310,46 +4331,55 @@ function spawnChatProcess(
 
           const terminalRunError = getTerminalRunErrorMessage(spawnedRunId);
           if (terminalRunError) {
-            if (!isFallback) {
-              const fallback = globalFallback;
-              if (fallback) {
-                console.log(
-                  `[agent-chat] Primary model failed for agent ${agentId}: ${terminalRunError}. Retrying with fallback model "${fallback.model}"...`,
-                );
-                callbacks.onFallbackStarted?.(fallback.model);
-                spawnChatProcess(agentId, conversationId, fullPrompt, attachmentPaths, callbacks, {
-                  isFallback: true,
-                  responseParentId,
-                  targetMessageId,
-                  turnId,
-                });
-                return;
-              }
+            if (
+              !isFallback &&
+              globalFallback &&
+              shouldAttemptFallbackRetry({
+                runId: spawnedRunId,
+                errorMessage: terminalRunError,
+                isFallback,
+                hasFallback: true,
+              })
+            ) {
+              console.log(
+                `[agent-chat] Primary model failed for agent ${agentId}: ${terminalRunError}. Retrying with fallback model "${globalFallback.model}"...`,
+              );
+              callbacks.onFallbackStarted?.(globalFallback.model);
+              spawnChatProcess(agentId, conversationId, fullPrompt, attachmentPaths, callbacks, {
+                isFallback: true,
+                responseParentId,
+                targetMessageId,
+                turnId,
+              });
+              return;
             }
             callbacks.onError(terminalRunError);
             return;
           }
 
-          if ((code ?? 1) !== 0 && !stdout.trim()) {
-            // Primary model failed — attempt fallback if configured and not already a fallback
-            if (!isFallback) {
-              const fallback = globalFallback;
-              if (fallback) {
-                const errMsg = stderr.trim() || `Process exited with code ${code}`;
-                console.log(
-                  `[agent-chat] Primary model failed for agent ${agentId}: ${errMsg}. Retrying with fallback model "${fallback.model}"...`,
-                );
-                callbacks.onFallbackStarted?.(fallback.model);
-                spawnChatProcess(agentId, conversationId, fullPrompt, attachmentPaths, callbacks, {
-                  isFallback: true,
-                  responseParentId,
-                  targetMessageId,
-                  turnId,
-                });
-                return;
-              }
-            }
+          if ((code ?? 1) !== 0 && !isFallback) {
             const errMsg = stderr.trim() || `Process exited with code ${code}`;
+            if (
+              globalFallback &&
+              shouldAttemptFallbackRetry({
+                runId: spawnedRunId,
+                errorMessage: errMsg,
+                isFallback,
+                hasFallback: true,
+              })
+            ) {
+              console.log(
+                `[agent-chat] Primary model failed for agent ${agentId}: ${errMsg}. Retrying with fallback model "${globalFallback.model}"...`,
+              );
+              callbacks.onFallbackStarted?.(globalFallback.model);
+              spawnChatProcess(agentId, conversationId, fullPrompt, attachmentPaths, callbacks, {
+                isFallback: true,
+                responseParentId,
+                targetMessageId,
+                turnId,
+              });
+              return;
+            }
             callbacks.onError(errMsg);
             return;
           }
@@ -4410,7 +4440,30 @@ function spawnChatProcess(
           callbacks.onError(err.message);
         },
       }).catch((err: unknown) => {
-        callbacks.onError((err as Error).message);
+        const message = (err as Error).message;
+        if (
+          !isFallback &&
+          globalFallback &&
+          shouldAttemptFallbackRetry({
+            runId: spawnedRunId,
+            errorMessage: message,
+            isFallback,
+            hasFallback: true,
+          })
+        ) {
+          console.log(
+            `[agent-chat] Primary model runner dispatch failed for agent ${agentId}: ${message}. Retrying with fallback model "${globalFallback.model}"...`,
+          );
+          callbacks.onFallbackStarted?.(globalFallback.model);
+          spawnChatProcess(agentId, conversationId, fullPrompt, attachmentPaths, callbacks, {
+            isFallback: true,
+            responseParentId,
+            targetMessageId,
+            turnId,
+          });
+          return;
+        }
+        callbacks.onError(message);
       });
     })
     .catch((error: unknown) => {
@@ -4421,6 +4474,7 @@ function spawnChatProcess(
 export const __agentChatTestUtils = {
   buildPromptWithHistory,
   shouldAttemptFallbackRetry,
+  prepareChatTurnForFallbackRetry,
   getPreviousUserMessageIdForPromptPath,
   canStartQueuedItemNow,
   drainConversationQueue,

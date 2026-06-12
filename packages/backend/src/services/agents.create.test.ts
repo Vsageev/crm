@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     createApiKey: vi.fn(),
     deleteApiKey: vi.fn(),
     listSkillRecords: vi.fn(),
+    dispatchAgentFileRequest: vi.fn(),
   };
 });
 
@@ -44,8 +45,11 @@ vi.mock('../db/repositories/skills-repository.js', () => ({
 vi.mock('./agent-env-vars.js', () => ({ deleteAgentEnvVarsByAgentId: vi.fn() }));
 vi.mock('./agent-cron.js', () => ({ stopAllAgentCronJobs: vi.fn() }));
 vi.mock('./auth.js', () => ({ hashPassword: vi.fn(async () => 'hashed-password') }));
+vi.mock('./runner-agent-files.js', () => ({
+  dispatchAgentFileRequest: mocks.dispatchAgentFileRequest,
+}));
 
-import { buildInitialAgentWorkspaceImportFiles, createAgent } from './agents.js';
+import { buildInitialAgentWorkspaceImportFiles, createAgent, updateAgent } from './agents.js';
 
 describe('createAgent repository root metadata', () => {
   let tmpDir: string;
@@ -60,6 +64,7 @@ describe('createAgent repository root metadata', () => {
     mocks.createApiKey.mockReset();
     mocks.deleteApiKey.mockReset();
     mocks.listSkillRecords.mockReset();
+    mocks.dispatchAgentFileRequest.mockReset();
 
     mocks.createApiKey.mockResolvedValue({ id: 'workspace-key-1', rawKey: 'owk_test' });
     mocks.listSkillRecords.mockReturnValue([]);
@@ -176,6 +181,127 @@ describe('createAgent repository root metadata', () => {
     expect(files[0].path).toBe('/CLAUDE.MD');
     expect(Buffer.from(files[0].contentBase64, 'base64').toString('utf-8')).toContain(
       '- The project repository root is `/runner/repo`.',
+    );
+  });
+
+  it('renames the agent instruction file when the provider changes from Claude to Codex', async () => {
+    const currentAgent = {
+      id: 'agent-1',
+      name: 'Provider Switcher',
+      description: 'switch agent',
+      model: 'claude',
+      modelId: null,
+      preset: 'basic',
+      presetParameters: {},
+      archivedAt: null,
+    };
+    mocks.store.getById.mockReturnValue(currentAgent);
+    mocks.store.update.mockImplementation((_collection: string, _id: string, patch: Record<string, unknown>) => ({
+      ...currentAgent,
+      ...patch,
+      updatedAt: '2026-05-23T10:02:00.000Z',
+    }));
+    mocks.dispatchAgentFileRequest.mockImplementation(async ({ request }: { request: Record<string, unknown> }) => {
+      if (request.action === 'read_agent_file' && request.path === 'CLAUDE.MD') {
+        return {
+          result: {
+            action: 'read_agent_file',
+            path: 'CLAUDE.MD',
+            content: '# Instructions\n',
+            encoding: 'utf8',
+            sizeBytes: 15,
+          },
+        };
+      }
+      if (request.action === 'read_agent_file' && request.path === 'CLAUDE.md') {
+        throw new Error('not_found: File does not exist: CLAUDE.md');
+      }
+      if (request.action === 'read_agent_file' && request.path === 'AGENTS.md') {
+        throw new Error('not_found: File does not exist: AGENTS.md');
+      }
+      if (request.action === 'write_agent_file') {
+        return { result: { action: 'write_agent_file', path: request.path, sizeBytes: 15, updatedAt: 'now' } };
+      }
+      if (request.action === 'delete_agent_path') {
+        return { result: { action: 'delete_agent_path', deleted: true } };
+      }
+      throw new Error(`unexpected request ${String(request.action)}`);
+    });
+
+    const updated = await updateAgent(
+      'agent-1',
+      { model: 'codex' },
+      { instructionFileMigration: { requestUserId: 'user-1', workspaceId: 'workspace-1' } },
+    );
+
+    expect(updated?.model).toBe('codex');
+    expect(mocks.dispatchAgentFileRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestUserId: 'user-1',
+        workspaceId: 'workspace-1',
+        request: { action: 'write_agent_file', path: 'AGENTS.md', content: '# Instructions\n', encoding: 'utf8' },
+      }),
+    );
+    expect(mocks.dispatchAgentFileRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: { action: 'delete_agent_path', path: 'CLAUDE.MD' },
+      }),
+    );
+    expect(mocks.store.update).toHaveBeenCalledWith('agents', 'agent-1', { model: 'codex' });
+  });
+
+  it('rejects model changes when the target instruction file has different content', async () => {
+    const currentAgent = {
+      id: 'agent-1',
+      name: 'Provider Switcher',
+      description: 'switch agent',
+      model: 'claude',
+      modelId: null,
+      preset: 'basic',
+      presetParameters: {},
+      archivedAt: null,
+    };
+    mocks.store.getById.mockReturnValue(currentAgent);
+    mocks.dispatchAgentFileRequest.mockImplementation(async ({ request }: { request: Record<string, unknown> }) => {
+      if (request.action === 'read_agent_file' && request.path === 'CLAUDE.MD') {
+        return {
+          result: {
+            action: 'read_agent_file',
+            path: 'CLAUDE.MD',
+            content: 'claude instructions\n',
+            encoding: 'utf8',
+            sizeBytes: 20,
+          },
+        };
+      }
+      if (request.action === 'read_agent_file' && request.path === 'CLAUDE.md') {
+        throw new Error('not_found: File does not exist: CLAUDE.md');
+      }
+      if (request.action === 'read_agent_file' && request.path === 'AGENTS.md') {
+        return {
+          result: {
+            action: 'read_agent_file',
+            path: 'AGENTS.md',
+            content: 'codex instructions\n',
+            encoding: 'utf8',
+            sizeBytes: 19,
+          },
+        };
+      }
+      throw new Error(`unexpected request ${String(request.action)}`);
+    });
+
+    await expect(
+      updateAgent(
+        'agent-1',
+        { model: 'codex' },
+        { instructionFileMigration: { requestUserId: 'user-1', workspaceId: 'workspace-1' } },
+      ),
+    ).rejects.toThrow('instruction_file_conflict');
+
+    expect(mocks.store.update).not.toHaveBeenCalled();
+    expect(mocks.dispatchAgentFileRequest).not.toHaveBeenCalledWith(
+      expect.objectContaining({ request: expect.objectContaining({ action: 'write_agent_file' }) }),
     );
   });
 });

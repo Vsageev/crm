@@ -123,6 +123,8 @@ pnpm --filter openwork-runner dev
 
 Legacy `AGENT_EXECUTOR_MODE=local` and `AGENT_EXECUTOR_MODE=hybrid` are unsupported in normal runtime. The hosted backend does not spawn agent CLIs locally; if no eligible runner is connected, new run creation reports the runner-unavailable state. The runner pairs once with `/api/agent-runners/pair`, stores its scoped credential in `~/.openwork-runner/config.json`, connects to `/api/runners/ws`, executes concurrent jobs, and streams stdout/stderr back into normal `agent_runs` history. Existing run history remains readable, including older `executor=local` records. Set `MAX_CONCURRENT_AGENTS` to a positive number to add an app-level cap; the default `0` means no app-level limit.
 
+Remote agent jobs time out after one hour by default so a runner job that is accepted but never sends a terminal message cannot leave `agent_runs` stuck in `running` indefinitely. Set `REMOTE_AGENT_RUN_TIMEOUT_MS=0` only when a deployment intentionally wants no backend-side run timeout.
+
 Existing databases must apply migrations after pulling this branch:
 
 ```bash

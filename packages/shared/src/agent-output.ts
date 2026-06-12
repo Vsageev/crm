@@ -1497,6 +1497,71 @@ function outputBlocksEqual(left: OutputBlock, right: OutputBlock): boolean {
   }
 }
 
+function normalizeAssistantTextForCompare(text: string): string {
+  return text.replace(/\s+/g, '');
+}
+
+function findAssistantTextSuffixPrefixOverlap(previous: string, next: string): number {
+  const max = Math.min(previous.length, next.length);
+  for (let size = max; size > 0; size -= 1) {
+    if (previous.endsWith(next.slice(0, size))) return size;
+  }
+  return 0;
+}
+
+function joinAssistantTextSegments(previous: string, next: string): string {
+  const overlap = findAssistantTextSuffixPrefixOverlap(previous, next);
+  if (overlap > 0) return previous + next.slice(overlap);
+
+  const previousLast = previous.at(-1) ?? '';
+  const nextFirst = next[0] ?? '';
+  const needsSpace =
+    previous.length > 0 &&
+    next.length > 0 &&
+    !/\s/.test(previousLast) &&
+    !/\s/.test(nextFirst) &&
+    !/[([{/"'`]/.test(previousLast) &&
+    !/[,.:;!?%)}\]/"'`]/.test(nextFirst);
+
+  return needsSpace ? `${previous} ${next}` : `${previous}${next}`;
+}
+
+function mergeAssistantTextContent(current: string, incoming: string): string {
+  const previous = current.trim();
+  const next = incoming.trim();
+  if (!previous) return next;
+  if (!next) return previous;
+  if (next === previous) return previous;
+  if (next.startsWith(previous)) return next;
+  if (previous.startsWith(next)) return previous;
+
+  const previousComparable = normalizeAssistantTextForCompare(previous);
+  const nextComparable = normalizeAssistantTextForCompare(next);
+  if (nextComparable.startsWith(previousComparable)) return next;
+  if (previousComparable.startsWith(nextComparable)) return previous;
+  if (previousComparable === nextComparable) return next.length >= previous.length ? next : previous;
+
+  return joinAssistantTextSegments(previous, next);
+}
+
+function collapseConsecutiveAssistantTextBlocks(blocks: OutputBlock[]): OutputBlock[] {
+  const collapsed: OutputBlock[] = [];
+
+  for (const block of blocks) {
+    const previous = collapsed[collapsed.length - 1];
+    if (block.type === 'assistant_text' && previous?.type === 'assistant_text') {
+      collapsed[collapsed.length - 1] = {
+        type: 'assistant_text',
+        content: mergeAssistantTextContent(previous.content, block.content),
+      };
+      continue;
+    }
+    collapsed.push(block);
+  }
+
+  return collapsed;
+}
+
 function buildSystemInitBlock(event: JsonRecord): SystemInitBlock {
   const block: SystemInitBlock = { type: 'system_init' };
   if (typeof event.model === 'string') block.model = event.model;
@@ -1979,7 +2044,7 @@ export function parseAgentOutputBlocks(output: string): OutputBlock[] | null {
   if (!parsedEvents) return null;
 
   const blocks = structuredEventsToBlocks(parsedEvents);
-  return blocks.length > 0 ? blocks : null;
+  return blocks.length > 0 ? collapseConsecutiveAssistantTextBlocks(blocks) : null;
 }
 
 /**

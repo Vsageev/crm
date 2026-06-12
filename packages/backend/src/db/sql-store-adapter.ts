@@ -693,11 +693,12 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
     };
 
     const key = this.cacheKey(collection, record);
-    map.set(key, record);
+    const cachedRecord = this.recordForCache(collection, record);
+    map.set(key, cachedRecord);
     return this.withWritePromise(
-      record,
+      cachedRecord,
       this.runWrite((client) => this.persistRecord(collection, record, client)).catch((error) => {
-        if (map.get(key) === record) map.delete(key);
+        if (map.get(key) === cachedRecord) map.delete(key);
         throw error;
       }),
     );
@@ -719,11 +720,12 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
       updatedAt: new Date().toISOString(),
     };
 
-    map.set(id, updated);
+    const cachedRecord = this.recordForCache(collection, updated);
+    map.set(id, cachedRecord);
     return this.withWritePromise(
-      updated,
+      cachedRecord,
       this.runWrite((client) => this.persistRecord(collection, updated, client)).catch((error) => {
-        if (map.get(id) === updated) map.set(id, existing);
+        if (map.get(id) === cachedRecord) map.set(id, existing);
         throw error;
       }),
     );
@@ -1013,6 +1015,25 @@ export class SqlStoreAdapter implements Store, NativeQueryStore<ReturnType<typeo
     return records;
   }
 
+  private recordForCache(collection: string, record: StoreRecord): StoreRecord {
+    const entry = MAPPING_BY_COLLECTION.get(collection);
+    if (!entry) return record;
+
+    const excludedColumns = STARTUP_LOAD_EXCLUDED_COLUMNS.get(entry.table);
+    if (!excludedColumns) return record;
+
+    let cachedRecord: StoreRecord | null = null;
+    for (const column of excludedColumns) {
+      const field = toCamel(column);
+      const pathField = `${field}Path`;
+      if (typeof record[pathField] !== 'string' || !record[pathField]) continue;
+      cachedRecord ??= { ...record };
+      delete cachedRecord[field];
+    }
+
+    return cachedRecord ?? record;
+  }
+
   private cacheKey(collection: string, record: StoreRecord): string {
     const entry = MAPPING_BY_COLLECTION.get(collection);
     if (entry?.primaryFields.length === 2) {
@@ -1106,6 +1127,10 @@ function mapping(
 function toSnake(name: string): string {
   if (name === 'order') return 'order_index';
   return name.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
+}
+
+function toCamel(name: string): string {
+  return name.replace(/_([a-z])/g, (_match, char: string) => char.toUpperCase());
 }
 
 function quoteIdent(value: string): string {

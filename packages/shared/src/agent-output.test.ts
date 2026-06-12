@@ -76,6 +76,33 @@ describe('Codex structured output', () => {
     ]);
   });
 
+  it('collapses discrete assistant text chunks into readable monitor prose', () => {
+    const stdout = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'chunk-1', type: 'agent_message', text: 'To view' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'chunk-2', type: 'agent_message', text: 'it' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'chunk-3', type: 'agent_message', text: ':' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'chunk-4', type: 'agent_message', text: 'ash cd /Users/vladislav' },
+      }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ].join('\n');
+
+    expect(parseAgentOutputBlocks(stdout)).toEqual([
+      { type: 'assistant_text', content: 'To view it: ash cd /Users/vladislav' },
+    ]);
+  });
+
   it('reports Codex JSON output that never reaches a terminal result event', () => {
     const stdout = [
       JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),

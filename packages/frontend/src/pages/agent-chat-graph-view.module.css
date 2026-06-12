@@ -1,0 +1,205 @@
+.area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-5);
+}
+
+.canvas {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.edgeSelected {
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1.25;
+}
+
+.nodeWrap {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.nodeWrap > span {
+  display: inline-flex;
+}
+
+.empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+}
+
+/* ── Dots & curves ── */
+
+.dotsNode {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  transition:
+    box-shadow var(--transition-normal),
+    opacity var(--transition-normal);
+}
+
+.dotsNode::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--chat-graph-node-color);
+  box-shadow: 0 0 0 1px var(--color-bg);
+  transition: box-shadow var(--transition-normal);
+}
+
+.dotsNode:hover::before {
+  box-shadow:
+    0 0 0 1px var(--color-bg),
+    0 0 0 2px var(--color-border);
+}
+
+.dotsNode:focus-visible {
+  outline: 2px solid var(--color-link);
+  outline-offset: 2px;
+}
+
+.dotsNodeSelected::before {
+  box-shadow:
+    0 0 0 1px var(--color-bg),
+    0 0 0 2px var(--color-text);
+}
+
+.dotsNodeActive::before {
+  animation: dotsNodePulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dotsNodePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ── Branch lanes (vertical git-style graph) ── */
+
+.laneCanvas {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.laneEdges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.laneEdge {
+  fill: none;
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+}
+
+.laneEdgeSelected {
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1.5;
+}
+
+.laneNodeWrap {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.laneNodeWrap > span {
+  display: inline-flex;
+}
+
+.laneNode {
+  position: relative;
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.laneNode::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 3px;
+  transform: translateY(-50%);
+  background: var(--chat-graph-node-color);
+  border-radius: 1px;
+  transition:
+    height var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.laneNode:hover::before {
+  height: 4px;
+}
+
+.laneNode:focus-visible {
+  outline: 2px solid var(--color-link);
+  outline-offset: 2px;
+}
+
+.laneNodeSelected::before {
+  height: 4px;
+  background: color-mix(in srgb, var(--chat-graph-node-color) 72%, var(--color-text) 28%);
+}
+
+.laneNodeActive::before {
+  animation: laneNodePulse 1.4s ease-in-out infinite;
+}
+
+@keyframes laneNodePulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
